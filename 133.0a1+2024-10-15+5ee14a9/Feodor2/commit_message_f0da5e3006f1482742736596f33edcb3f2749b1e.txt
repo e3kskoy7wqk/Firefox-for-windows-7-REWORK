@@ -1,0 +1,1 @@
+Bug 1477790: Add ability for firefox.exe to use launcher process by default when the build is configured to do so; r=mhowell    2018-07-17 06:41:55    f0da5e3006f1482742736596f33edcb3f2749b1e

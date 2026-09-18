@@ -1,0 +1,1 @@
+Bug 1687562 - Part 1: Implement Taskbar pinning. r=mhowell    2021-02-17 13:10:53    61e489d6aae33e7fced2a83c47a6c851a7b138c8

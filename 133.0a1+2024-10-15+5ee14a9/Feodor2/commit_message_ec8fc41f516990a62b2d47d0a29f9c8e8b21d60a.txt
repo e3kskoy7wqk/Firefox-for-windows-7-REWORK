@@ -1,0 +1,1 @@
+Bug 1753305 - Add 'Awake' profiler markers whenever a thread is awake, r=gerald.    2022-02-11 23:19:47    ec8fc41f516990a62b2d47d0a29f9c8e8b21d60a

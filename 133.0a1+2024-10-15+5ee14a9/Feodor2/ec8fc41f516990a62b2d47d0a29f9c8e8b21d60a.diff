@@ -1,0 +1,42 @@
+diff --git a/tools/profiler/core/platform.cpp b/tools/profiler/core/platform.cpp
+index c54e94b64ff6..42c0343e37fe 100644
+--- a/tools/profiler/core/platform.cpp
++++ b/tools/profiler/core/platform.cpp
+@@ -6318,6 +6318,28 @@ void profiler_thread_sleep() {
+ #endif
+ }
+ 
++static DWORD rtThreadGetCurrentProcessorNumber(void)
++{
++    static bool           fInitialized = false;
++    static DWORD (WINAPI *pfnGetCurrentProcessorNumber)(void) = NULL;
++    if (!fInitialized)
++    {
++        HMODULE hmodKernel32 = GetModuleHandleW(L"kernel32.dll");
++        if (hmodKernel32)
++            pfnGetCurrentProcessorNumber = (DWORD (WINAPI*)(void))GetProcAddress(hmodKernel32, "GetCurrentProcessorNumber");
++        fInitialized = true;
++    }
++    if (pfnGetCurrentProcessorNumber)
++        return pfnGetCurrentProcessorNumber();
++    DWORD_PTR xBX;
++    __asm
++    {
++        mov     eax, 1
++        cpuid
++        mov     [xBX], ebx
++    }
++    return (DWORD)(xBX);
++}
+ void profiler_mark_thread_awake() {
+   ++gWakeCount;
+   if (!profiler_thread_is_being_profiled_for_markers()) {
+@@ -6325,7 +6347,7 @@ void profiler_mark_thread_awake() {
+ 
+   int64_t cpuId = 0;
+ #if defined(GP_OS_windows)
+-  cpuId = GetCurrentProcessorNumber();
++  cpuId = rtThreadGetCurrentProcessorNumber();
+ #elif defined(GP_OS_darwin)
+ #  ifdef GP_PLAT_amd64_darwin
+   unsigned int eax, ebx, ecx, edx;

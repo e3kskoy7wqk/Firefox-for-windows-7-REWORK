@@ -1,0 +1,49 @@
+diff --git a/widget/gtk/nsNativeThemeGTK.cpp b/widget/gtk/nsNativeThemeGTK.cpp
+index 64f8136218a5..80ff2bd283ae 100644
+--- a/widget/gtk/nsNativeThemeGTK.cpp
++++ b/widget/gtk/nsNativeThemeGTK.cpp
+@@ -962,10 +962,6 @@ CSSIntMargin nsNativeThemeGTK::GetCachedWidgetBorder(
+ 
+ LayoutDeviceIntMargin nsNativeThemeGTK::GetWidgetBorder(
+     nsDeviceContext* aContext, nsIFrame* aFrame, StyleAppearance aAppearance) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
+-    return Theme::GetWidgetBorder(aContext, aFrame, aAppearance);
+-  }
+-
+   CSSIntMargin result;
+   GtkTextDirection direction = GetTextDirection(aFrame);
+   switch (aAppearance) {
+@@ -1006,9 +1002,6 @@ bool nsNativeThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
+                                         nsIFrame* aFrame,
+                                         StyleAppearance aAppearance,
+                                         LayoutDeviceIntMargin* aResult) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
+-    return Theme::GetWidgetPadding(aContext, aFrame, aAppearance, aResult);
+-  }
+   switch (aAppearance) {
+     case StyleAppearance::Toolbarbutton:
+     case StyleAppearance::Tooltip:
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index 466df9ffef9e..04a7d35863cd 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -1091,10 +1091,6 @@ static void ScaleForFrameDPI(LayoutDeviceIntSize* aSize, nsIFrame* aFrame) {
+ 
+ LayoutDeviceIntMargin nsNativeThemeWin::GetWidgetBorder(
+     nsDeviceContext* aContext, nsIFrame* aFrame, StyleAppearance aAppearance) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
+-    return Theme::GetWidgetBorder(aContext, aFrame, aAppearance);
+-  }
+-
+   LayoutDeviceIntMargin result;
+   mozilla::Maybe<nsUXThemeClass> themeClass = GetThemeClass(aAppearance);
+   HTHEME theme = NULL;
+@@ -1157,7 +1153,7 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
+                                         nsIFrame* aFrame,
+                                         StyleAppearance aAppearance,
+                                         LayoutDeviceIntMargin* aResult) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
++  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+     return Theme::GetWidgetPadding(aContext, aFrame, aAppearance, aResult);
+   }
+ 

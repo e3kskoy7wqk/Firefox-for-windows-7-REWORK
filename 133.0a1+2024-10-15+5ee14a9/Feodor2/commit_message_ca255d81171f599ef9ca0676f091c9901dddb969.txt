@@ -1,0 +1,1 @@
+Bug 1682520 p2: Register the WER Runtime Exception Module very early in process start up. r=gsvelto,glandium    2022-07-30 02:10:54    ca255d81171f599ef9ca0676f091c9901dddb969

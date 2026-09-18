@@ -1,0 +1,1 @@
+Bug 1846083 - remove a win7 fix from libwebrtc's mouse_cursor_monitor_win.cc r=ng,webrtc-reviewers    2023-08-01 23:02:00    4065cfa29dbd16f1e17912fc758b85498dae5b34

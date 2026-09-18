@@ -1,0 +1,1 @@
+Bug 1677168: nsFilePicker cleanup; r=mhowell    2020-11-17 03:37:09    e698cfc7c466542fe1fd78ea21758b9404a8ad6c

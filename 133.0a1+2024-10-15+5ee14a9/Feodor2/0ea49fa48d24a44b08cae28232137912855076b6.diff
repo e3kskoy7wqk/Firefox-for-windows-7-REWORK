@@ -1,0 +1,490 @@
+diff --git a/dom/media/MediaData.cpp b/dom/media/MediaData.cpp
+index d7ea28f7e61b..902fbbf76379 100644
+--- a/dom/media/MediaData.cpp
++++ b/dom/media/MediaData.cpp
+@@ -482,6 +482,7 @@ nsCString VideoData::ToString() const {
+       "D3D11_SHARE_HANDLE_TEXTURE",
+       "D3D11_TEXTURE_IMF_SAMPLE",
+       "TEXTURE_WRAPPER",
++      "D3D11_YCBCR_IMAGE",
+       "GPU_VIDEO",
+       "DMABUF",
+       "DCOMP_SURFACE",
+diff --git a/dom/media/MediaFormatReader.cpp b/dom/media/MediaFormatReader.cpp
+index 5d76b29a920a..dbe21fc86b55 100644
+--- a/dom/media/MediaFormatReader.cpp
++++ b/dom/media/MediaFormatReader.cpp
+@@ -2402,6 +2402,15 @@ void MediaFormatReader::Update(TrackType aTrack) {
+           }
+           mPreviousDecodedKeyframeTime_us = output->mTime.ToMicroseconds();
+         }
++#ifdef XP_WIN
++        VideoData* videoData = output->As<VideoData>();
++        // D3D11_YCBCR_IMAGE images are GPU based, we try to limit the amount
++        // of GPU RAM used.
++        mVideo.mIsHardwareAccelerated =
++            mVideo.mIsHardwareAccelerated ||
++            (videoData->mImage &&
++             videoData->mImage->GetFormat() == ImageFormat::D3D11_YCBCR_IMAGE);
++#endif
+       }
+     } else if (decoder.HasFatalError()) {
+       nsCString mimeType = decoder.GetCurrentInfo()->mMimeType;
+diff --git a/gfx/gl/GLBlitHelper.cpp b/gfx/gl/GLBlitHelper.cpp
+index d097f57bd78d..fdecbfda9927 100644
+--- a/gfx/gl/GLBlitHelper.cpp
++++ b/gfx/gl/GLBlitHelper.cpp
+@@ -956,6 +956,9 @@ bool GLBlitHelper::BlitImageToFramebuffer(layers::Image* const srcImage,
+       return BlitImage(
+           static_cast<layers::D3D11TextureIMFSampleImage*>(srcImage), destSize,
+           destOrigin);
++    case ImageFormat::D3D11_YCBCR_IMAGE:
++      return BlitImage(static_cast<layers::D3D11YCbCrImage*>(srcImage),
++                       destSize, destOrigin);
+     case ImageFormat::D3D9_RGB32_TEXTURE:
+       return false;  // todo
+     case ImageFormat::DCOMP_SURFACE:
+@@ -963,6 +966,7 @@ bool GLBlitHelper::BlitImageToFramebuffer(layers::Image* const srcImage,
+ #else
+     case ImageFormat::D3D11_SHARE_HANDLE_TEXTURE:
+     case ImageFormat::D3D11_TEXTURE_IMF_SAMPLE:
++    case ImageFormat::D3D11_YCBCR_IMAGE:
+     case ImageFormat::D3D9_RGB32_TEXTURE:
+     case ImageFormat::DCOMP_SURFACE:
+       MOZ_ASSERT(false);
+diff --git a/gfx/gl/GLBlitHelper.h b/gfx/gl/GLBlitHelper.h
+index cd9cc9b2360b..3f9e066c0e37 100644
+--- a/gfx/gl/GLBlitHelper.h
++++ b/gfx/gl/GLBlitHelper.h
+@@ -62,6 +62,7 @@ class SurfaceDescriptorBuffer;
+ #ifdef XP_WIN
+ class D3D11ShareHandleImage;
+ class D3D11TextureIMFSampleImage;
++class D3D11YCbCrImage;
+ class SurfaceDescriptorD3D10;
+ class SurfaceDescriptorDXGIYCbCr;
+ #endif
+@@ -295,6 +296,8 @@ class GLBlitHelper final {
+                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
+   bool BlitImage(layers::D3D11TextureIMFSampleImage* srcImage,
+                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
++  bool BlitImage(layers::D3D11YCbCrImage* srcImage,
++                 const gfx::IntSize& destSize, OriginPos destOrigin) const;
+ 
+   bool BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
+                       const gfx::IntSize& destSize, OriginPos destOrigin) const;
+diff --git a/gfx/gl/GLBlitHelperD3D.cpp b/gfx/gl/GLBlitHelperD3D.cpp
+index effc682ea27f..1c101d8980af 100644
+--- a/gfx/gl/GLBlitHelperD3D.cpp
++++ b/gfx/gl/GLBlitHelperD3D.cpp
+@@ -214,6 +214,26 @@ bool GLBlitHelper::BlitImage(layers::D3D11TextureIMFSampleImage* const srcImage,
+ 
+ // -------------------------------------
+ 
++bool GLBlitHelper::BlitImage(layers::D3D11YCbCrImage* const srcImage,
++                             const gfx::IntSize& destSize,
++                             const OriginPos destOrigin) const {
++  const auto& data = srcImage->GetData();
++  if (!data) return false;
++
++  const WindowsHandle handles[3] = {
++      (WindowsHandle)(data->mHandles[0] ? data->mHandles[0]->GetHandle()
++                                        : nullptr),
++      (WindowsHandle)(data->mHandles[1] ? data->mHandles[1]->GetHandle()
++                                        : nullptr),
++      (WindowsHandle)(data->mHandles[2] ? data->mHandles[2]->GetHandle()
++                                        : nullptr)};
++  return BlitAngleYCbCr(handles, srcImage->mPictureRect, srcImage->GetYSize(),
++                        srcImage->GetCbCrSize(), srcImage->mColorSpace,
++                        destSize, destOrigin);
++}
++
++// -------------------------------------
++
+ bool GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
+                                   const gfx::IntSize& destSize,
+                                   const OriginPos destOrigin) const {
+diff --git a/gfx/layers/D3D11YCbCrImage.cpp b/gfx/layers/D3D11YCbCrImage.cpp
+index 32c708ec4ce2..f114ea1d276c 100644
+--- a/gfx/layers/D3D11YCbCrImage.cpp
++++ b/gfx/layers/D3D11YCbCrImage.cpp
+@@ -19,6 +19,306 @@ using namespace mozilla::gfx;
+ namespace mozilla {
+ namespace layers {
+ 
++D3D11YCbCrImage::D3D11YCbCrImage()
++    : Image(NULL, ImageFormat::D3D11_YCBCR_IMAGE) {}
++
++D3D11YCbCrImage::~D3D11YCbCrImage() {}
++
++bool D3D11YCbCrImage::SetData(KnowsCompositor* aAllocator,
++                              ImageContainer* aContainer,
++                              const PlanarYCbCrData& aData) {
++  mPictureRect = aData.mPictureRect;
++  mColorDepth = aData.mColorDepth;
++  mColorSpace = aData.mYUVColorSpace;
++  mColorRange = aData.mColorRange;
++  mChromaSubsampling = aData.mChromaSubsampling;
++
++  RefPtr<D3D11YCbCrRecycleAllocator> allocator =
++      aContainer->GetD3D11YCbCrRecycleAllocator(aAllocator);
++  if (!allocator) {
++    return false;
++  }
++
++  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetImageDevice();
++  if (!device) {
++    return false;
++  }
++
++  {
++    DXGIYCbCrTextureAllocationHelper helper(aData, TextureFlags::DEFAULT,
++                                            device);
++    mTextureClient = allocator->CreateOrRecycle(helper).unwrapOr(nullptr);
++  }
++
++  if (!mTextureClient) {
++    return false;
++  }
++
++  DXGIYCbCrTextureData* data =
++      mTextureClient->GetInternalData()->AsDXGIYCbCrTextureData();
++
++  ID3D11Texture2D* textureY = data->GetD3D11Texture(0);
++  ID3D11Texture2D* textureCb = data->GetD3D11Texture(1);
++  ID3D11Texture2D* textureCr = data->GetD3D11Texture(2);
++
++  RefPtr<ID3D10Multithread> mt;
++  HRESULT hr = device->QueryInterface((ID3D10Multithread**)getter_AddRefs(mt));
++
++  if (FAILED(hr) || !mt) {
++    gfxCriticalError() << "Multithread safety interface not supported. " << hr;
++    return false;
++  }
++
++  if (!mt->GetMultithreadProtected()) {
++    gfxCriticalError() << "Device used not marked as multithread-safe.";
++    return false;
++  }
++
++  D3D11MTAutoEnter mtAutoEnter(mt.forget());
++
++  RefPtr<ID3D11DeviceContext> ctx;
++  device->GetImmediateContext(getter_AddRefs(ctx));
++  if (!ctx) {
++    gfxCriticalError() << "Failed to get immediate context.";
++    return false;
++  }
++
++  AutoLockD3D11Texture lockY(textureY);
++  AutoLockD3D11Texture lockCb(textureCb);
++  AutoLockD3D11Texture lockCr(textureCr);
++
++  ctx->UpdateSubresource(textureY, 0, nullptr, aData.mYChannel, aData.mYStride,
++                         aData.mYStride * aData.YDataSize().height);
++  ctx->UpdateSubresource(textureCb, 0, nullptr, aData.mCbChannel,
++                         aData.mCbCrStride,
++                         aData.mCbCrStride * aData.CbCrDataSize().height);
++  ctx->UpdateSubresource(textureCr, 0, nullptr, aData.mCrChannel,
++                         aData.mCbCrStride,
++                         aData.mCbCrStride * aData.CbCrDataSize().height);
++
++  return true;
++}
++
++IntSize D3D11YCbCrImage::GetSize() const { return mPictureRect.Size(); }
++
++TextureClient* D3D11YCbCrImage::GetTextureClient(
++    KnowsCompositor* aKnowsCompositor) {
++  return mTextureClient;
++}
++
++const DXGIYCbCrTextureData* D3D11YCbCrImage::GetData() const {
++  if (!mTextureClient) return nullptr;
++
++  return mTextureClient->GetInternalData()->AsDXGIYCbCrTextureData();
++}
++
++nsresult D3D11YCbCrImage::ReadIntoBuffer(
++    const std::function<nsresult(const PlanarYCbCrData&, const IntSize&,
++                                 SurfaceFormat)>& aCopy) {
++  if (!mTextureClient) {
++    gfxWarning()
++        << "GetAsSourceSurface() called on uninitialized D3D11YCbCrImage.";
++    return NS_ERROR_FAILURE;
++  }
++
++  gfx::IntSize size(mPictureRect.Size());
++  gfx::SurfaceFormat format =
++      gfx::ImageFormatToSurfaceFormat(gfxVars::OffscreenFormat());
++  HRESULT hr;
++
++  PlanarYCbCrData data;
++
++  DXGIYCbCrTextureData* dxgiData =
++      mTextureClient->GetInternalData()->AsDXGIYCbCrTextureData();
++
++  if (!dxgiData) {
++    gfxCriticalError() << "Failed to get texture client internal data.";
++    return NS_ERROR_FAILURE;
++  }
++
++  RefPtr<ID3D11Texture2D> texY = dxgiData->GetD3D11Texture(0);
++  RefPtr<ID3D11Texture2D> texCb = dxgiData->GetD3D11Texture(1);
++  RefPtr<ID3D11Texture2D> texCr = dxgiData->GetD3D11Texture(2);
++  RefPtr<ID3D11Texture2D> softTexY, softTexCb, softTexCr;
++  D3D11_TEXTURE2D_DESC desc;
++
++  RefPtr<ID3D11Device> dev;
++  texY->GetDevice(getter_AddRefs(dev));
++
++  if (!dev || dev != gfx::DeviceManagerDx::Get()->GetImageDevice()) {
++    gfxCriticalError() << "D3D11Device is obsoleted";
++    return NS_ERROR_FAILURE;
++  }
++
++  RefPtr<ID3D10Multithread> mt;
++  hr = dev->QueryInterface((ID3D10Multithread**)getter_AddRefs(mt));
++
++  if (FAILED(hr) || !mt) {
++    gfxCriticalError() << "Multithread safety interface not supported.";
++    return NS_ERROR_FAILURE;
++  }
++
++  if (!mt->GetMultithreadProtected()) {
++    gfxCriticalError() << "Device used not marked as multithread-safe.";
++    return NS_ERROR_FAILURE;
++  }
++
++  D3D11MTAutoEnter mtAutoEnter(mt.forget());
++
++  texY->GetDesc(&desc);
++  desc.BindFlags = 0;
++  desc.MiscFlags = 0;
++  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++  desc.Usage = D3D11_USAGE_STAGING;
++
++  dev->CreateTexture2D(&desc, nullptr, getter_AddRefs(softTexY));
++  if (!softTexY) {
++    gfxCriticalNote << "Failed to allocate softTexY";
++    return NS_ERROR_FAILURE;
++  }
++
++  texCb->GetDesc(&desc);
++  desc.BindFlags = 0;
++  desc.MiscFlags = 0;
++  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++  desc.Usage = D3D11_USAGE_STAGING;
++
++  dev->CreateTexture2D(&desc, nullptr, getter_AddRefs(softTexCb));
++  if (!softTexCb) {
++    gfxCriticalNote << "Failed to allocate softTexCb";
++    return NS_ERROR_FAILURE;
++  }
++
++  texCr->GetDesc(&desc);
++  desc.BindFlags = 0;
++  desc.MiscFlags = 0;
++  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++  desc.Usage = D3D11_USAGE_STAGING;
++
++  dev->CreateTexture2D(&desc, nullptr, getter_AddRefs(softTexCr));
++  if (!softTexCr) {
++    gfxCriticalNote << "Failed to allocate softTexCr";
++    return NS_ERROR_FAILURE;
++  }
++
++  RefPtr<ID3D11DeviceContext> ctx;
++  dev->GetImmediateContext(getter_AddRefs(ctx));
++  if (!ctx) {
++    gfxCriticalError() << "Failed to get immediate context.";
++    return NS_ERROR_FAILURE;
++  }
++
++  {
++    AutoLockD3D11Texture lockY(texY);
++    AutoLockD3D11Texture lockCb(texCb);
++    AutoLockD3D11Texture lockCr(texCr);
++    ctx->CopyResource(softTexY, texY);
++    ctx->CopyResource(softTexCb, texCb);
++    ctx->CopyResource(softTexCr, texCr);
++  }
++
++  D3D11_MAPPED_SUBRESOURCE mapY, mapCb, mapCr;
++  mapY.pData = mapCb.pData = mapCr.pData = nullptr;
++
++  hr = ctx->Map(softTexY, 0, D3D11_MAP_READ, 0, &mapY);
++  if (FAILED(hr)) {
++    gfxCriticalError() << "Failed to map Y plane (" << hr << ")";
++    return NS_ERROR_FAILURE;
++  }
++  hr = ctx->Map(softTexCb, 0, D3D11_MAP_READ, 0, &mapCb);
++  if (FAILED(hr)) {
++    gfxCriticalError() << "Failed to map Y plane (" << hr << ")";
++    return NS_ERROR_FAILURE;
++  }
++  hr = ctx->Map(softTexCr, 0, D3D11_MAP_READ, 0, &mapCr);
++  if (FAILED(hr)) {
++    gfxCriticalError() << "Failed to map Y plane (" << hr << ")";
++    return NS_ERROR_FAILURE;
++  }
++
++  MOZ_ASSERT(mapCb.RowPitch == mapCr.RowPitch);
++
++  data.mPictureRect = mPictureRect;
++  data.mStereoMode = StereoMode::MONO;
++  data.mColorDepth = mColorDepth;
++  data.mYUVColorSpace = mColorSpace;
++  data.mColorRange = mColorRange;
++  data.mChromaSubsampling = mChromaSubsampling;
++  data.mYSkip = data.mCbSkip = data.mCrSkip = 0;
++  data.mYChannel = static_cast<uint8_t*>(mapY.pData);
++  data.mYStride = mapY.RowPitch;
++  data.mCbChannel = static_cast<uint8_t*>(mapCb.pData);
++  data.mCrChannel = static_cast<uint8_t*>(mapCr.pData);
++  data.mCbCrStride = mapCb.RowPitch;
++
++  gfx::GetYCbCrToRGBDestFormatAndSize(data, format, size);
++  if (size.width > PlanarYCbCrImage::MAX_DIMENSION ||
++      size.height > PlanarYCbCrImage::MAX_DIMENSION) {
++    gfxCriticalError() << "Illegal image dest width or height";
++    return NS_ERROR_FAILURE;
++  }
++
++  nsresult rv = aCopy(data, size, format);
++
++  ctx->Unmap(softTexY, 0);
++  ctx->Unmap(softTexCb, 0);
++  ctx->Unmap(softTexCr, 0);
++
++  return rv;
++}
++
++already_AddRefed<SourceSurface> D3D11YCbCrImage::GetAsSourceSurface() {
++  RefPtr<gfx::DataSourceSurface> surface;
++
++  nsresult rv =
++      ReadIntoBuffer([&](const PlanarYCbCrData& aData, const IntSize& aSize,
++                         SurfaceFormat aFormat) -> nsresult {
++        surface = gfx::Factory::CreateDataSourceSurface(aSize, aFormat);
++        if (!surface) {
++          gfxCriticalError()
++              << "Failed to create DataSourceSurface for image: " << aSize
++              << " " << aFormat;
++          return NS_ERROR_OUT_OF_MEMORY;
++        }
++
++        DataSourceSurface::ScopedMap mapping(surface, DataSourceSurface::WRITE);
++        if (!mapping.IsMapped()) {
++          gfxCriticalError()
++              << "Failed to map DataSourceSurface for D3D11YCbCrImage";
++          return NS_ERROR_FAILURE;
++        }
++
++        gfx::ConvertYCbCrToRGB(aData, aFormat, aSize, mapping.GetData(),
++                               mapping.GetStride());
++        return NS_OK;
++      });
++
++  if (NS_WARN_IF(NS_FAILED(rv))) {
++    return nullptr;
++  }
++
++  MOZ_ASSERT(surface);
++  return surface.forget();
++}
++
++nsresult D3D11YCbCrImage::BuildSurfaceDescriptorBuffer(
++    SurfaceDescriptorBuffer& aSdBuffer, BuildSdbFlags aFlags,
++    const std::function<MemoryOrShmem(uint32_t)>& aAllocate) {
++  return ReadIntoBuffer([&](const PlanarYCbCrData& aData, const IntSize& aSize,
++                            SurfaceFormat aFormat) -> nsresult {
++    uint8_t* buffer = nullptr;
++    int32_t stride = 0;
++    nsresult rv = AllocateSurfaceDescriptorBufferRgb(
++        aSize, aFormat, buffer, aSdBuffer, stride, aAllocate);
++    if (NS_WARN_IF(NS_FAILED(rv))) {
++      return rv;
++    }
++
++    gfx::ConvertYCbCrToRGB(aData, aFormat, aSize, buffer, stride);
++    return NS_OK;
++  });
++}
++
+ class AutoCheckLockD3D11Texture final {
+  public:
+   explicit AutoCheckLockD3D11Texture(ID3D11Texture2D* aTexture)
+diff --git a/gfx/layers/D3D11YCbCrImage.h b/gfx/layers/D3D11YCbCrImage.h
+index b4fbeb253332..0b4408ca37ee 100644
+--- a/gfx/layers/D3D11YCbCrImage.h
++++ b/gfx/layers/D3D11YCbCrImage.h
+@@ -50,6 +50,52 @@ class D3D11YCbCrRecycleAllocator : public TextureClientRecycleAllocator {
+       TextureFlags aTextureFlags, TextureAllocationFlags aAllocFlags) override;
+ };
+ 
++class D3D11YCbCrImage : public Image {
++  friend class gl::GLBlitHelper;
++
++ public:
++  D3D11YCbCrImage();
++  virtual ~D3D11YCbCrImage();
++
++  // Copies the surface into a sharable texture's surface, and initializes
++  // the image.
++  bool SetData(KnowsCompositor* aAllocator, ImageContainer* aContainer,
++               const PlanarYCbCrData& aData);
++
++  gfx::IntSize GetSize() const override;
++
++  already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
++
++  nsresult BuildSurfaceDescriptorBuffer(
++      SurfaceDescriptorBuffer& aSdBuffer, BuildSdbFlags aFlags,
++      const std::function<MemoryOrShmem(uint32_t)>& aAllocate) override;
++
++  TextureClient* GetTextureClient(KnowsCompositor* aKnowsCompositor) override;
++
++  gfx::IntRect GetPictureRect() const override { return mPictureRect; }
++
++  gfx::IntSize GetYSize() const {
++    return {mPictureRect.XMost(), mPictureRect.YMost()};
++  }
++  gfx::IntSize GetCbCrSize() const {
++    return ChromaSize(GetYSize(), mChromaSubsampling);
++  }
++
++ private:
++  nsresult ReadIntoBuffer(
++      const std::function<nsresult(const PlanarYCbCrData&, const gfx::IntSize&,
++                                   gfx::SurfaceFormat)>& aCopy);
++
++  const DXGIYCbCrTextureData* GetData() const;
++
++  gfx::IntRect mPictureRect;
++  gfx::ColorDepth mColorDepth;
++  gfx::YUVColorSpace mColorSpace;
++  gfx::ColorRange mColorRange;
++  gfx::ChromaSubsampling mChromaSubsampling;
++  RefPtr<TextureClient> mTextureClient;
++};
++
+ }  // namespace layers
+ }  // namespace mozilla
+ 
+diff --git a/gfx/layers/ImageTypes.h b/gfx/layers/ImageTypes.h
+index 616f8b3d784a..96021ba9f6b4 100644
+--- a/gfx/layers/ImageTypes.h
++++ b/gfx/layers/ImageTypes.h
+@@ -82,6 +82,11 @@ enum class ImageFormat {
+    */
+   TEXTURE_WRAPPER,
+ 
++  /**
++   * A D3D11 backed YUV image.
++   */
++  D3D11_YCBCR_IMAGE,
++
+   /**
+    * An opaque handle that refers to an Image stored in the GPU
+    * process.

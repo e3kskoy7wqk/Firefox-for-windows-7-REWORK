@@ -1,0 +1,1 @@
+Bug 1843225 - Remove checks from gfxWindowsPlatform which are not needed on Windows 10+ r=emk,gfx-reviewers,nical    2023-08-07 22:22:30    5e52921d2d7a6f894ee6eb3b65586fa540bd7bf8

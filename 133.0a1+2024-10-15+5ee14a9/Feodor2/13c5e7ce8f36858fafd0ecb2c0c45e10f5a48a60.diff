@@ -1,0 +1,75 @@
+diff --git a/servo/components/style/values/specified/box.rs b/servo/components/style/values/specified/box.rs
+index c1dc017bd0c5..190468a1688c 100644
+--- a/servo/components/style/values/specified/box.rs
++++ b/servo/components/style/values/specified/box.rs
+@@ -1500,6 +1500,18 @@ pub enum Appearance {
+     /// The progress bar's progress indicator
+     #[parse(condition = "ParserContext::chrome_rules_enabled")]
+     Progresschunk,
++    /// A generic container that always repaints on state changes. This is a
++    /// hack to make XUL checkboxes and radio buttons work.
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    CheckboxContainer,
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    RadioContainer,
++    /// The label part of a checkbox or radio button, used for painting a focus
++    /// outline.
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    CheckboxLabel,
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    RadioLabel,
+     /// nsRangeFrame and its subparts
+     #[parse(condition = "ParserContext::chrome_rules_enabled")]
+     Range,
+diff --git a/widget/gtk/gtkdrawing.h b/widget/gtk/gtkdrawing.h
+index 3b342412c675..24c7ab81143b 100644
+--- a/widget/gtk/gtkdrawing.h
++++ b/widget/gtk/gtkdrawing.h
+@@ -130,11 +130,15 @@ enum WidgetNodeType : int {
+   MOZ_GTK_CHECKBUTTON_CONTAINER,
+   /* Paints a GtkCheckButton. flags is a boolean, 1=checked, 0=not checked. */
+   MOZ_GTK_CHECKBUTTON,
++  /* Paints the label of a GtkCheckButton (focus outline) */
++  MOZ_GTK_CHECKBUTTON_LABEL,
+ 
+   /* Paints the container part of a GtkRadioButton. */
+   MOZ_GTK_RADIOBUTTON_CONTAINER,
+   /* Paints a GtkRadioButton. flags is a boolean, 1=checked, 0=not checked. */
+   MOZ_GTK_RADIOBUTTON,
++  /* Paints the label of a GtkRadioButton (focus outline) */
++  MOZ_GTK_RADIOBUTTON_LABEL,
+   /* Vertical GtkScrollbar counterparts */
+   MOZ_GTK_SCROLLBAR_VERTICAL,
+   MOZ_GTK_SCROLLBAR_CONTENTS_VERTICAL,
+diff --git a/widget/nsNativeTheme.cpp b/widget/nsNativeTheme.cpp
+index 55393736ba31..0b2bcbb7b05f 100644
+--- a/widget/nsNativeTheme.cpp
++++ b/widget/nsNativeTheme.cpp
+@@ -51,6 +51,11 @@ NS_IMPL_ISUPPORTS(nsNativeTheme, nsITimerCallback, nsINamed)
+ 
+   const bool isXULElement = frameContent->IsXULElement();
+   if (isXULElement) {
++    if (aAppearance == StyleAppearance::CheckboxLabel ||
++        aAppearance == StyleAppearance::RadioLabel) {
++      aFrame = aFrame->GetParent()->GetParent();
++      frameContent = aFrame->GetContent();
++    } else
+     if (aAppearance == StyleAppearance::Checkbox ||
+         aAppearance == StyleAppearance::Radio ||
+         aAppearance == StyleAppearance::ToolbarbuttonDropdown ||
+@@ -83,6 +87,7 @@ NS_IMPL_ISUPPORTS(nsNativeTheme, nsITimerCallback, nsINamed)
+   }
+ 
+   switch (aAppearance) {
++    case StyleAppearance::RadioLabel:
+     case StyleAppearance::Radio: {
+       if (CheckBooleanAttr(aFrame, nsGkAtoms::focused)) {
+         flags |= ElementState::FOCUS;
+@@ -98,6 +103,7 @@ NS_IMPL_ISUPPORTS(nsNativeTheme, nsITimerCallback, nsINamed)
+       }
+       break;
+     }
++    case StyleAppearance::CheckboxLabel:
+     case StyleAppearance::Checkbox: {
+       if (CheckBooleanAttr(aFrame, nsGkAtoms::checked)) {
+         flags |= ElementState::CHECKED;

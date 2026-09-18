@@ -1,0 +1,24 @@
+# Auto-generated file. Do not edit!
+
+DIRS += [
+]
+
+SOURCES += [
+    'cpu.c',
+    'cpuid.asm',
+    'fixed_dsp.asm',
+    'fixed_dsp_init.c',
+    'float_dsp.asm',
+    'float_dsp_init.c',
+    'imgutils.asm',
+    'imgutils_init.c',
+    'lls.asm',
+    'lls_init.c',
+    'tx_float.asm',
+    'tx_float_init.c',
+]
+
+LOCAL_INCLUDES += [ "../" ]
+
+FINAL_LIBRARY = 'mozavutil'
+include('/media/ffvpx/ffvpxcommon.mozbuild')

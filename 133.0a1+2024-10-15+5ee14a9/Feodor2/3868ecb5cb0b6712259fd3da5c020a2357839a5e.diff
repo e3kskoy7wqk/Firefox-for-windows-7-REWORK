@@ -1,0 +1,235 @@
+diff --git a/browser/installer/windows/nsis/defines.nsi.in b/browser/installer/windows/nsis/defines.nsi.in
+index 665d2a7b7d9d..ffb23ff1cdc6 100644
+--- a/browser/installer/windows/nsis/defines.nsi.in
++++ b/browser/installer/windows/nsis/defines.nsi.in
+@@ -68,7 +68,7 @@
+ !define MinSupportedVer "Microsoft Windows 7 x64"
+ #endif
+ #else
+-!define MinSupportedVer "Microsoft Windows 7"
++!define MinSupportedVer "Microsoft Windows XP SP2"
+ !define ARCH "x86"
+ #endif
+ 
+diff --git a/browser/installer/windows/nsis/installer.nsi b/browser/installer/windows/nsis/installer.nsi
+index 491bfc143fee..872f8808fc02 100755
+--- a/browser/installer/windows/nsis/installer.nsi
++++ b/browser/installer/windows/nsis/installer.nsi
+@@ -1138,11 +1138,13 @@ Function .onInit
+ 
+   ; Don't install on systems that don't support SSE2. The parameter value of
+   ; 10 is for PF_XMMI64_INSTRUCTIONS_AVAILABLE which will check whether the
+-  ; SSE2 instruction set is available. Result returned in $R7.
++  ; SSE2 instruction set is available.
+   System::Call "kernel32::IsProcessorFeaturePresent(i 10)i .R7"
+ 
+-  ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
+-  ${Unless} ${AtLeastWin7}
++!ifdef HAVE_64BIT_BUILD
++  ; Restrict x64 builds from being installed on x86 and pre Win7
++  ${Unless} ${RunningX64}
++  ${OrUnless} ${AtLeastWinXP}
+     ${If} "$R7" == "0"
+       strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
+     ${Else}
+@@ -1153,7 +1155,45 @@ Function .onInit
+     Quit
+   ${EndUnless}
+ 
+-  ; SSE2 CPU support
++  SetRegView 64
++!else
++  StrCpy $R8 "0"
++  ${If} ${AtMostWin2000}
++    StrCpy $R8 "1"
++  ${EndIf}
++
++  ${If} ${IsWinXP}
++  ${AndIf} ${AtMostServicePack} 1
++    StrCpy $R8 "1"
++  ${EndIf}
++
++  ${If} $R8 == "1"
++    ; XXX-rstrong - some systems failed the AtLeastWin2000 test that we
++    ; used to use for an unknown reason and likely fail the AtMostWin2000
++    ; and possibly the IsWinXP test as well. To work around this also
++    ; check if the Windows NT registry Key exists and if it does if the
++    ; first char in CurrentVersion is equal to 3 (Windows NT 3.5 and
++    ; 3.5.1), 4 (Windows NT 4), or 5 (Windows 2000 and Windows XP).
++    StrCpy $R8 ""
++    ClearErrors
++    ReadRegStr $R8 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentVersion"
++    StrCpy $R8 "$R8" 1
++    ${If} ${Errors}
++    ${OrIf} "$R8" == "3"
++    ${OrIf} "$R8" == "4"
++    ${OrIf} "$R8" == "5"
++      ${If} "$R7" == "0"
++        strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
++      ${Else}
++        strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_MSG)"
++      ${EndIf}
++      MessageBox MB_OKCANCEL|MB_ICONSTOP "$R7" IDCANCEL +2
++      ExecShell "open" "${URLSystemRequirements}"
++      Quit
++    ${EndIf}
++  ${EndUnless}
++!endif
++
+   ${If} "$R7" == "0"
+     MessageBox MB_OKCANCEL|MB_ICONSTOP "$(WARN_MIN_SUPPORTED_CPU_MSG)" IDCANCEL +2
+     ExecShell "open" "${URLSystemRequirements}"
+diff --git a/browser/installer/windows/nsis/maintenanceservice_installer.nsi b/browser/installer/windows/nsis/maintenanceservice_installer.nsi
+index 20360cc61e68..ef30c1360996 100644
+--- a/browser/installer/windows/nsis/maintenanceservice_installer.nsi
++++ b/browser/installer/windows/nsis/maintenanceservice_installer.nsi
+@@ -120,7 +120,10 @@ Function .onInit
+ 
+   SetSilent silent
+ 
+-  ${Unless} ${AtLeastWin7}
++  ; On Windows 2000 we do not install the maintenance service.
++  ; We won't run this installer from the parent installer, but just in case 
++  ; someone tries to execute it on Windows 2000...
++  ${Unless} ${AtLeastWinXP}
+     Abort
+   ${EndUnless}
+ FunctionEnd
+diff --git a/browser/installer/windows/nsis/stub.nsi b/browser/installer/windows/nsis/stub.nsi
+index 72ac7ee010ad..176f641b36c2 100644
+--- a/browser/installer/windows/nsis/stub.nsi
++++ b/browser/installer/windows/nsis/stub.nsi
+@@ -321,8 +321,10 @@ Function .onInit
+   ; SSE2 instruction set is available.
+   System::Call "kernel32::IsProcessorFeaturePresent(i 10)i .R7"
+ 
+-  ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
+-  ${Unless} ${AtLeastWin7}
++!ifdef HAVE_64BIT_BUILD
++  ; Restrict x64 builds from being installed on x86 and pre Win7
++  ${Unless} ${RunningX64}
++  ${OrUnless} ${AtLeastWin7}
+     ${If} "$R7" == "0"
+       strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
+     ${Else}
+@@ -333,7 +335,45 @@ Function .onInit
+     Quit
+   ${EndUnless}
+ 
+-  ; SSE2 CPU support
++  SetRegView 64
++!else
++  StrCpy $R8 "0"
++  ${If} ${AtMostWin2000}
++    StrCpy $R8 "1"
++  ${EndIf}
++
++  ${If} ${IsWinXP}
++  ${AndIf} ${AtMostServicePack} 1
++    StrCpy $R8 "1"
++  ${EndIf}
++
++  ${If} $R8 == "1"
++    ; XXX-rstrong - some systems failed the AtLeastWin2000 test that we
++    ; used to use for an unknown reason and likely fail the AtMostWin2000
++    ; and possibly the IsWinXP test as well. To work around this also
++    ; check if the Windows NT registry Key exists and if it does if the
++    ; first char in CurrentVersion is equal to 3 (Windows NT 3.5 and
++    ; 3.5.1), 4 (Windows NT 4), or 5 (Windows 2000 and Windows XP).
++    StrCpy $R8 ""
++    ClearErrors
++    ReadRegStr $R8 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentVersion"
++    StrCpy $R8 "$R8" 1
++    ${If} ${Errors}
++    ${OrIf} "$R8" == "3"
++    ${OrIf} "$R8" == "4"
++    ${OrIf} "$R8" == "5"
++      ${If} "$R7" == "0"
++        strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
++      ${Else}
++        strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_MSG)"
++      ${EndIf}
++      MessageBox MB_OKCANCEL|MB_ICONSTOP "$R7" IDCANCEL +2
++      ExecShell "open" "${URLSystemRequirements}"
++      Quit
++    ${EndIf}
++  ${EndUnless}
++!endif
++
+   ${If} "$R7" == "0"
+     MessageBox MB_OKCANCEL|MB_ICONSTOP "$(WARN_MIN_SUPPORTED_CPU_MSG)" IDCANCEL +2
+     ExecShell "open" "${URLSystemRequirements}"
+diff --git a/toolkit/components/maintenanceservice/bootstrapinstaller/maintenanceservice_installer.nsi b/toolkit/components/maintenanceservice/bootstrapinstaller/maintenanceservice_installer.nsi
+index d4d21e3777a7..9e831dc9c752 100644
+--- a/toolkit/components/maintenanceservice/bootstrapinstaller/maintenanceservice_installer.nsi
++++ b/toolkit/components/maintenanceservice/bootstrapinstaller/maintenanceservice_installer.nsi
+@@ -117,7 +117,10 @@ Function .onInit
+   System::Call 'kernel32::SetDllDirectoryW(w "")'
+ 
+   SetSilent silent
+-  ${Unless} ${AtLeastWin7}
++  ; On Windows 2000 we do not install the maintenance service.
++  ; We won't run this installer from the parent installer, but just in case 
++  ; someone tries to execute it on Windows 2000...
++  ${Unless} ${AtLeastWinXP}
+     Abort
+   ${EndUnless}
+ FunctionEnd
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+index c7d6b9098554..a0bf374d727a 100755
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -5107,15 +5107,46 @@
+         Quit
+       ${EndIf}
+ 
+-      ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
+-      ${Unless} ${AtLeastWin7}
+-        MessageBox MB_OK|MB_ICONSTOP "$R9"
+-        ; Nothing initialized so no need to call OnEndCommon
+-        Quit
+-      ${EndUnless}
+-
+       !ifdef HAVE_64BIT_BUILD
++        ${Unless} ${RunningX64}
++        ${OrUnless} ${AtLeastWin7}
++          MessageBox MB_OK|MB_ICONSTOP "$R9"
++          ; Nothing initialized so no need to call OnEndCommon
++          Quit
++        ${EndUnless}
++
+         SetRegView 64
++      !else
++        StrCpy $R8 "0"
++        ${If} ${AtMostWin2000}
++          StrCpy $R8 "1"
++        ${EndIf}
++
++        ${If} ${IsWinXP}
++        ${AndIf} ${AtMostServicePack} 1
++          StrCpy $R8 "1"
++        ${EndIf}
++
++        ${If} $R8 == "1"
++          ; XXX-rstrong - some systems failed the AtLeastWin2000 test that we
++          ; used to use for an unknown reason and likely fail the AtMostWin2000
++          ; and possibly the IsWinXP test as well. To work around this also
++          ; check if the Windows NT registry Key exists and if it does if the
++          ; first char in CurrentVersion is equal to 3 (Windows NT 3.5 and
++          ; 3.5.1), to 4 (Windows NT 4) or 5 (Windows 2000 and Windows XP).
++          StrCpy $R8 ""
++          ClearErrors
++          ReadRegStr $R8 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentVersion"
++          StrCpy $R8 "$R8" 1
++          ${If} ${Errors}
++          ${OrIf} "$R8" == "3"
++          ${OrIf} "$R8" == "4"
++          ${OrIf} "$R8" == "5"
++            MessageBox MB_OK|MB_ICONSTOP "$R9"
++            ; Nothing initialized so no need to call OnEndCommon
++            Quit
++          ${EndIf}
++        ${EndUnless}
+       !endif
+ 
+       StrCpy $R4 0 ; will be set to 1 if a custom install path is set

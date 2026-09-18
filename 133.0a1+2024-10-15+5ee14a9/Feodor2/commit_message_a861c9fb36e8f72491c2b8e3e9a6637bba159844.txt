@@ -1,0 +1,1 @@
+Bug 1418389 - Partially revert bug 1417234. r=njn    2017-11-23 06:25:08    a861c9fb36e8f72491c2b8e3e9a6637bba159844

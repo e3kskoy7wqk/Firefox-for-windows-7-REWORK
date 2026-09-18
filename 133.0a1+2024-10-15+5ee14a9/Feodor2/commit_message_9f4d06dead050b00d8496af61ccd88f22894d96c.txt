@@ -1,0 +1,1 @@
+Bug 1334665: Eliminate runtime dynamic linking for pre-win7 functions in ipc/mscom; r=jimm    2017-01-28 05:53:20    9f4d06dead050b00d8496af61ccd88f22894d96c

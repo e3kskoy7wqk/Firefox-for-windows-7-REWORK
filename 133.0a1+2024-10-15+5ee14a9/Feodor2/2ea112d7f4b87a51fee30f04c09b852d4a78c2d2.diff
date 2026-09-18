@@ -1,0 +1,75 @@
+diff --git a/mozglue/misc/Mutex_windows.cpp b/mozglue/misc/Mutex_windows.cpp
+index a7904011cedd..719a8a757567 100644
+--- a/mozglue/misc/Mutex_windows.cpp
++++ b/mozglue/misc/Mutex_windows.cpp
+@@ -12,6 +12,35 @@
+ 
+ #include "MutexPlatformData_windows.h"
+ 
++namespace {
++
++// We build with a toolkit that supports WinXP, so we have to probe
++// for modern features at runtime. This is necessary because Vista and
++// later automatically allocate and subsequently leak a debug info
++// object for each critical section that we allocate unless we tell it
++// not to. In order to tell it not to, we need the extra flags field
++// provided by the Ex version of InitializeCriticalSection.
++struct MutexNativeImports
++{
++  using InitializeCriticalSectionExT = BOOL (WINAPI*)(CRITICAL_SECTION*, DWORD, DWORD);
++  InitializeCriticalSectionExT InitializeCriticalSectionEx;
++
++  MutexNativeImports() {
++    HMODULE kernel32_dll = GetModuleHandleW(L"kernel32.dll");
++    MOZ_RELEASE_ASSERT(kernel32_dll != NULL);
++    InitializeCriticalSectionEx = reinterpret_cast<InitializeCriticalSectionExT>(
++      GetProcAddress(kernel32_dll, "InitializeCriticalSectionEx"));
++  }
++
++  bool hasInitializeCriticalSectionEx() const {
++    return InitializeCriticalSectionEx;
++  }
++};
++
++static MutexNativeImports NativeImports;
++
++} // (anonymous namespace)
++
+ mozilla::detail::MutexImpl::MutexImpl() {
+   // This number was adopted from NSPR.
+   const static DWORD LockSpinCount = 1500;
+@@ -12,8 +12,15 @@
+   DWORD flags = 0;
+ #endif // defined(RELEASE_OR_BETA)
+ 
+-  BOOL r = InitializeCriticalSectionEx(&platformData()->criticalSection,
+-                                       LockSpinCount, flags);
++  BOOL r;
++  if (NativeImports.hasInitializeCriticalSectionEx()) {
++    r = NativeImports.InitializeCriticalSectionEx(&platformData()->criticalSection,
++                                                  LockSpinCount,
++                                                  flags);
++  } else {
++    r = InitializeCriticalSectionAndSpinCount(&platformData()->criticalSection,
++                                              LockSpinCount);
++  }
+   MOZ_RELEASE_ASSERT(r);
+ }
+ 
+diff --git a/toolkit/xre/dllservices/mozglue/interceptor/VMSharingPolicies.h b/toolkit/xre/dllservices/mozglue/interceptor/VMSharingPolicies.h
+index 3fbab81..407c6b9 100644
+--- a/toolkit/xre/dllservices/mozglue/interceptor/VMSharingPolicies.h
++++ b/toolkit/xre/dllservices/mozglue/interceptor/VMSharingPolicies.h
+@@ -84,11 +84,7 @@ class VMSharingPolicyShared<MMPolicyInProcess, kChunkSize>
+  private:
+   static CRITICAL_SECTION* GetCS() {
+     static const bool isAlloc = []() -> bool {
+-      DWORD flags = 0;
+-#if defined(RELEASE_OR_BETA)
+-      flags |= CRITICAL_SECTION_NO_DEBUG_INFO;
+-#endif  // defined(RELEASE_OR_BETA)
+-      ::InitializeCriticalSectionEx(&sCS, 4000, flags);
++      ::InitializeCriticalSectionAndSpinCount(&sCS, 4000);
+       return true;
+     }();
+     Unused << isAlloc;

@@ -1,0 +1,1 @@
+Bug 1330496 - Part 3: Remove other ipc checks for Windows Vista or 7+. r=aklotz    2017-01-10 13:03:57    334b850d7ebbf1ebf4a2ae98fa443b607b2e2a1c

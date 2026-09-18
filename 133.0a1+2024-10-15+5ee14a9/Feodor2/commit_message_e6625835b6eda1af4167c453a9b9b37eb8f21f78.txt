@@ -1,0 +1,1 @@
+Bug 1846934 - Remove IE7FormPasswords migrator r=mconley    2023-08-04 03:07:06    e6625835b6eda1af4167c453a9b9b37eb8f21f78

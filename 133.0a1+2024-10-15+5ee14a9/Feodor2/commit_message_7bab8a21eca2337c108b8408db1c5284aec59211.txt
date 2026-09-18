@@ -1,0 +1,1 @@
+Bug 1347731 - Simplify WGL initialization code. - r=daoshengmu    2018-01-03 10:30:15    7bab8a21eca2337c108b8408db1c5284aec59211

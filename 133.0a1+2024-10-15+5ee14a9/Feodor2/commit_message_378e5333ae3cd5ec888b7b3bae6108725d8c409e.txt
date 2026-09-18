@@ -1,0 +1,1 @@
+Bug 1904957: Implement GetHeterogeneousCpuInfo on Windows and use for TaskController pool size. r=cmartin,smaug    2024-10-03 01:27:32    378e5333ae3cd5ec888b7b3bae6108725d8c409e

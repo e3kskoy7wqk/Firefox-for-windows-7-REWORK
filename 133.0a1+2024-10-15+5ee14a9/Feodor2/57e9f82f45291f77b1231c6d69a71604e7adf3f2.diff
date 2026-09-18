@@ -1,0 +1,1037 @@
+diff --git a/dom/media/platforms/wmf/DXVA2Manager.cpp b/dom/media/platforms/wmf/DXVA2Manager.cpp
+index 67629578d667..95167fbbc2b8 100644
+--- a/dom/media/platforms/wmf/DXVA2Manager.cpp
++++ b/dom/media/platforms/wmf/DXVA2Manager.cpp
+@@ -9,6 +9,7 @@
+ #endif
+ #include "DXVA2Manager.h"
+ #include <d3d11.h>
++#include "D3D9SurfaceImage.h"
+ #include "DriverCrashGuard.h"
+ #include "GfxDriverInfo.h"
+ #include "ImageContainer.h"
+@@ -109,6 +110,11 @@ static const DWORD sNVIDIABrokenNV12[] = {
+     // clang-format on
+ };
+ 
++// The size we use for our synchronization surface.
++// 16x16 is the size recommended by Microsoft (in the D3D9ExDXGISharedSurf
++// sample) that works best to avoid driver bugs.
++static const uint32_t kSyncSurfaceSize = 16;
++
+ extern mozilla::LazyLogModule sPDMLog;
+ #define LOG(...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+ 
+@@ -116,14 +122,51 @@ namespace mozilla {
+ 
+ using layers::D3D11RecycleAllocator;
+ using layers::D3D11ShareHandleImage;
++using layers::D3D9RecycleAllocator;
++using layers::D3D9SurfaceImage;
+ using layers::Image;
+ using layers::ImageContainer;
+ using namespace layers;
+ using namespace gfx;
+ 
+ StaticRefPtr<ID3D11Device> sDevice;
+ StaticMutex sDeviceMutex;
+ 
++class D3D9DXVA2Manager : public DXVA2Manager {
++ public:
++  D3D9DXVA2Manager();
++  virtual ~D3D9DXVA2Manager();
++
++  HRESULT Init(layers::KnowsCompositor* aKnowsCompositor,
++               nsACString& aFailureReason);
++
++  IUnknown* GetDXVADeviceManager() override;
++
++  // Copies a region (aRegion) of the video frame stored in aVideoSample
++  // into an image which is returned by aOutImage.
++  HRESULT CopyToImage(IMFSample* aVideoSample, const gfx::IntRect& aRegion,
++                      Image** aOutImage) override;
++
++  bool SupportsConfig(const VideoInfo& aInfo, IMFMediaType* aInputType,
++                      IMFMediaType* aOutputType) override;
++
++ private:
++  bool CanCreateDecoder(const DXVA2_VideoDesc& aDesc) const;
++
++  already_AddRefed<IDirectXVideoDecoder> CreateDecoder(
++      const DXVA2_VideoDesc& aDesc) const;
++
++  RefPtr<IDirect3D9Ex> mD3D9;
++  RefPtr<IDirect3DDevice9Ex> mDevice;
++  RefPtr<IDirect3DDeviceManager9> mDeviceManager;
++  RefPtr<D3D9RecycleAllocator> mTextureClientAllocator;
++  RefPtr<IDirectXVideoDecoderService> mDecoderService;
++  RefPtr<IDirect3DSurface9> mSyncSurface;
++  RefPtr<IDirectXVideoDecoder> mDecoder;
++  GUID mDecoderGUID;
++  UINT32 mResetToken = 0;
++};
++
+ void GetDXVA2ExtendedFormatFromMFMediaType(IMFMediaType* pType,
+                                            DXVA2_ExtendedFormat* pFormat) {
+   // Get the interlace mode.
+@@ -309,10 +352,339 @@ static const char* DecoderGUIDToStr(const GUID& aGuid) {
+   return "none";
+ }
+ 
++// This tests if a DXVA video decoder can be created for the given media
++// type/resolution. It uses the same decoder device (DXVA2_ModeH264_E -
++// DXVA2_ModeH264_VLD_NoFGT) as the H264 decoder MFT provided by windows
++// (CLSID_CMSH264DecoderMFT) uses, so we can use it to determine if the MFT will
++// use software fallback or not.
++bool D3D9DXVA2Manager::SupportsConfig(const VideoInfo& aInfo,
++                                      IMFMediaType* aInputType,
++                                      IMFMediaType* aOutputType) {
++  GUID inputSubtype;
++  HRESULT hr = aInputType->GetGUID(MF_MT_SUBTYPE, &inputSubtype);
++  if (FAILED(hr) || inputSubtype != MFVideoFormat_H264) {
++    return false;
++  }
++
++  DXVA2_VideoDesc desc;
++  hr = ConvertMFTypeToDXVAType(aInputType, &desc);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
++  return CanCreateDecoder(desc);
++}
++
++D3D9DXVA2Manager::D3D9DXVA2Manager() { MOZ_COUNT_CTOR(D3D9DXVA2Manager); }
++
++D3D9DXVA2Manager::~D3D9DXVA2Manager() { MOZ_COUNT_DTOR(D3D9DXVA2Manager); }
++
++IUnknown* D3D9DXVA2Manager::GetDXVADeviceManager() {
++  MutexAutoLock lock(mLock);
++  return mDeviceManager;
++}
++
++HRESULT
++D3D9DXVA2Manager::Init(layers::KnowsCompositor* aKnowsCompositor,
++                       nsACString& aFailureReason) {
++  ScopedGfxFeatureReporter reporter("DXVA2D3D9");
++
++  // Create D3D9Ex.
++  HMODULE d3d9lib = LoadLibraryW(L"d3d9.dll");
++  NS_ENSURE_TRUE(d3d9lib, E_FAIL);
++  decltype(Direct3DCreate9Ex)* d3d9Create =
++      (decltype(Direct3DCreate9Ex)*)GetProcAddress(d3d9lib,
++                                                   "Direct3DCreate9Ex");
++  if (!d3d9Create) {
++    NS_WARNING("Couldn't find Direct3DCreate9Ex symbol in d3d9.dll");
++    aFailureReason.AssignLiteral(
++        "Couldn't find Direct3DCreate9Ex symbol in d3d9.dll");
++    return E_FAIL;
++  }
++  RefPtr<IDirect3D9Ex> d3d9Ex;
++  HRESULT hr = d3d9Create(D3D_SDK_VERSION, getter_AddRefs(d3d9Ex));
++  if (!d3d9Ex) {
++    NS_WARNING("Direct3DCreate9 failed");
++    aFailureReason.AssignLiteral("Direct3DCreate9 failed");
++    return E_FAIL;
++  }
++
++  // Ensure we can do the YCbCr->RGB conversion in StretchRect.
++  // Fail if we can't.
++  hr = d3d9Ex->CheckDeviceFormatConversion(
++      D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
++      (D3DFORMAT)MAKEFOURCC('N', 'V', '1', '2'), D3DFMT_X8R8G8B8);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "CheckDeviceFormatConversion failed with error %lX", hr);
++    return hr;
++  }
++
++  // Create D3D9DeviceEx. We pass null HWNDs here even though the documentation
++  // suggests that one of them should not be. At this point in time Chromium
++  // does the same thing for video acceleration.
++  D3DPRESENT_PARAMETERS params = {0};
++  params.BackBufferWidth = 1;
++  params.BackBufferHeight = 1;
++  params.BackBufferFormat = D3DFMT_A8R8G8B8;
++  params.BackBufferCount = 1;
++  params.SwapEffect = D3DSWAPEFFECT_DISCARD;
++  params.hDeviceWindow = nullptr;
++  params.Windowed = TRUE;
++  params.Flags = D3DPRESENTFLAG_VIDEO;
++
++  RefPtr<IDirect3DDevice9Ex> device;
++  hr = d3d9Ex->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, nullptr,
++                              D3DCREATE_FPU_PRESERVE | D3DCREATE_MULTITHREADED |
++                                  D3DCREATE_MIXED_VERTEXPROCESSING,
++                              &params, nullptr, getter_AddRefs(device));
++  if (!SUCCEEDED(hr)) {
++    aFailureReason =
++        nsPrintfCString("CreateDeviceEx failed with error %lX", hr);
++    return hr;
++  }
++
++  // Ensure we can create queries to synchronize operations between devices.
++  // Without this, when we make a copy of the frame in order to share it with
++  // another device, we can't be sure that the copy has finished before the
++  // other device starts using it.
++  RefPtr<IDirect3DQuery9> query;
++
++  hr = device->CreateQuery(D3DQUERYTYPE_EVENT, getter_AddRefs(query));
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString("CreateQuery failed with error %lX", hr);
++    return hr;
++  }
++
++  // Create and initialize IDirect3DDeviceManager9.
++  UINT resetToken = 0;
++  RefPtr<IDirect3DDeviceManager9> deviceManager;
++
++  hr = wmf::DXVA2CreateDirect3DDeviceManager9(&resetToken,
++                                              getter_AddRefs(deviceManager));
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "DXVA2CreateDirect3DDeviceManager9 failed with error %lX", hr);
++    return hr;
++  }
++  hr = deviceManager->ResetDevice(device, resetToken);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "IDirect3DDeviceManager9::ResetDevice failed with error %lX", hr);
++    return hr;
++  }
++
++  HANDLE deviceHandle;
++  RefPtr<IDirectXVideoDecoderService> decoderService;
++  hr = deviceManager->OpenDeviceHandle(&deviceHandle);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "IDirect3DDeviceManager9::OpenDeviceHandle failed with error %lX", hr);
++    return hr;
++  }
++
++  hr = deviceManager->GetVideoService(
++      deviceHandle, IID_PPV_ARGS(decoderService.StartAssignment()));
++  deviceManager->CloseDeviceHandle(deviceHandle);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "IDirectXVideoDecoderServer::GetVideoService failed with error %lX",
++        hr);
++    return hr;
++  }
++
++  UINT deviceCount;
++  GUID* decoderDevices = nullptr;
++  hr = decoderService->GetDecoderDeviceGuids(&deviceCount, &decoderDevices);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "IDirectXVideoDecoderServer::GetDecoderDeviceGuids failed with error "
++        "%lX",
++        hr);
++    return hr;
++  }
++
++  bool found = false;
++  for (UINT i = 0; i < deviceCount; i++) {
++    if (decoderDevices[i] == DXVA2_ModeH264_VLD_NoFGT ||
++        decoderDevices[i] == DXVA2_Intel_ClearVideo_ModeH264_VLD_NoFGT) {
++      mDecoderGUID = decoderDevices[i];
++      found = true;
++      break;
++    }
++  }
++  CoTaskMemFree(decoderDevices);
++
++  if (!found) {
++    aFailureReason.AssignLiteral("Failed to find an appropriate decoder GUID");
++    return E_FAIL;
++  }
++
++  D3DADAPTER_IDENTIFIER9 adapter;
++  hr = d3d9Ex->GetAdapterIdentifier(D3DADAPTER_DEFAULT, 0, &adapter);
++  if (!SUCCEEDED(hr)) {
++    aFailureReason = nsPrintfCString(
++        "IDirect3D9Ex::GetAdapterIdentifier failed with error %lX", hr);
++    return hr;
++  }
++
++  if ((adapter.VendorId == 0x1022 || adapter.VendorId == 0x1002) &&
++      !StaticPrefs::media_wmf_skip_blacklist()) {
++    for (const auto& model : sAMDPreUVD4) {
++      if (adapter.DeviceId == model) {
++        mIsAMDPreUVD4 = true;
++        break;
++      }
++    }
++    if (StaticPrefs::media_wmf_dxva_d3d9_amd_pre_uvd4_disabled() &&
++        mIsAMDPreUVD4) {
++      aFailureReason.AssignLiteral(
++          "D3D9DXVA2Manager is disabled on AMDPreUVD4");
++      return E_FAIL;
++    }
++  }
++
++  RefPtr<IDirect3DSurface9> syncSurf;
++  hr = device->CreateRenderTarget(kSyncSurfaceSize, kSyncSurfaceSize,
++                                  D3DFMT_X8R8G8B8, D3DMULTISAMPLE_NONE, 0, TRUE,
++                                  getter_AddRefs(syncSurf), NULL);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  mDecoderService = decoderService;
++
++  mResetToken = resetToken;
++  mD3D9 = d3d9Ex;
++  mDevice = device;
++  mDeviceManager = deviceManager;
++  mSyncSurface = syncSurf;
++
++  if (layers::ImageBridgeChild::GetSingleton()) {
++    // There's no proper KnowsCompositor for ImageBridge currently (and it
++    // implements the interface), so just use that if it's available.
++    mTextureClientAllocator = new D3D9RecycleAllocator(
++        layers::ImageBridgeChild::GetSingleton().get(), mDevice);
++  } else {
++    mTextureClientAllocator =
++        new D3D9RecycleAllocator(aKnowsCompositor, mDevice);
++  }
++  mTextureClientAllocator->SetMaxPoolSize(5);
++
++  Telemetry::Accumulate(Telemetry::MEDIA_DECODER_BACKEND_USED,
++                        uint32_t(media::MediaDecoderBackend::WMFDXVA2D3D9));
++
++  reporter.SetSuccessful();
++
++  return S_OK;
++}
++
++HRESULT
++D3D9DXVA2Manager::CopyToImage(IMFSample* aSample, const gfx::IntRect& aRegion,
++                              Image** aOutImage) {
++  RefPtr<IMFMediaBuffer> buffer;
++  HRESULT hr = aSample->GetBufferByIndex(0, getter_AddRefs(buffer));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  RefPtr<IDirect3DSurface9> surface;
++  hr = wmf::MFGetService(buffer, MR_BUFFER_SERVICE, IID_IDirect3DSurface9,
++                         getter_AddRefs(surface));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  RefPtr<D3D9SurfaceImage> image = new D3D9SurfaceImage();
++  hr = image->AllocateAndCopy(mTextureClientAllocator, surface, aRegion);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  RefPtr<IDirect3DSurface9> sourceSurf = image->GetD3D9Surface();
++
++  // Copy a small rect into our sync surface, and then map it
++  // to block until decoding/color conversion completes.
++  RECT copyRect = {0, 0, kSyncSurfaceSize, kSyncSurfaceSize};
++  hr = mDevice->StretchRect(sourceSurf, &copyRect, mSyncSurface, &copyRect,
++                            D3DTEXF_NONE);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  D3DLOCKED_RECT lockedRect;
++  hr = mSyncSurface->LockRect(&lockedRect, NULL, D3DLOCK_READONLY);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  hr = mSyncSurface->UnlockRect();
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  image.forget(aOutImage);
++  return S_OK;
++}
++
+ // Count of the number of DXVAManager's we've created. This is also the
+ // number of videos we're decoding with DXVA. Use on main thread only.
+ static Atomic<uint32_t> sDXVAVideosCount(0);
+ 
++/* static */
++DXVA2Manager* DXVA2Manager::CreateD3D9DXVA(
++    layers::KnowsCompositor* aKnowsCompositor, nsACString& aFailureReason) {
++  HRESULT hr;
++
++  // DXVA processing takes up a lot of GPU resources, so limit the number of
++  // videos we use DXVA with at any one time.
++  uint32_t dxvaLimit = StaticPrefs::media_wmf_dxva_max_videos();
++
++  if (sDXVAVideosCount == dxvaLimit) {
++    aFailureReason.AssignLiteral("Too many DXVA videos playing");
++    return nullptr;
++  }
++
++  UniquePtr<D3D9DXVA2Manager> d3d9Manager(new D3D9DXVA2Manager());
++  hr = d3d9Manager->Init(aKnowsCompositor, aFailureReason);
++  if (SUCCEEDED(hr)) {
++    return d3d9Manager.release();
++  }
++
++  // No hardware accelerated video decoding. :(
++  return nullptr;
++}
++
++bool D3D9DXVA2Manager::CanCreateDecoder(const DXVA2_VideoDesc& aDesc) const {
++  float framerate = static_cast<float>(aDesc.OutputFrameFreq.Numerator) /
++                    aDesc.OutputFrameFreq.Denominator;
++  if (IsUnsupportedResolution(aDesc.SampleWidth, aDesc.SampleHeight,
++                              framerate)) {
++    return false;
++  }
++  RefPtr<IDirectXVideoDecoder> decoder = CreateDecoder(aDesc);
++  return decoder.get() != nullptr;
++}
++
++already_AddRefed<IDirectXVideoDecoder> D3D9DXVA2Manager::CreateDecoder(
++    const DXVA2_VideoDesc& aDesc) const {
++  UINT configCount;
++  DXVA2_ConfigPictureDecode* configs = nullptr;
++  HRESULT hr = mDecoderService->GetDecoderConfigurations(
++      mDecoderGUID, &aDesc, nullptr, &configCount, &configs);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  RefPtr<IDirect3DSurface9> surface;
++  hr = mDecoderService->CreateSurface(
++      aDesc.SampleWidth, aDesc.SampleHeight, 0,
++      (D3DFORMAT)MAKEFOURCC('N', 'V', '1', '2'), D3DPOOL_DEFAULT, 0,
++      DXVA2_VideoDecoderRenderTarget, surface.StartAssignment(), NULL);
++  if (!SUCCEEDED(hr)) {
++    CoTaskMemFree(configs);
++    return nullptr;
++  }
++
++  for (UINT i = 0; i < configCount; i++) {
++    RefPtr<IDirectXVideoDecoder> decoder;
++    IDirect3DSurface9* surfaces = surface;
++    hr = mDecoderService->CreateVideoDecoder(mDecoderGUID, &aDesc, &configs[i],
++                                             &surfaces, 1,
++                                             decoder.StartAssignment());
++    if (FAILED(hr)) {
++      continue;
++    }
++
++    CoTaskMemFree(configs);
++    return decoder.forget();
++  }
++
++  CoTaskMemFree(configs);
++  return nullptr;
++}
++
+ class D3D11DXVA2Manager : public DXVA2Manager {
+  public:
+   D3D11DXVA2Manager();
+diff --git a/dom/media/platforms/wmf/DXVA2Manager.h b/dom/media/platforms/wmf/DXVA2Manager.h
+index 8743a9f87f0f..1fb501b406d8 100644
+--- a/dom/media/platforms/wmf/DXVA2Manager.h
++++ b/dom/media/platforms/wmf/DXVA2Manager.h
+@@ -22,14 +22,18 @@ class KnowsCompositor;
+ 
+ class DXVA2Manager {
+  public:
+-  // Creates and initializes a DXVA2Manager. We can use DXVA2 via D3D11.
++  // Creates and initializes a DXVA2Manager. We can use DXVA2 via either
++  // D3D9Ex or D3D11.
++  static DXVA2Manager* CreateD3D9DXVA(layers::KnowsCompositor* aKnowsCompositor,
++                                      nsACString& aFailureReason);
+   static DXVA2Manager* CreateD3D11DXVA(
+       layers::KnowsCompositor* aKnowsCompositor, nsACString& aFailureReason,
+       ID3D11Device* aDevice = nullptr);
+ 
+   // Returns a pointer to the D3D device manager responsible for managing the
+-  // device we're using for hardware accelerated video decoding. For D3D11 this
+-  // is an IMFDXGIDeviceManager. It is safe to call this on any thread.
++  // device we're using for hardware accelerated video decoding. If we're using
++  // D3D9Ex, this is an IDirect3DDeviceManager9. For D3D11 this is an
++  // IMFDXGIDeviceManager. It is safe to call this on any thread.
+   virtual IUnknown* GetDXVADeviceManager() = 0;
+ 
+   // Creates an Image for the video frame stored in aVideoSample.
+diff --git a/dom/media/platforms/wmf/WMFVideoMFTManager.cpp b/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
+index e419cb43fdc8..ffbb2e7f2130 100644
+--- a/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
++++ b/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
+@@ -148,6 +148,17 @@ bool WMFVideoMFTManager::InitializeDXVA() {
+     }
+   }
+ 
++  // Try again with d3d9, but record the failure reason
++  // into a new var to avoid overwriting the d3d11 failure.
++  nsAutoCString d3d9Failure;
++  mDXVA2Manager.reset(
++      DXVA2Manager::CreateD3D9DXVA(mKnowsCompositor, d3d9Failure));
++  // Make sure we include the messages from both attempts (if applicable).
++  if (!d3d9Failure.IsEmpty()) {
++    mDXVAFailureReason.AppendLiteral("; D3D9: ");
++    mDXVAFailureReason.Append(d3d9Failure);
++  }
++
+   return mDXVA2Manager != nullptr;
+ }
+ 
+@@ -195,7 +206,11 @@ MediaResult WMFVideoMFTManager::Init() {
+   if (NS_SUCCEEDED(result) && mDXVA2Manager) {
+     // If we had some failures but eventually made it work,
+     // make sure we preserve the messages.
+-    mDXVAFailureReason.AppendLiteral("Using D3D11 API");
++    if (mDXVA2Manager->IsD3D11()) {
++      mDXVAFailureReason.AppendLiteral("Using D3D11 API");
++    } else {
++      mDXVAFailureReason.AppendLiteral("Using D3D9 API");
++    }
+   }
+ 
+   return result;
+@@ -985,7 +1000,10 @@ nsCString WMFVideoMFTManager::GetDescriptionName() const {
+     if (!mDXVA2Manager) {
+       return "no DXVA";
+     }
+-    return "D3D11";
++    if (mDXVA2Manager->IsD3D11()) {
++      return "D3D11";
++    }
++    return "D3D9";
+   }();
+ 
+   return nsPrintfCString("wmf %s codec %s video decoder - %s, %s",
+diff --git a/gfx/layers/D3D9SurfaceImage.cpp b/gfx/layers/D3D9SurfaceImage.cpp
+new file mode 100644
+index 000000000000..c97d117e624c
+--- /dev/null
++++ b/gfx/layers/D3D9SurfaceImage.cpp
+@@ -0,0 +1,328 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set ts=8 sts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "D3D9SurfaceImage.h"
++#include "gfx2DGlue.h"
++#include "gfxWindowsPlatform.h"
++#include "mozilla/layers/CompositableClient.h"
++#include "mozilla/layers/CompositableForwarder.h"
++#include "mozilla/layers/ImageBridgeChild.h"
++#include "mozilla/gfx/Types.h"
++#include "mozilla/ProfilerLabels.h"
++
++namespace mozilla {
++namespace layers {
++
++DXGID3D9TextureData::DXGID3D9TextureData(gfx::SurfaceFormat aFormat,
++                                         IDirect3DTexture9* aTexture,
++                                         HANDLE aHandle,
++                                         IDirect3DDevice9* aDevice)
++    : mDevice(aDevice), mTexture(aTexture), mFormat(aFormat), mHandle(aHandle) {
++  MOZ_COUNT_CTOR(DXGID3D9TextureData);
++}
++
++DXGID3D9TextureData::~DXGID3D9TextureData() {
++  gfxWindowsPlatform::sD3D9SharedTextures -= mDesc.Width * mDesc.Height * 4;
++  MOZ_COUNT_DTOR(DXGID3D9TextureData);
++}
++
++// static
++DXGID3D9TextureData* DXGID3D9TextureData::Create(gfx::IntSize aSize,
++                                                 gfx::SurfaceFormat aFormat,
++                                                 TextureFlags aFlags,
++                                                 IDirect3DDevice9* aDevice) {
++  AUTO_PROFILER_LABEL("DXGID3D9TextureData::Create", GRAPHICS);
++  MOZ_ASSERT(aFormat == gfx::SurfaceFormat::B8G8R8A8);
++  if (aFormat != gfx::SurfaceFormat::B8G8R8A8) {
++    return nullptr;
++  }
++
++  RefPtr<IDirect3DTexture9> texture;
++  HANDLE shareHandle = nullptr;
++  HRESULT hr = aDevice->CreateTexture(
++      aSize.width, aSize.height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
++      D3DPOOL_DEFAULT, getter_AddRefs(texture), &shareHandle);
++  if (FAILED(hr) || !shareHandle) {
++    return nullptr;
++  }
++
++  D3DSURFACE_DESC surfaceDesc;
++  hr = texture->GetLevelDesc(0, &surfaceDesc);
++  if (FAILED(hr)) {
++    return nullptr;
++  }
++  DXGID3D9TextureData* data =
++      new DXGID3D9TextureData(aFormat, texture, shareHandle, aDevice);
++  data->mDesc = surfaceDesc;
++
++  gfxWindowsPlatform::sD3D9SharedTextures += aSize.width * aSize.height * 4;
++  return data;
++}
++
++void DXGID3D9TextureData::FillInfo(TextureData::Info& aInfo) const {
++  aInfo.size = GetSize();
++  aInfo.format = mFormat;
++  aInfo.supportsMoz2D = false;
++  aInfo.canExposeMappedData = false;
++  aInfo.hasSynchronization = false;
++}
++
++already_AddRefed<IDirect3DSurface9> DXGID3D9TextureData::GetD3D9Surface()
++    const {
++  RefPtr<IDirect3DSurface9> textureSurface;
++  HRESULT hr = mTexture->GetSurfaceLevel(0, getter_AddRefs(textureSurface));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  return textureSurface.forget();
++}
++
++bool DXGID3D9TextureData::Serialize(SurfaceDescriptor& aOutDescriptor) {
++  SurfaceDescriptorD3D10 desc((WindowsHandle)(mHandle),
++                              /* gpuProcessTextureId */ Nothing(),
++                              /* arrayIndex */ 0, mFormat, GetSize(),
++                              gfx::ColorSpace2::SRGB, gfx::ColorRange::FULL,
++                              /* hasKeyedMutex */ false,
++     /* fenceInfo */ Nothing(), /* gpuProcessQueryId */ Nothing());
++  // In reality, with D3D9 we will only ever deal with RGBA textures.
++  bool isYUV = mFormat == gfx::SurfaceFormat::NV12 ||
++               mFormat == gfx::SurfaceFormat::P010 ||
++               mFormat == gfx::SurfaceFormat::P016;
++  if (isYUV) {
++    gfxCriticalError() << "Unexpected YUV format for DXGID3D9TextureData: "
++                       << mFormat;
++    desc.colorSpace() = gfx::ColorSpace2::BT601_525;
++    desc.colorRange() = gfx::ColorRange::LIMITED;
++  }
++  aOutDescriptor = desc;
++  return true;
++}
++
++D3D9SurfaceImage::D3D9SurfaceImage()
++    : Image(nullptr, ImageFormat::D3D9_RGB32_TEXTURE),
++      mSize(0, 0),
++      mShareHandle(0),
++      mValid(true) {}
++
++D3D9SurfaceImage::~D3D9SurfaceImage() {}
++
++HRESULT
++D3D9SurfaceImage::AllocateAndCopy(D3D9RecycleAllocator* aAllocator,
++                                  IDirect3DSurface9* aSurface,
++                                  const gfx::IntRect& aRegion) {
++  NS_ENSURE_TRUE(aSurface, E_POINTER);
++  HRESULT hr;
++  RefPtr<IDirect3DSurface9> surface = aSurface;
++
++  RefPtr<IDirect3DDevice9> device;
++  hr = surface->GetDevice(getter_AddRefs(device));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
++
++  RefPtr<IDirect3D9> d3d9;
++  hr = device->GetDirect3D(getter_AddRefs(d3d9));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
++
++  D3DSURFACE_DESC desc;
++  surface->GetDesc(&desc);
++  // Ensure we can convert the textures format to RGB conversion
++  // in StretchRect. Fail if we can't.
++  hr = d3d9->CheckDeviceFormatConversion(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
++                                         desc.Format, D3DFMT_A8R8G8B8);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  // DXVA surfaces aren't created sharable, so we need to copy the surface
++  // to a sharable texture to that it's accessible to the layer manager's
++  // device.
++  if (aAllocator) {
++    mTextureClient = aAllocator->CreateOrRecycleClient(
++        gfx::SurfaceFormat::B8G8R8A8, aRegion.Size());
++    if (!mTextureClient) {
++      return E_FAIL;
++    }
++
++    DXGID3D9TextureData* texData =
++        static_cast<DXGID3D9TextureData*>(mTextureClient->GetInternalData());
++    mTexture = texData->GetD3D9Texture();
++    mShareHandle = texData->GetShareHandle();
++    mDesc = texData->GetDesc();
++  } else {
++    hr = device->CreateTexture(aRegion.Size().width, aRegion.Size().height, 1,
++                               D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
++                               D3DPOOL_DEFAULT, getter_AddRefs(mTexture),
++                               &mShareHandle);
++    if (FAILED(hr) || !mShareHandle) {
++      return E_FAIL;
++    }
++
++    hr = mTexture->GetLevelDesc(0, &mDesc);
++    if (FAILED(hr)) {
++      return E_FAIL;
++    }
++  }
++
++  // Copy the image onto the texture, preforming YUV -> RGB conversion if
++  // necessary.
++  RefPtr<IDirect3DSurface9> textureSurface = GetD3D9Surface();
++  if (!textureSurface) {
++    return E_FAIL;
++  }
++
++  RECT src = {aRegion.X(), aRegion.Y(), aRegion.XMost(), aRegion.YMost()};
++  hr =
++      device->StretchRect(surface, &src, textureSurface, nullptr, D3DTEXF_NONE);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
++
++  mSize = aRegion.Size();
++  return S_OK;
++}
++
++already_AddRefed<IDirect3DSurface9> D3D9SurfaceImage::GetD3D9Surface() const {
++  RefPtr<IDirect3DSurface9> textureSurface;
++  HRESULT hr = mTexture->GetSurfaceLevel(0, getter_AddRefs(textureSurface));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++  return textureSurface.forget();
++}
++
++HANDLE
++D3D9SurfaceImage::GetShareHandle() const { return mShareHandle; }
++
++gfx::IntSize D3D9SurfaceImage::GetSize() const { return mSize; }
++
++TextureClient* D3D9SurfaceImage::GetTextureClient(
++    KnowsCompositor* aKnowsCompositor) {
++  MOZ_ASSERT(mTextureClient);
++  MOZ_ASSERT(mTextureClient->GetAllocator() ==
++             aKnowsCompositor->GetTextureForwarder());
++  return mTextureClient;
++}
++
++already_AddRefed<gfx::SourceSurface> D3D9SurfaceImage::GetAsSourceSurface() {
++  if (!mTexture) {
++    return nullptr;
++  }
++
++  HRESULT hr;
++  RefPtr<gfx::DataSourceSurface> surface =
++      gfx::Factory::CreateDataSourceSurface(mSize,
++                                            gfx::SurfaceFormat::B8G8R8X8);
++  if (NS_WARN_IF(!surface)) {
++    return nullptr;
++  }
++
++  // Readback the texture from GPU memory into system memory, so that
++  // we can copy it into the Cairo image. This is expensive.
++  RefPtr<IDirect3DSurface9> textureSurface = GetD3D9Surface();
++  if (!textureSurface) {
++    return nullptr;
++  }
++
++  RefPtr<IDirect3DDevice9> device;
++  hr = textureSurface->GetDevice(getter_AddRefs(device));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  RefPtr<IDirect3DSurface9> systemMemorySurface;
++  hr = device->CreateOffscreenPlainSurface(
++      mSize.width, mSize.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
++      getter_AddRefs(systemMemorySurface), 0);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  hr = device->GetRenderTargetData(textureSurface, systemMemorySurface);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  D3DLOCKED_RECT rect;
++  hr = systemMemorySurface->LockRect(&rect, nullptr, 0);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
++
++  gfx::DataSourceSurface::MappedSurface mappedSurface;
++  if (!surface->Map(gfx::DataSourceSurface::WRITE, &mappedSurface)) {
++    systemMemorySurface->UnlockRect();
++    return nullptr;
++  }
++
++  const unsigned char* src = (const unsigned char*)(rect.pBits);
++  const unsigned srcPitch = rect.Pitch;
++  for (int y = 0; y < mSize.height; y++) {
++    memcpy(mappedSurface.mData + mappedSurface.mStride * y,
++           (unsigned char*)(src) + srcPitch * y, mSize.width * 4);
++  }
++
++  systemMemorySurface->UnlockRect();
++  surface->Unmap();
++
++  return surface.forget();
++}
++
++nsresult D3D9SurfaceImage::BuildSurfaceDescriptorBuffer(
++    SurfaceDescriptorBuffer& aSdBuffer, BuildSdbFlags aFlags,
++    const std::function<MemoryOrShmem(uint32_t)>& aAllocate) {
++  if (!mTexture) {
++    return NS_ERROR_FAILURE;
++  }
++
++  auto format = gfx::SurfaceFormat::B8G8R8X8;
++  uint8_t* buffer = nullptr;
++  int32_t stride = 0;
++  nsresult rv = AllocateSurfaceDescriptorBufferRgb(
++      mSize, format, buffer, aSdBuffer, stride, aAllocate);
++  if (NS_WARN_IF(NS_FAILED(rv))) {
++    return rv;
++  }
++
++  // Readback the texture from GPU memory into system memory, so that
++  // we can copy it into the Cairo image. This is expensive.
++  RefPtr<IDirect3DSurface9> textureSurface = GetD3D9Surface();
++  if (!textureSurface) {
++    return NS_ERROR_FAILURE;
++  }
++
++  RefPtr<IDirect3DDevice9> device;
++  HRESULT hr = textureSurface->GetDevice(getter_AddRefs(device));
++  NS_ENSURE_TRUE(SUCCEEDED(hr), NS_ERROR_FAILURE);
++
++  RefPtr<IDirect3DSurface9> systemMemorySurface;
++  hr = device->CreateOffscreenPlainSurface(
++      mSize.width, mSize.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
++      getter_AddRefs(systemMemorySurface), 0);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), NS_ERROR_FAILURE);
++
++  hr = device->GetRenderTargetData(textureSurface, systemMemorySurface);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), NS_ERROR_FAILURE);
++
++  D3DLOCKED_RECT rect;
++  hr = systemMemorySurface->LockRect(&rect, nullptr, 0);
++  NS_ENSURE_TRUE(SUCCEEDED(hr), NS_ERROR_FAILURE);
++
++  const unsigned char* src = (const unsigned char*)(rect.pBits);
++  const unsigned srcPitch = rect.Pitch;
++  for (int y = 0; y < mSize.height; y++) {
++    memcpy(buffer + stride * y, (unsigned char*)(src) + srcPitch * y,
++           mSize.width * 4);
++  }
++
++  systemMemorySurface->UnlockRect();
++  return NS_OK;
++}
++
++already_AddRefed<TextureClient> D3D9RecycleAllocator::Allocate(
++    gfx::SurfaceFormat aFormat, gfx::IntSize aSize, BackendSelector aSelector,
++    TextureFlags aTextureFlags, TextureAllocationFlags aAllocFlags) {
++  TextureData* data =
++      DXGID3D9TextureData::Create(aSize, aFormat, aTextureFlags, mDevice);
++  if (!data) {
++    return nullptr;
++  }
++
++  return MakeAndAddRef<TextureClient>(data, aTextureFlags,
++                                      mKnowsCompositor->GetTextureForwarder());
++}
++
++already_AddRefed<TextureClient> D3D9RecycleAllocator::CreateOrRecycleClient(
++    gfx::SurfaceFormat aFormat, const gfx::IntSize& aSize) {
++  return CreateOrRecycle(aFormat, aSize, BackendSelector::Content,
++                         TextureFlags::DEFAULT);
++}
++
++}  // namespace layers
++}  // namespace mozilla
+diff --git a/gfx/layers/D3D9SurfaceImage.h b/gfx/layers/D3D9SurfaceImage.h
+new file mode 100644
+index 000000000000..a38b664ff003
+--- /dev/null
++++ b/gfx/layers/D3D9SurfaceImage.h
+@@ -0,0 +1,126 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set ts=8 sts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef GFX_D3DSURFACEIMAGE_H
++#define GFX_D3DSURFACEIMAGE_H
++
++#include "mozilla/RefPtr.h"
++#include "ImageContainer.h"
++#include "d3d9.h"
++#include "mozilla/layers/TextureClientRecycleAllocator.h"
++
++namespace mozilla {
++namespace layers {
++
++class TextureClient;
++
++class D3D9RecycleAllocator : public TextureClientRecycleAllocator {
++ public:
++  D3D9RecycleAllocator(KnowsCompositor* aAllocator, IDirect3DDevice9* aDevice)
++      : TextureClientRecycleAllocator(aAllocator), mDevice(aDevice) {}
++
++  already_AddRefed<TextureClient> CreateOrRecycleClient(
++      gfx::SurfaceFormat aFormat, const gfx::IntSize& aSize);
++
++ protected:
++  already_AddRefed<TextureClient> Allocate(
++      gfx::SurfaceFormat aFormat, gfx::IntSize aSize, BackendSelector aSelector,
++      TextureFlags aTextureFlags, TextureAllocationFlags aAllocFlags) override;
++
++  RefPtr<IDirect3DDevice9> mDevice;
++};
++
++/**
++ * Wraps a D3D9 texture, shared with the compositor though DXGI.
++ * At the moment it is only used with D3D11 compositing, and the corresponding
++ * TextureHost is DXGITextureHostD3D11.
++ */
++class DXGID3D9TextureData : public TextureData {
++ public:
++  static DXGID3D9TextureData* Create(gfx::IntSize aSize,
++                                     gfx::SurfaceFormat aFormat,
++                                     TextureFlags aFlags,
++                                     IDirect3DDevice9* aDevice);
++
++  virtual ~DXGID3D9TextureData();
++
++  void FillInfo(TextureData::Info& aInfo) const override;
++
++  bool Lock(OpenMode) override { return true; }
++
++  void Unlock() override {}
++
++  bool Serialize(SurfaceDescriptor& aOutDescriptor) override;
++
++  void Deallocate(LayersIPCChannel* aAllocator) override {}
++
++  IDirect3DDevice9* GetD3D9Device() { return mDevice; }
++  IDirect3DTexture9* GetD3D9Texture() { return mTexture; }
++  HANDLE GetShareHandle() const { return mHandle; }
++  already_AddRefed<IDirect3DSurface9> GetD3D9Surface() const;
++
++  const D3DSURFACE_DESC& GetDesc() const { return mDesc; }
++
++  gfx::IntSize GetSize() const {
++    return gfx::IntSize(mDesc.Width, mDesc.Height);
++  }
++
++ protected:
++  DXGID3D9TextureData(gfx::SurfaceFormat aFormat, IDirect3DTexture9* aTexture,
++                      HANDLE aHandle, IDirect3DDevice9* aDevice);
++
++  RefPtr<IDirect3DDevice9> mDevice;
++  RefPtr<IDirect3DTexture9> mTexture;
++  gfx::SurfaceFormat mFormat;
++  HANDLE mHandle;
++  D3DSURFACE_DESC mDesc;
++};
++
++// Image class that wraps a IDirect3DSurface9. This class copies the image
++// passed into SetData(), so that it can be accessed from other D3D devices.
++// This class also manages the synchronization of the copy, to ensure the
++// resource is ready to use.
++class D3D9SurfaceImage : public Image {
++ public:
++  D3D9SurfaceImage();
++  virtual ~D3D9SurfaceImage();
++
++  HRESULT AllocateAndCopy(D3D9RecycleAllocator* aAllocator,
++                          IDirect3DSurface9* aSurface,
++                          const gfx::IntRect& aRegion);
++
++  // Returns the description of the shared surface.
++  gfx::IntSize GetSize() const override;
++
++  already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
++
++  nsresult BuildSurfaceDescriptorBuffer(
++      SurfaceDescriptorBuffer& aSdBuffer, BuildSdbFlags aFlags,
++      const std::function<MemoryOrShmem(uint32_t)>& aAllocate) override;
++
++  TextureClient* GetTextureClient(KnowsCompositor* aKnowsCompositor) override;
++
++  already_AddRefed<IDirect3DSurface9> GetD3D9Surface() const;
++
++  HANDLE GetShareHandle() const;
++
++  bool IsValid() const override { return mValid; }
++
++  void Invalidate() { mValid = false; }
++
++ private:
++  gfx::IntSize mSize;
++  RefPtr<TextureClient> mTextureClient;
++  RefPtr<IDirect3DTexture9> mTexture;
++  HANDLE mShareHandle;
++  D3DSURFACE_DESC mDesc;
++  bool mValid;
++};
++
++}  // namespace layers
++}  // namespace mozilla
++
++#endif  // GFX_D3DSURFACEIMAGE_H
+diff --git a/gfx/layers/IMFYCbCrImage.cpp b/gfx/layers/IMFYCbCrImage.cpp
+index 82a77db22c71..0534b2126e90 100644
+--- a/gfx/layers/IMFYCbCrImage.cpp
++++ b/gfx/layers/IMFYCbCrImage.cpp
+@@ -13,6 +13,7 @@
+ #include "mozilla/layers/CompositableForwarder.h"
+ #include "mozilla/layers/D3D11YCbCrImage.h"
+ #include "mozilla/layers/TextureClient.h"
++#include "d3d9.h"
+ 
+ namespace mozilla {
+ namespace layers {
+diff --git a/gfx/layers/d3d11/TextureD3D11.cpp b/gfx/layers/d3d11/TextureD3D11.cpp
+index 482f44e4b037..0a3f2ddb9438 100644
+--- a/gfx/layers/d3d11/TextureD3D11.cpp
++++ b/gfx/layers/d3d11/TextureD3D11.cpp
+@@ -692,6 +692,9 @@ void DXGIYCbCrTextureData::GetSubDescriptor(
+ }
+ 
+ void DXGIYCbCrTextureData::Deallocate(LayersIPCChannel*) {
++  mD3D9Textures[0] = nullptr;
++  mD3D9Textures[1] = nullptr;
++  mD3D9Textures[2] = nullptr;
+   mD3D11Textures[0] = nullptr;
+   mD3D11Textures[1] = nullptr;
+   mD3D11Textures[2] = nullptr;
+diff --git a/gfx/layers/d3d11/TextureD3D11.h b/gfx/layers/d3d11/TextureD3D11.h
+index 8b1e1fcac7a9..9b2cc6055005 100644
+--- a/gfx/layers/d3d11/TextureD3D11.h
++++ b/gfx/layers/d3d11/TextureD3D11.h
+@@ -196,6 +196,7 @@ class DXGIYCbCrTextureData : public TextureData {
+ 
+  protected:
+   RefPtr<ID3D11Texture2D> mD3D11Textures[3];
++  RefPtr<IDirect3DTexture9> mD3D9Textures[3];
+   HANDLE mHandles[3];
+   gfx::IntSize mSize;
+   gfx::IntSize mSizeY;
+diff --git a/gfx/layers/moz.build b/gfx/layers/moz.build
+index 8caa6d9cf331..bb15fbbd1532 100644
+--- a/gfx/layers/moz.build
++++ b/gfx/layers/moz.build
+@@ -13,6 +13,7 @@ with Files("apz/**"):
+ EXPORTS += [
+     "composite/CompositableHost.h",
+     "CompositorTypes.h",
++    "D3D9SurfaceImage.h",
+     "FrameMetrics.h",
+     "GLImages.h",
+     "GPUVideoImage.h",
+@@ -32,6 +33,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+         "D3D11YCbCrImage.cpp",
+     ]
+     UNIFIED_SOURCES += [
++        "D3D9SurfaceImage.cpp",
+         "IMFYCbCrImage.cpp",
+     ]
+     EXPORTS.mozilla.layers += [
+@@ -138,6 +140,7 @@ EXPORTS.mozilla.layers += [
+     "D3D11ShareHandleImage.h",
+     "D3D11TextureIMFSampleImage.h",
+     "D3D11YCbCrImage.h",
++    "D3D9SurfaceImage.h",
+     "DirectionUtils.h",
+     "Effects.h",
+     "ImageDataSerializer.h",
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index c38c9814e24b..3c515b8b0be7 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -10114,6 +10114,11 @@
+     value: 8
+     mirror: always
+ 
++-   name: media.wmf.dxva.d3d9.amd-pre-uvd4.disabled
++    type: RelaxedAtomicBool
++    value: true
++    mirror: always
++
+ -   name: media.wmf.use-nv12-format
+     type: RelaxedAtomicBool
+     value: true

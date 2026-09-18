@@ -1,0 +1,1 @@
+Bug 1093741 - Refuse install Firefox on pre-Win7 x64. r=rstrong    2014-11-27 06:19:12    06c2bcea92cc613692ac05935aeb4eecc529ab89

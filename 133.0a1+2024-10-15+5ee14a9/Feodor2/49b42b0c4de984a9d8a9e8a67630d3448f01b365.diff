@@ -1,0 +1,18 @@
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+index c0221b118c1a..a54e05389402 100644
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -1107,11 +1105,9 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
+ 
+     // Add access to Windows system binary dir to allow DLLs that are not
+     // required in all content processes to load later.
+-    wchar_t* systemBinPath;
+-    if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_System, 0, nullptr,
+-                                         &systemBinPath))) {
++    wchar_t systemBinPath[MAX_PATH];
++    if (::SHGetSpecialFolderPathW(nullptr, systemBinPath, CSIDL_SYSTEM, FALSE)) {
+       std::wstring systemBinPathStr = systemBinPath;
+-      ::CoTaskMemFree(systemBinPath);
+       systemBinPathStr += L"\\*";
+       result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                                 sandbox::TargetPolicy::FILES_ALLOW_READONLY,

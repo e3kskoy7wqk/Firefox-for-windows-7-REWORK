@@ -1,0 +1,41 @@
+diff --git a/browser/installer/windows/nsis/defines.nsi.in b/browser/installer/windows/nsis/defines.nsi.in
+--- a/browser/installer/windows/nsis/defines.nsi.in
++++ b/browser/installer/windows/nsis/defines.nsi.in
+@@ -97,8 +97,8 @@
+ !define ARCH "AArch64"
+ !define MinSupportedVer "Microsoft Windows 10 for ARM"
+ #else
+ !define ARCH "x64"
+-!define MinSupportedVer "Microsoft Windows 7 x64"
++!define MinSupportedVer "Microsoft Windows Vista x64"
+ #endif
+ #else
+ !define MinSupportedVer "Microsoft Windows XP SP2"
+diff --git a/browser/installer/windows/nsis/stub.nsi b/browser/installer/windows/nsis/stub.nsi
+--- a/browser/installer/windows/nsis/stub.nsi
++++ b/browser/installer/windows/nsis/stub.nsi
+@@ -296,9 +296,9 @@ Function .onInit
+   System::Call "kernel32::IsProcessorFeaturePresent(i 10)i .R7"
+
+ !ifdef HAVE_64BIT_BUILD
+-  ; Restrict x64 builds from being installed on x86 and pre Win7
++  ; Restrict x64 builds from being installed on x86 and pre Vista
+   ${Unless} ${RunningX64}
+-  ${OrUnless} ${AtLeastWin7}
++  ${OrUnless} ${AtLeastWinXP}
+     ${If} "$R7" == "0"
+       strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
+     ${Else}
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -5531,8 +5531,8 @@
+       ${EndIf}
+
+       !ifdef HAVE_64BIT_BUILD
+         ${Unless} ${RunningX64}
+-        ${OrUnless} ${AtLeastWin7}
++        ${OrUnless} ${AtLeastWinXP}
+           MessageBox MB_OK|MB_ICONSTOP "$R9"
+           ; Nothing initialized so no need to call OnEndCommon
+           Quit

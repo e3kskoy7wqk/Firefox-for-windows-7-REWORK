@@ -1,0 +1,1 @@
+Bug 1348177 - Part 2. Remove GetProcAddress for shell32 to use Vista+/7+ API (tookit part). r=jimm    2017-03-17 10:04:33    8a66aa54a4dea83fe5fab12ba81a4fc2b835acdb

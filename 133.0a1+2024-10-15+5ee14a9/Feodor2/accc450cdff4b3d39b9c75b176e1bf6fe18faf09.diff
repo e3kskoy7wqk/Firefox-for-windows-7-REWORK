@@ -1,0 +1,47 @@
+diff --git a/servo/components/style/values/specified/box.rs b/servo/components/style/values/specified/box.rs
+index fab504089340..177e288cd221 100644
+--- a/servo/components/style/values/specified/box.rs
++++ b/servo/components/style/values/specified/box.rs
+@@ -1483,6 +1483,11 @@ pub enum Appearance {
+     /// A dual toolbar button (e.g., a Back button with a dropdown)
+     #[parse(condition = "ParserContext::chrome_rules_enabled")]
+     Dualbutton,
++    /// <menu> and <menuitem> appearances
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    Menuitem,
++    #[parse(condition = "ParserContext::chrome_rules_enabled")]
++    Checkmenuitem,
+     /// Menu Popup background.
+     #[parse(condition = "ParserContext::chrome_rules_enabled")]
+     Menupopup,
+diff --git a/widget/Theme.cpp b/widget/Theme.cpp
+index 32fa3d8bdfad..daeb09785056 100644
+--- a/widget/Theme.cpp
++++ b/widget/Theme.cpp
+@@ -1235,6 +1235,18 @@ bool Theme::DoDrawWidgetBackground(PaintBackendData& aPaintData,
+           dpiRatio);
+       break;
+     }
++    case StyleAppearance::Menuitem: {
++      ThemeDrawing::FillRect(aPaintData, devPxRect, [&] {
++        if (CheckBooleanAttr(aFrame, nsGkAtoms::menuactive)) {
++          if (elementState.HasState(ElementState::DISABLED)) {
++            return colors.System(StyleSystemColor::MozMenuhoverdisabled);
++          }
++          return colors.System(StyleSystemColor::MozMenuhover);
++        }
++        return sTransparent;
++      }());
++      break;
++    }
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton:
+       if constexpr (std::is_same_v<PaintBackendData, WebRenderBackendData>) {
+@@ -1677,6 +1689,7 @@ bool Theme::ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* aFrame,
+     case StyleAppearance::MozMenulistArrowButton:
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton:
++    case StyleAppearance::Menuitem:
+     case StyleAppearance::Tooltip:
+       return !IsWidgetStyled(aPresContext, aFrame, aAppearance);
+     default:
