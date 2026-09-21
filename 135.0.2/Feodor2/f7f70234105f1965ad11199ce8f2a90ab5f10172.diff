@@ -1,0 +1,15 @@
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+index 5df9b02b7e4a..8c9e1c2bbc7f 100644
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -503,8 +503,10 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
+       "SetDelayedIntegrityLevel should never fail, what happened?");
+ 
+   if (aSandboxLevel > 5) {
++    if (IsVistaOrLater()) {
+     mPolicy->SetLockdownDefaultDacl();
+     mPolicy->AddRestrictingRandomSid();
++    }
+   }
+ 
+   if (aSandboxLevel > 4) {

@@ -1,0 +1,1 @@
+Bug 1621696 - Expose LaunchModernSettingsDialogDefaultApps such that it can be called without libxul r=mossop    2020-07-02 02:42:16    18a4eefa8249ed0c7dccdbafcc9a5e44d73663b1

@@ -1,0 +1,15 @@
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 27d8eb288ddb..bb1cc6d50226 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -6525,6 +6525,10 @@
+     type: RelaxedAtomicBool
+     value: false
+     mirror: always
++-   name: gfx.video.convert-i420-to-nv12.force-enabled
++    type: bool
++    value: false
++    mirror: once
+ -   name: gfx.video.convert-yuv-to-nv12.image-host-win
+     type: RelaxedAtomicBool
+     value: true

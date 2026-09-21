@@ -1,0 +1,1 @@
+Add tty detection for MSYS terminals.    2017-01-08 12:29:10    db8d55f88eabfcc22cde39533c2b1d688d1cdfc6

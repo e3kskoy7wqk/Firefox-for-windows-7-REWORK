@@ -1,0 +1,12 @@
+diff --git a/gfx/thebes/gfxPlatformFontList.cpp b/gfx/thebes/gfxPlatformFontList.cpp
+index b1a555ca6a5c..1f204229064f 100644
+--- a/gfx/thebes/gfxPlatformFontList.cpp
++++ b/gfx/thebes/gfxPlatformFontList.cpp
+@@ -467,6 +467,7 @@ nsresult gfxPlatformFontList::InitFontList() {
+   // Try to initialize the cross-process shared font list if enabled by prefs,
+   // but not if we're running in Safe Mode.
+   if (StaticPrefs::gfx_e10s_font_list_shared_AtStartup() &&
++      LoadLibraryW(L"dwrite.dll") &&
+       !gfxPlatform::InSafeMode()) {
+     for (const auto& entry : mFontEntries.Values()) {
+       if (!entry) {

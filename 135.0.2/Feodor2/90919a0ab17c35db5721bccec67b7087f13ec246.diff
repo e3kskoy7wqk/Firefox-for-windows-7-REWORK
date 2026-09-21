@@ -1,0 +1,415 @@
+diff --git a/gfx/webrender_bindings/RenderCompositorANGLE.cpp b/gfx/webrender_bindings/RenderCompositorANGLE.cpp
+index 69ae53d2636e..bc8eee613ba1 100644
+--- a/gfx/webrender_bindings/RenderCompositorANGLE.cpp
++++ b/gfx/webrender_bindings/RenderCompositorANGLE.cpp
+@@ -194,24 +194,8 @@ HWND RenderCompositorANGLE::GetCompositorHwnd() {
+   return hwnd;
+ }
+ 
+-bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
+-  MOZ_ASSERT(!UseCompositor());
+-
+-  mFirstPresent = true;
+-  HWND hwnd = mWidget->AsWindows()->GetHwnd();
+-
+-  RefPtr<IDXGIDevice> dxgiDevice;
+-  mDevice->QueryInterface((IDXGIDevice**)getter_AddRefs(dxgiDevice));
+-
+-  RefPtr<IDXGIFactory> dxgiFactory;
+-  {
+-    RefPtr<IDXGIAdapter> adapter;
+-    dxgiDevice->GetAdapter(getter_AddRefs(adapter));
+-
+-    adapter->GetParent(
+-        IID_PPV_ARGS((IDXGIFactory**)getter_AddRefs(dxgiFactory)));
+-  }
+-
++bool RenderCompositorANGLE::CreateSwapChainForHWND() {
++  RefPtr<IDXGIFactory> dxgiFactory = DXGIFactory();
+   RefPtr<IDXGIFactory2> dxgiFactory2;
+   HRESULT hr = dxgiFactory->QueryInterface(
+       (IDXGIFactory2**)getter_AddRefs(dxgiFactory2));
+@@ -219,15 +203,9 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
+     dxgiFactory2 = nullptr;
+   }
+ 
+-  CreateSwapChainForDCompIfPossible(dxgiFactory2);
+-  if (gfx::gfxVars::UseWebRenderDCompWin() && !mSwapChain) {
+-    MOZ_ASSERT(GetCompositorHwnd());
+-    aError.Assign("RcANGLE(create swapchain for dcomp failed)"_ns);
+-    return false;
+-  }
+-
++  HWND hwnd = mWidget->AsWindows()->GetHwnd();
+   const bool alpha = ShouldUseAlpha();
+-  if (!mSwapChain && dxgiFactory2) {
++  if (dxgiFactory2) {
+     RefPtr<IDXGISwapChain1> swapChain1;
+     bool useTripleBuffering = false;
+ 
+@@ -271,63 +249,81 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
+       mSwapChain1 = swapChain1;
+       mUseTripleBuffering = useTripleBuffering;
+       mSwapChainUsingAlpha = alpha;
+-    } else if (useFlipSequential) {
++      return true;
++    }
++    if (useFlipSequential) {
+       gfxCriticalNoteOnce << "FLIP_SEQUENTIAL is not supported. Fallback";
+     }
+   }
+ 
+-  if (!mSwapChain) {
+-    if (mWidget->AsWindows()->GetCompositorHwnd()) {
+-      // Destroy compositor window.
+-      mWidget->AsWindows()->DestroyCompositorWindow();
+-      hwnd = mWidget->AsWindows()->GetHwnd();
+-    }
++  if (mWidget->AsWindows()->GetCompositorHwnd()) {
++    // Destroy compositor window.
++    mWidget->AsWindows()->DestroyCompositorWindow();
++    hwnd = mWidget->AsWindows()->GetHwnd();
++  }
+ 
+-    DXGI_SWAP_CHAIN_DESC swapDesc{};
+-    swapDesc.BufferDesc.Width = 0;
+-    swapDesc.BufferDesc.Height = 0;
+-    swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+-    swapDesc.BufferDesc.RefreshRate.Numerator = 60;
+-    swapDesc.BufferDesc.RefreshRate.Denominator = 1;
+-    swapDesc.SampleDesc.Count = 1;
+-    swapDesc.SampleDesc.Quality = 0;
+-    swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+-    swapDesc.BufferCount = 1;
+-    swapDesc.OutputWindow = hwnd;
+-    swapDesc.Windowed = TRUE;
+-    swapDesc.Flags = 0;
+-    swapDesc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+-
+-    HRESULT hr = dxgiFactory->CreateSwapChain(dxgiDevice, &swapDesc,
+-                                              getter_AddRefs(mSwapChain));
+-    if (FAILED(hr)) {
+-      aError.Assign(
+-          nsPrintfCString("RcANGLE(swap chain create failed %lx)", hr));
+-      return false;
+-    }
++  DXGI_SWAP_CHAIN_DESC swapDesc{};
++  swapDesc.BufferDesc.Width = 0;
++  swapDesc.BufferDesc.Height = 0;
++  swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++  swapDesc.BufferDesc.RefreshRate.Numerator = 60;
++  swapDesc.BufferDesc.RefreshRate.Denominator = 1;
++  swapDesc.SampleDesc.Count = 1;
++  swapDesc.SampleDesc.Quality = 0;
++  swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
++  swapDesc.BufferCount = 1;
++  swapDesc.OutputWindow = hwnd;
++  swapDesc.Windowed = TRUE;
++  swapDesc.Flags = 0;
++  swapDesc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
++
++  hr = dxgiFactory->CreateSwapChain(DXGIDevice().get(), &swapDesc,
++                                    getter_AddRefs(mSwapChain));
++  if (FAILED(hr)) {
++    return false;
++  }
+ 
+-    RefPtr<IDXGISwapChain1> swapChain1;
+-    hr = mSwapChain->QueryInterface(
+-        (IDXGISwapChain1**)getter_AddRefs(swapChain1));
+-    if (SUCCEEDED(hr)) {
+-      mSwapChain1 = std::move(swapChain1);
+-    }
++  RefPtr<IDXGISwapChain1> swapChain1;
++  hr =
++      mSwapChain->QueryInterface((IDXGISwapChain1**)getter_AddRefs(swapChain1));
++  if (SUCCEEDED(hr)) {
++    mSwapChain1 = std::move(swapChain1);
++  } else {
++    mSwapChain1 = nullptr;
++  }
++  mSwapChainUsingAlpha = alpha;
++  return true;
++}
++
++bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
++  MOZ_ASSERT(!UseCompositor());
++
++  mFirstPresent = true;
++  CreateSwapChainForDCompIfPossible();
++  if (gfx::gfxVars::UseWebRenderDCompWin() && !mSwapChain) {
++    MOZ_ASSERT(GetCompositorHwnd());
++    aError.Assign("RcANGLE(create swapchain for dcomp failed)"_ns);
++    return false;
++  }
++
++  if (!mSwapChain && !CreateSwapChainForHWND()) {
++    aError.Assign("RcANGLE(swap chain create failed)"_ns);
++    return false;
+   }
+ 
+   // We need this because we don't want DXGI to respond to Alt+Enter.
+-  dxgiFactory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_WINDOW_CHANGES);
++  HWND hwnd = mWidget->AsWindows()->GetHwnd();
++  DXGIFactory()->MakeWindowAssociation(hwnd, DXGI_MWA_NO_WINDOW_CHANGES);
+ 
+   if (!ResizeBufferIfNeeded()) {
+     aError.Assign("RcANGLE(resize buffer failed)"_ns);
+     return false;
+   }
+-
+   return true;
+ }
+ 
+-void RenderCompositorANGLE::CreateSwapChainForDCompIfPossible(
+-    IDXGIFactory2* aDXGIFactory2) {
+-  if (!aDXGIFactory2 || !mDCLayerTree) {
++void RenderCompositorANGLE::CreateSwapChainForDCompIfPossible() {
++  if (!mDCLayerTree) {
+     return;
+   }
+ 
+@@ -354,28 +350,35 @@ void RenderCompositorANGLE::CreateSwapChainForDCompIfPossible(
+     mUseTripleBuffering = useTripleBuffering;
+     mDCLayerTree->SetDefaultSwapChain(swapChain1);
+   } else {
+-    // Clear CLayerTree on falire
++    // Clear DCLayerTree on falire
+     mDCLayerTree = nullptr;
+   }
+ }
+ 
+-RefPtr<IDXGISwapChain1> RenderCompositorANGLE::CreateSwapChainForDComp(
+-    bool aUseTripleBuffering) {
+-  HRESULT hr;
++RefPtr<IDXGIDevice> RenderCompositorANGLE::DXGIDevice() {
+   RefPtr<IDXGIDevice> dxgiDevice;
+   mDevice->QueryInterface((IDXGIDevice**)getter_AddRefs(dxgiDevice));
++  return dxgiDevice;
++}
++
++RefPtr<IDXGIFactory> RenderCompositorANGLE::DXGIFactory() {
++  RefPtr<IDXGIAdapter> adapter;
++  DXGIDevice()->GetAdapter(getter_AddRefs(adapter));
+ 
+   RefPtr<IDXGIFactory> dxgiFactory;
+-  {
+-    RefPtr<IDXGIAdapter> adapter;
+-    dxgiDevice->GetAdapter(getter_AddRefs(adapter));
++  adapter->GetParent(IID_PPV_ARGS((IDXGIFactory**)getter_AddRefs(dxgiFactory)));
++  return dxgiFactory;
++}
+ 
+-    adapter->GetParent(
+-        IID_PPV_ARGS((IDXGIFactory**)getter_AddRefs(dxgiFactory)));
+-  }
++RefPtr<IDXGISwapChain1> RenderCompositorANGLE::CreateSwapChainForDComp(
++    bool aUseTripleBuffering) {
++  RefPtr<IDXGIDevice> dxgiDevice;
++  mDevice->QueryInterface((IDXGIDevice**)getter_AddRefs(dxgiDevice));
++
++  RefPtr<IDXGIFactory> dxgiFactory = DXGIFactory();
+ 
+   RefPtr<IDXGIFactory2> dxgiFactory2;
+-  hr = dxgiFactory->QueryInterface(
++  HRESULT hr = dxgiFactory->QueryInterface(
+       (IDXGIFactory2**)getter_AddRefs(dxgiFactory2));
+   if (FAILED(hr)) {
+     return nullptr;
+@@ -426,10 +429,11 @@ bool RenderCompositorANGLE::BeginFrame() {
+   mWidget->AsWindows()->UpdateCompositorWndSizeIfNecessary();
+ 
+   if (!UseCompositor()) {
+-    if (!mSwapChainUsingAlpha && ShouldUseAlpha()) {
+-      if (!RecreateNonNativeCompositorSwapChain()) {
++    if (NS_WARN_IF(!mSwapChainUsingAlpha && ShouldUseAlpha())) {
++      if (NS_WARN_IF(!RecreateNonNativeCompositorSwapChain())) {
+         return false;
+       }
++      MOZ_ASSERT(mSwapChainUsingAlpha);
+     }
+     if (!ResizeBufferIfNeeded()) {
+       return false;
+@@ -931,15 +935,19 @@ bool RenderCompositorANGLE::RecreateNonNativeCompositorSwapChain() {
+   DestroyEGLSurface();
+   mBufferSize.reset();
+ 
+-  RefPtr<IDXGISwapChain1> swapChain1 =
+-      CreateSwapChainForDComp(mUseTripleBuffering);
+-  if (!swapChain1) {
+-    return false;
+-  }
+-  mSwapChain = swapChain1;
+-  mSwapChain1 = swapChain1;
+   if (mDCLayerTree) {
++    RefPtr<IDXGISwapChain1> swapChain1 =
++        CreateSwapChainForDComp(mUseTripleBuffering);
++    if (!swapChain1) {
++      return false;
++    }
++    mSwapChain = swapChain1;
++    mSwapChain1 = swapChain1;
+     mDCLayerTree->SetDefaultSwapChain(swapChain1);
++  } else {
++    if (NS_WARN_IF(!CreateSwapChainForHWND())) {
++      return false;
++    }
+   }
+   return ResizeBufferIfNeeded();
+ }
+diff --git a/gfx/webrender_bindings/RenderCompositorANGLE.h b/gfx/webrender_bindings/RenderCompositorANGLE.h
+index 1db69a26b98e..703d2e7c6c46 100644
+--- a/gfx/webrender_bindings/RenderCompositorANGLE.h
++++ b/gfx/webrender_bindings/RenderCompositorANGLE.h
+@@ -14,6 +14,8 @@
+ #include "mozilla/webrender/RenderCompositor.h"
+ #include "mozilla/webrender/RenderThread.h"
+ 
++struct IDXGIDevice;
++struct IDXGIFactory;
+ struct ID3D11DeviceContext;
+ struct ID3D11Device;
+ struct ID3D11Query;
+@@ -127,13 +129,17 @@ class RenderCompositorANGLE final : public RenderCompositor {
+   void DestroyEGLSurface();
+   ID3D11Device* GetDeviceOfEGLDisplay(nsACString& aError);
+   bool CreateSwapChain(nsACString& aError);
+-  void CreateSwapChainForDCompIfPossible(IDXGIFactory2* aDXGIFactory2);
++  void CreateSwapChainForDCompIfPossible();
++  bool CreateSwapChainForHWND();
+   RefPtr<IDXGISwapChain1> CreateSwapChainForDComp(bool aUseTripleBuffering);
+   RefPtr<ID3D11Query> GetD3D11Query();
+   void ReleaseNativeCompositorResources();
+   HWND GetCompositorHwnd();
+   bool ShouldUseAlpha() const;
+ 
++  RefPtr<IDXGIDevice> DXGIDevice();
++  RefPtr<IDXGIFactory> DXGIFactory();
++
+   RefPtr<gl::GLContext> mGL;
+ 
+   EGLConfig mEGLConfig = nullptr;
+diff --git a/widget/windows/InProcessWinCompositorWidget.cpp b/widget/windows/InProcessWinCompositorWidget.cpp
+index 2254b2227efc..a705d67f42ce 100644
+--- a/widget/windows/InProcessWinCompositorWidget.cpp
++++ b/widget/windows/InProcessWinCompositorWidget.cpp
+@@ -76,6 +76,10 @@ bool InProcessWinCompositorWidget::OnWindowResize(
+   return true;
+ }
+ 
++bool InProcessWinCompositorWidget::DrawsToMemoryDC() const {
++  return ::GetWindowLongPtrW(mWnd, GWL_EXSTYLE) & WS_EX_LAYERED;
++}
++
+ bool InProcessWinCompositorWidget::PreRender(WidgetRenderingContext* aContext) {
+   // This can block waiting for WM_SETTEXT to finish
+   // Using PreRender is unnecessarily pessimistic because
+@@ -105,7 +109,7 @@ InProcessWinCompositorWidget::StartRemoteDrawing() {
+   MOZ_ASSERT(!mCompositeDC);
+ 
+   RefPtr<gfxASurface> surf;
+-  if (TransparencyModeIs(TransparencyMode::Transparent)) {
++  if (DrawsToMemoryDC()) {
+     surf = EnsureTransparentSurface();
+   }
+ 
+@@ -145,7 +149,7 @@ InProcessWinCompositorWidget::StartRemoteDrawing() {
+ void InProcessWinCompositorWidget::EndRemoteDrawing() {
+   MOZ_ASSERT(!mLockedBackBufferData);
+ 
+-  if (TransparencyModeIs(TransparencyMode::Transparent)) {
++  if (DrawsToMemoryDC()) {
+     MOZ_ASSERT(mTransparentSurface);
+     RedrawTransparentWindow();
+   }
+@@ -234,7 +238,7 @@ void InProcessWinCompositorWidget::LeavePresentLock() { mPresentLock.Leave(); }
+ 
+ RefPtr<gfxASurface> InProcessWinCompositorWidget::EnsureTransparentSurface() {
+   mTransparentSurfaceLock.AssertCurrentThreadOwns();
+-  MOZ_ASSERT(TransparencyModeIs(TransparencyMode::Transparent));
++  MOZ_ASSERT(DrawsToMemoryDC());
+ 
+   IntSize size = GetClientSize().ToUnknownSize();
+   if (!mTransparentSurface || mTransparentSurface->GetSize() != size) {
+@@ -268,7 +272,7 @@ void InProcessWinCompositorWidget::UpdateTransparency(TransparencyMode aMode) {
+   mTransparentSurface = nullptr;
+   mMemoryDC = nullptr;
+ 
+-  if (aMode == TransparencyMode::Transparent) {
++  if (DrawsToMemoryDC()) {
+     EnsureTransparentSurface();
+   }
+ }
+@@ -305,7 +309,7 @@ void InProcessWinCompositorWidget::ClearTransparentWindow() {
+ }
+ 
+ bool InProcessWinCompositorWidget::RedrawTransparentWindow() {
+-  MOZ_ASSERT(TransparencyModeIs(TransparencyMode::Transparent));
++  MOZ_ASSERT(DrawsToMemoryDC());
+ 
+   LayoutDeviceIntSize size = GetClientSize();
+ 
+@@ -324,12 +328,11 @@ bool InProcessWinCompositorWidget::RedrawTransparentWindow() {
+ }
+ 
+ HDC InProcessWinCompositorWidget::GetWindowSurface() {
+-  return TransparencyModeIs(TransparencyMode::Transparent) ? mMemoryDC
+-                                                           : ::GetDC(mWnd);
++  return DrawsToMemoryDC() ? mMemoryDC : ::GetDC(mWnd);
+ }
+ 
+ void InProcessWinCompositorWidget::FreeWindowSurface(HDC dc) {
+-  if (!TransparencyModeIs(TransparencyMode::Transparent)) {
++  if (!DrawsToMemoryDC()) {
+     ::ReleaseDC(mWnd, dc);
+   }
+ }
+diff --git a/widget/windows/InProcessWinCompositorWidget.h b/widget/windows/InProcessWinCompositorWidget.h
+index b6de254a48a5..d612fb52dabb 100644
+--- a/widget/windows/InProcessWinCompositorWidget.h
++++ b/widget/windows/InProcessWinCompositorWidget.h
+@@ -49,6 +49,7 @@ class InProcessWinCompositorWidget final
+   void NotifyVisibilityUpdated(bool aIsFullyOccluded) override;
+   void ClearTransparentWindow() override;
+ 
++  bool DrawsToMemoryDC() const;
+   bool RedrawTransparentWindow();
+ 
+   // Ensure that a transparent surface exists, then return it.
+diff --git a/widget/windows/nsWindowGfx.cpp b/widget/windows/nsWindowGfx.cpp
+index b4c71ed1b033..797798344265 100644
+--- a/widget/windows/nsWindowGfx.cpp
++++ b/widget/windows/nsWindowGfx.cpp
+@@ -175,12 +175,12 @@ bool nsWindow::OnPaint(uint32_t aNestingLevel) {
+     listener->WillPaintWindow(this);
+   }
+ 
+-  // For layered translucent windows all drawing should go to memory DC and no
++  // For layered translucent popups all drawing should go to memory DC and no
+   // WM_PAINT messages are normally generated. To support asynchronous painting
+   // we force generation of WM_PAINT messages by invalidating window areas with
+   // RedrawWindow, InvalidateRect or InvalidateRgn function calls.
+   const bool usingMemoryDC =
+-      renderer->GetBackendType() == LayersBackend::LAYERS_NONE &&
++      IsPopup() && renderer->GetBackendType() == LayersBackend::LAYERS_NONE &&
+       mTransparencyMode == TransparencyMode::Transparent;
+   const LayoutDeviceIntRect winRect = [&] {
+     RECT r;
+@@ -265,7 +265,7 @@ bool nsWindow::OnPaint(uint32_t aNestingLevel) {
+       RefPtr<gfxASurface> targetSurface;
+ 
+       // don't support transparency for non-GDI rendering, for now
+-      if (TransparencyMode::Transparent == mTransparencyMode) {
++      if (usingMemoryDC) {
+         // This mutex needs to be held when EnsureTransparentSurface is
+         // called.
+         MutexAutoLock lock(mBasicLayersSurface->GetTransparentSurfaceLock());
+@@ -316,7 +316,7 @@ bool nsWindow::OnPaint(uint32_t aNestingLevel) {
+         }
+       }
+ 
+-      if (TransparencyMode::Transparent == mTransparencyMode) {
++      if (usingMemoryDC) {
+         // Data from offscreen drawing surface was copied to memory bitmap of
+         // transparent bitmap. Now it can be read from memory bitmap to apply
+         // alpha channel and after that displayed on the screen.

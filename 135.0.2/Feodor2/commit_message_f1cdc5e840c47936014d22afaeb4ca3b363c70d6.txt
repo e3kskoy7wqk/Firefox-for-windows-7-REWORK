@@ -1,0 +1,1 @@
+Bug 1570460: Add fonts path and named pipe creation to windows content process sandbox policy. r=handyman    2021-03-09 16:44:13    f1cdc5e840c47936014d22afaeb4ca3b363c70d6

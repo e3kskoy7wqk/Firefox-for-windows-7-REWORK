@@ -1,0 +1,32 @@
+--- a/ipc/chromium/src/base/process_util_win.cc
++++ b/ipc/chromium/src/base/process_util_win.cc
+@@ -322,6 +322,13 @@ bool LaunchApp(const std::wstring& cmdline, const LaunchOptions& options,
+     handlesToInherit.push_back(h);
+   }
+ 
++    // Even if we can't limit what gets inherited, we sometimes want to inherit
++    // stdout/err for testing purposes.
++    startup_info.dwFlags |= STARTF_USESTDHANDLES;
++    startup_info.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
++    startup_info.hStdError = ::GetStdHandle(STD_ERROR_HANDLE);
++    startup_info.hStdInput = INVALID_HANDLE_VALUE;
++    bInheritHandles = TRUE;
+   // setup our handle array first - if we end up with no handles that can
+   // be inherited we can avoid trying to do the ThreadAttributeList dance...
+   HANDLE stdOut = ::GetStdHandle(STD_OUTPUT_HANDLE);
+--- a/security/sandbox/chromium/sandbox/win/src/broker_services.cc
++++ b/security/sandbox/chromium/sandbox/win/src/broker_services.cc
+@@ -440,6 +440,13 @@ ResultCode BrokerServicesBase::SpawnTarget(const wchar_t* exe_path,
+       }
+     }
+   }
++    // On pre-Vista versions even if we can't limit what gets inherited, we
++    // sometimes want to inherit stdout/err for testing purposes.
++    startup_info.startup_info()->dwFlags |= STARTF_USESTDHANDLES;
++    startup_info.startup_info()->hStdInput = INVALID_HANDLE_VALUE;
++    startup_info.startup_info()->hStdOutput = policy_base->GetStdoutHandle();
++    startup_info.startup_info()->hStdError = policy_base->GetStderrHandle();
++    inherit_handles = true;
+ 
+   // Construct the thread pool here in case it is expensive.
+   // The thread pool is shared by all the targets

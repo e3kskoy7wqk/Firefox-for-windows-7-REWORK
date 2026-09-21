@@ -1,0 +1,1 @@
+Bug 1334860 - Remove WinXP-only ClearType prefs. r=jfkthame    2017-01-29 10:46:24    3251b1d3281755e94ef21fc032694a3633647644

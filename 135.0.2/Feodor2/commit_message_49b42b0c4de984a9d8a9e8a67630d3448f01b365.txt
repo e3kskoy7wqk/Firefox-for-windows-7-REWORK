@@ -1,0 +1,1 @@
+Bug 1912481 p2: Give read access to the Windows system binary dir. r=handyman    2024-08-22 17:16:38    49b42b0c4de984a9d8a9e8a67630d3448f01b365

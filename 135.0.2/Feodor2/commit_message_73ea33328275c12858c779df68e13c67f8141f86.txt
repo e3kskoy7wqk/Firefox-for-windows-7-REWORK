@@ -1,0 +1,1 @@
+Bug 1356503 - Part 2. Replace nsWin32Locale::GetXPLocale with LCIDToLocaleName (webspeech part). r=eeejay    2017-04-27 11:40:30    73ea33328275c12858c779df68e13c67f8141f86

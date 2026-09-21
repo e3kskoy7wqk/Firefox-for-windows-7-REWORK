@@ -1,0 +1,35 @@
+diff --git a/tools/profiler/core/ETWTools.cpp b/tools/profiler/core/ETWTools.cpp
+index b8fab9b31674..75739dba10c2 100644
+--- a/tools/profiler/core/ETWTools.cpp
++++ b/tools/profiler/core/ETWTools.cpp
+@@ -37,10 +37,10 @@ static void NTAPI ETWEnableCallback(LPCGUID aSourceId, ULONG aIsEnabled,
+ }
+ 
+ void Init() {
+-  TraceLoggingRegisterEx(kFirefoxTraceLoggingProvider, ETWEnableCallback,
+-                         nullptr);
++//TraceLoggingRegisterEx(kFirefoxTraceLoggingProvider, ETWEnableCallback,
++//                       nullptr);
+ }
+ 
+-void Shutdown() { TraceLoggingUnregister(kFirefoxTraceLoggingProvider); }
++void Shutdown() { }//TraceLoggingUnregister(kFirefoxTraceLoggingProvider); }
+ 
+ }  // namespace ETW
+diff --git a/tools/profiler/public/ETWTools.h b/tools/profiler/public/ETWTools.h
+index ae3b7cdc0d00..cb03cb87d3d2 100644
+--- a/tools/profiler/public/ETWTools.h
++++ b/tools/profiler/public/ETWTools.h
+@@ -343,9 +343,9 @@ static inline void EmitETWMarker(const mozilla::ProfilerString8View& aName,
+       }
+     }
+ 
+-    _tlgWriteTransfer(kFirefoxTraceLoggingProvider,
+-                      &staticData.metaData.Channel, NULL, NULL,
+-                      descriptors.size(), descriptors.data());
++//  _tlgWriteTransfer(kFirefoxTraceLoggingProvider,
++//                    &staticData.metaData.Channel, NULL, NULL,
++//                    descriptors.size(), descriptors.data());
+   }
+ }
+ 

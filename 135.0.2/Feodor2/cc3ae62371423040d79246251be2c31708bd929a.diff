@@ -1,0 +1,39 @@
+diff --git a/browser/themes/addons/dark/manifest.json b/browser/themes/addons/dark/manifest.json
+index f7a070859f40..cf536b27c65d 100644
+--- a/browser/themes/addons/dark/manifest.json
++++ b/browser/themes/addons/dark/manifest.json
+@@ -30,7 +30,7 @@
+       "toolbar": "rgb(43,42,51)",
+       "toolbar_top_separator": "transparent",
+       "toolbar_bottom_separator": "rgb(82, 82, 94)",
+-      "toolbar_field": "rgba(0, 0, 0, .3)",
++      "toolbar_field": "rgb(28,27,34)",
+       "toolbar_field_border": "transparent",
+       "toolbar_field_text": "rgb(251,251,254)",
+       "toolbar_field_focus": "rgb(66,65,77)",
+diff --git a/browser/themes/addons/light/manifest.json b/browser/themes/addons/light/manifest.json
+index 71293457d2d1..a6b4fd1049a9 100644
+--- a/browser/themes/addons/light/manifest.json
++++ b/browser/themes/addons/light/manifest.json
+@@ -34,7 +34,7 @@
+       "toolbar": "#f9f9fb",
+       "toolbar_top_separator": "transparent",
+       "toolbar_bottom_separator": "rgb(240, 240, 244)",
+-      "toolbar_field": "rgba(0, 0, 0, .05)",
++      "toolbar_field": "rgb(240, 240, 244)",
+       "toolbar_field_text": "rgb(21, 20, 26)",
+       "toolbar_field_border": "transparent",
+       "toolbar_field_focus": "white",
+diff --git a/browser/themes/shared/browser-colors.css b/browser/themes/shared/browser-colors.css
+index 39d31d9ee966..0ae96251fd62 100644
+--- a/browser/themes/shared/browser-colors.css
++++ b/browser/themes/shared/browser-colors.css
+@@ -120,7 +120,7 @@
+     --toolbarbutton-icon-fill-attention-text: light-dark(rgb(240, 240, 244), rgb(28, 27, 34));
+ 
+     --toolbar-field-border-color: transparent;
+-    --toolbar-field-background-color: light-dark(rgba(0, 0, 0, .05), rgba(0, 0, 0, .3));
++    --toolbar-field-background-color: light-dark(rgb(240, 240, 244), rgb(28, 27, 34));
+     --toolbar-field-color: light-dark(rgb(21, 20, 26), rgb(251, 251, 254));
+     --toolbar-field-focus-background-color: light-dark(white, rgb(66, 65, 77));
+     --toolbar-field-focus-color: light-dark(black, rgb(251, 251, 254));

@@ -1,0 +1,1 @@
+Bug 1943517 - Fix window transparency in some configurations. r=cmartin,win-reviewers    2025-02-01 00:02:42    90919a0ab17c35db5721bccec67b7087f13ec246

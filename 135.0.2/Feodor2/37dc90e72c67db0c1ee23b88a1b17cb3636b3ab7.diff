@@ -1,0 +1,86 @@
+diff --git a/browser/base/content/browser-init.js b/browser/base/content/browser-init.js
+index 0717ce21386b73fc3399c97b34c6892a674cca77..de34fbcc7f5e4c112b3cd78d7223937af03bc8ee 100644
+--- a/browser/base/content/browser-init.js
++++ b/browser/base/content/browser-init.js
+@@ -448,7 +448,9 @@ var gBrowserInit = {
+     }
+ 
+     FullScreen.init();
+-    MenuTouchModeObserver.init();
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
++      MenuTouchModeObserver.init();
++    }
+ 
+     if (AppConstants.MOZ_DATA_REPORTING) {
+       gDataNotificationInfoBar.init();
+@@ -1087,7 +1089,9 @@ var gBrowserInit = {
+       );
+       Services.obs.removeObserver(gKeywordURIFixup, "keyword-uri-fixup");
+ 
+-      MenuTouchModeObserver.uninit();
++      if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
++        MenuTouchModeObserver.uninit();
++      }
+       BrowserOffline.uninit();
+       CanvasPermissionPromptHelper.uninit();
+       WebAuthnPromptHelper.uninit();
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index 60cc0993590527a4f2e6d35786f6608e58980f83..07ffbf9bfaed4d7caea32e227f8bd9e8e787639b 100644
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -5059,14 +5059,14 @@ function updateToggleControlLabel(control) {
+ // more like non-tablet mode and has no need for this.)
+ const Win10TabletModeUpdater = {
+   init() {
+-    if (AppConstants.platform == "win") {
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       this.update(WindowsUIUtils.inWin10TabletMode);
+       Services.obs.addObserver(this, "tablet-mode-change");
+     }
+   },
+ 
+   uninit() {
+-    if (AppConstants.platform == "win") {
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       Services.obs.removeObserver(this, "tablet-mode-change");
+     }
+   },
+@@ -5155,7 +5155,7 @@ var gUIDensity = {
+   getCurrentDensity() {
+     // Automatically override the uidensity to touch in Windows tablet mode
+     // (either Win10 or Win11).
+-    if (AppConstants.platform == "win") {
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       const inTablet =
+         WindowsUIUtils.inWin10TabletMode || WindowsUIUtils.inWin11TabletMode;
+       if (inTablet && Services.prefs.getBoolPref(this.autoTouchModePref)) {
+diff --git a/browser/components/BrowserContentHandler.sys.mjs b/browser/components/BrowserContentHandler.sys.mjs
+index 2ee69050d469a8c889af5895f89291dfe13416fe..98bc5f25d9824cb5369ff1dd04281ba4f95a57ad 100644
+--- a/browser/components/BrowserContentHandler.sys.mjs
++++ b/browser/components/BrowserContentHandler.sys.mjs
+@@ -1442,7 +1442,7 @@ nsDefaultCommandLineHandler.prototype = {
+       }
+     } else if (!cmdLine.preventDefault) {
+       if (
+-        AppConstants.platform == "win" &&
++        AppConstants.isPlatformAndVersionAtLeast("win", "10") &&
+         cmdLine.state != Ci.nsICommandLine.STATE_INITIAL_LAUNCH &&
+         lazy.WindowsUIUtils.inWin10TabletMode
+       ) {
+diff --git a/toolkit/content/aboutSupport.js b/toolkit/content/aboutSupport.js
+index 6b75776bd67d8f1280c592146a855694fb71cf3a..49a089b94d431e213b6de1e2b2bb4f735de193ea 100644
+--- a/toolkit/content/aboutSupport.js
++++ b/toolkit/content/aboutSupport.js
+@@ -341,6 +341,12 @@ var snapshotFormatters = {
+   },
+ 
+   securitySoftware(data) {
++    if (!AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++      $("security-software").hidden = true;
++      $("security-software-table").hidden = true;
++      return;
++    }
++
+     if (AppConstants.platform !== "win") {
+       $("security-software").hidden = true;
+       $("security-software-table").hidden = true;

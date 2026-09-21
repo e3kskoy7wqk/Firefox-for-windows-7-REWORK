@@ -1,0 +1,66 @@
+diff --git a/browser/installer/windows/nsis/installer.nsi b/browser/installer/windows/nsis/installer.nsi
+index 7fd26f90faaf..3fae0af57e43 100755
+--- a/browser/installer/windows/nsis/installer.nsi
++++ b/browser/installer/windows/nsis/installer.nsi
+@@ -514,8 +514,14 @@ Section "-Application" APP_IDX
+     ${If} $R0 == "true"
+     ; Only proceed if we have HKLM write access
+     ${AndIf} $RegHive == "HKLM"
+-      ; The user is an admin, so we should default to installing the service.
+-      StrCpy $InstallMaintenanceService "1"
++      ; On Windows < XP SP3 we do not install the maintenance service.
++      ${If} ${IsWinXP}
++      ${AndIf} ${AtMostServicePack} 2
++        StrCpy $InstallMaintenanceService "0"
++      ${Else}
++        ; The user is an admin, so we should default to installing the service.
++        StrCpy $InstallMaintenanceService "1"
++      ${EndIf}
+     ${Else}
+       ; The user is not admin, so we can't install the service.
+       StrCpy $InstallMaintenanceService "0"
+@@ -1531,6 +1537,12 @@ Function preComponents
+     Abort
+   ${EndIf}
+ 
++  ; On Windows < XP SP3 we do not install the maintenance service.
++  ${If} ${IsWinXP}
++  ${AndIf} ${AtMostServicePack} 2
++    Abort
++  ${EndIf}
++
+   ; Don't show the custom components page if the
+   ; user is not an admin
+   Call IsUserAdmin
+diff --git a/browser/installer/windows/nsis/shared.nsh b/browser/installer/windows/nsis/shared.nsh
+index af3b28982d7d..1734a709605e 100755
+--- a/browser/installer/windows/nsis/shared.nsh
++++ b/browser/installer/windows/nsis/shared.nsh
+@@ -136,6 +136,8 @@
+   ${If} $R0 == "true"
+   ; Only proceed if we have HKLM write access
+   ${AndIf} $RegHive == "HKLM"
++  ; On Windows 2000 we do not install the maintenance service.
++  ${AndIf} ${AtLeastWinXP}
+     ; We check to see if the maintenance service install was already attempted.
+     ; Since the Maintenance service can be installed either x86 or x64,
+     ; always use the 64-bit registry for checking if an attempt was made.
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+index 4c24b5d90f03..31c4993a10b1 100755
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -6575,7 +6575,13 @@
+       ${LogMsg} "App Version: $R8"
+       ${LogMsg} "GRE Version: $R9"
+ 
+-      ${If} ${IsWin7}
++      ${If} ${IsWinXP}
++        ${LogMsg} "OS Name    : Windows XP"
++      ${ElseIf} ${IsWin2003}
++        ${LogMsg} "OS Name    : Windows 2003"
++      ${ElseIf} ${IsWinVista}
++        ${LogMsg} "OS Name    : Windows Vista"
++      ${ElseIf} ${IsWin7}
+         ${LogMsg} "OS Name    : Windows 7"
+       ${ElseIf} ${IsWin8}
+         ${LogMsg} "OS Name    : Windows 8"

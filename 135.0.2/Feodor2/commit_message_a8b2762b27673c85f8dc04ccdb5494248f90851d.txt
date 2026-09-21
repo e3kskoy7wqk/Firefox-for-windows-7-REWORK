@@ -1,0 +1,1 @@
+Bug 1736616 - Discard CPU utilization due to suspending threads - r=canaltinova    2021-11-10 04:56:09    a8b2762b27673c85f8dc04ccdb5494248f90851d

@@ -1,0 +1,34 @@
+diff --git a/browser/app/winlauncher/LauncherProcessWin.cpp b/browser/app/winlauncher/LauncherProcessWin.cpp
+index a71452d..5f0ca5b 100644
+--- a/browser/app/winlauncher/LauncherProcessWin.cpp
++++ b/browser/app/winlauncher/LauncherProcessWin.cpp
+@@ -301,7 +301,7 @@ Maybe<int> LauncherMain(int& argc, wchar_t* argv[],
+   BOOL inheritHandles = FALSE;
+ 
+   if (attrsOk.unwrap()) {
+-    creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
++    //creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
+ 
+     if (attrs.HasInheritableHandles()) {
+       siex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+diff --git a/browser/app/winlauncher/ProcThreadAttributes.h b/browser/app/winlauncher/ProcThreadAttributes.h
+index 2b5a533..12335cd 100644
+--- a/browser/app/winlauncher/ProcThreadAttributes.h
++++ b/browser/app/winlauncher/ProcThreadAttributes.h
+@@ -20,7 +20,7 @@ namespace mozilla {
+ class MOZ_RAII ProcThreadAttributes final {
+   struct ProcThreadAttributeListDeleter {
+     void operator()(LPPROC_THREAD_ATTRIBUTE_LIST aList) {
+-      ::DeleteProcThreadAttributeList(aList);
++      //::DeleteProcThreadAttributeList(aList);
+       delete[] reinterpret_cast<char*>(aList);
+     }
+   };
+@@ -74,6 +74,7 @@ class MOZ_RAII ProcThreadAttributes final {
+     if (!numAttributes) {
+       return false;
+     }
++    return true;
+ 
+     SIZE_T listSize = 0;
+     if (!::InitializeProcThreadAttributeList(nullptr, numAttributes, 0,
