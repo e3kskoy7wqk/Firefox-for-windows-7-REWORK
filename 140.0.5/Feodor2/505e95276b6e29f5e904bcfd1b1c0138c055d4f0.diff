@@ -1,0 +1,55 @@
+diff --git a/gfx/thebes/gfxGDIFontList.cpp b/gfx/thebes/gfxGDIFontList.cpp
+index df49e042ba2e..36006f89b6cb 100644
+--- a/gfx/thebes/gfxGDIFontList.cpp
++++ b/gfx/thebes/gfxGDIFontList.cpp
+@@ -813,8 +829,15 @@ gfxFontEntry* gfxGDIFontList::MakePlatformFont(const nsACString& aFontName,
+                                : GFX_FONT_TYPE_TRUETYPE) /*type*/,
+       aStyleForEntry, aWeightForEntry, aStretchForEntry, winUserFontData);
+ 
+-  if (fe) {
+-    fe->mIsDataUserFont = true;
++  if (!fe)
++    return fe;
++
++  fe->mIsDataUserFont = true;
++
++  // Uniscribe doesn't place CFF fonts loaded privately
++  // via AddFontMemResourceEx on XP/Vista
++  if (isCFF && !IsWin7OrLater()) {
++    fe->mForceGDI = true;
+   }
+ 
+   return fe;
+diff --git a/gfx/thebes/gfxWindowsPlatform.cpp b/gfx/thebes/gfxWindowsPlatform.cpp
+index e5133e2839c1..15968e27a1d2 100755
+--- a/gfx/thebes/gfxWindowsPlatform.cpp
++++ b/gfx/thebes/gfxWindowsPlatform.cpp
+@@ -193,6 +193,10 @@ public:
+     HMODULE gdi32Handle;
+     PFND3DKMTQS queryD3DKMTStatistics = nullptr;
+ 
++        // GPU memory reporting is not available before Windows 7
++        if (!IsWin7OrLater())
++            return NS_OK;
++
+     if ((gdi32Handle = LoadLibrary(TEXT("gdi32.dll"))))
+       queryD3DKMTStatistics =
+           (PFND3DKMTQS)GetProcAddress(gdi32Handle, "D3DKMTQueryStatistics");
+@@ -1646,11 +1690,13 @@ bool gfxWindowsPlatform::InitGPUProcessSupport() {
+                     "Not using GPU Process since D3D11 is unavailable",
+                     "FEATURE_FAILURE_NO_D3D11"_ns);
+   } else if (!IsWin7SP1OrLater()) {
+-    // On Windows 7 Pre-SP1, DXGI 1.2 is not available and remote presentation
+-    // for D3D11 will not work. Rather than take a regression we revert back
+-    // to in-process rendering.
++    // For Windows XP, we simply don't care enough to support this
++    // configuration. On Windows Vista and 7 Pre-SP1, DXGI 1.2 is not
++    // available and remote presentation for D3D11 will not work. Rather
++    // than take a regression and use D3D9, we revert back to in-process
++    // rendering.
+     gpuProc.Disable(FeatureStatus::Unavailable,
+-                    "Windows 7 Pre-SP1 cannot use the GPU process",
++                    "Windows XP, Vista, and 7 Pre-SP1 cannot use the GPU process",
+                     "FEATURE_FAILURE_OLD_WINDOWS"_ns);
+   } else if (!IsWin8OrLater()) {
+     // Windows 7 SP1 can have DXGI 1.2 only via the Platform Update, so we

@@ -1,0 +1,700 @@
+diff --git a/widget/CompositorWidget.h b/widget/CompositorWidget.h
+index d25da93640d3b13093a536f990ae98d9e077cc96..38451a1443a33857c054dd9ade35fc700bbf8bb4 100644
+--- a/widget/CompositorWidget.h
++++ b/widget/CompositorWidget.h
+@@ -155,6 +155,14 @@ class CompositorWidget {
+     EndRemoteDrawing();
+   }
+ 
++  /**
++   * Return true when it is better to defer EndRemoteDrawing().
++   *
++   * Called by BasicCompositor on the compositor thread for OMTC drawing
++   * after each composition.
++   */
++  virtual bool NeedsToDeferEndRemoteDrawing() { return false; }
++
+   /**
+    * Some widgets (namely Gtk) may need clean up underlying surface
+    * before painting to draw transparent objects correctly. Return
+diff --git a/widget/windows/CompositorWidgetChild.cpp b/widget/windows/CompositorWidgetChild.cpp
+index e51d9e88fabe6a860786dcd72d3c3f0b65643d37..cd5367823f17551d6346cbc31626df269c37ea88 100644
+--- a/widget/windows/CompositorWidgetChild.cpp
++++ b/widget/windows/CompositorWidgetChild.cpp
+@@ -70,6 +70,10 @@ void CompositorWidgetChild::UpdateTransparency(TransparencyMode aMode) {
+   Unused << SendUpdateTransparency(aMode);
+ }
+ 
++void CompositorWidgetChild::ClearTransparentWindow() {
++  Unused << SendClearTransparentWindow();
++}
++
+ mozilla::ipc::IPCResult CompositorWidgetChild::RecvObserveVsync() {
+   mVsyncDispatcher->SetCompositorVsyncObserver(mVsyncObserver);
+   return IPC_OK();
+diff --git a/widget/windows/CompositorWidgetChild.h b/widget/windows/CompositorWidgetChild.h
+index b2c7d14cd90f49d1b25bbe40965edccf1c51a0e2..ef508bf80268e6a1ba77b2c164fa70266700d004 100644
+--- a/widget/windows/CompositorWidgetChild.h
++++ b/widget/windows/CompositorWidgetChild.h
+@@ -36,6 +36,7 @@ class CompositorWidgetChild final : public PCompositorWidgetChild,
+   void NotifyVisibilityUpdated(bool aIsFullyOccluded) override;
+ 
+   void UpdateTransparency(TransparencyMode) override;
++  void ClearTransparentWindow() override;
+ 
+   mozilla::ipc::IPCResult RecvObserveVsync() override;
+   mozilla::ipc::IPCResult RecvUnobserveVsync() override;
+diff --git a/widget/windows/CompositorWidgetParent.cpp b/widget/windows/CompositorWidgetParent.cpp
+index c9fcf189c259133d988b194c305242a6cb2bdec2..bcb5bc0d76641789eba9650fd3ccc745a9b34222 100644
+--- a/widget/windows/CompositorWidgetParent.cpp
++++ b/widget/windows/CompositorWidgetParent.cpp
+@@ -81,6 +81,8 @@ void CompositorWidgetParent::EndRemoteDrawingInRegion(
+       aInvalidRegion.ToUnknownRegion());
+ }
+ 
++bool CompositorWidgetParent::NeedsToDeferEndRemoteDrawing() { return false; }
++
+ already_AddRefed<gfx::DrawTarget>
+ CompositorWidgetParent::GetBackBufferDrawTarget(gfx::DrawTarget* aScreenTarget,
+                                                 const gfx::IntRect& aRect,
+@@ -135,6 +137,27 @@ mozilla::ipc::IPCResult CompositorWidgetParent::RecvUpdateTransparency(
+   return IPC_OK();
+ }
+ 
++mozilla::ipc::IPCResult CompositorWidgetParent::RecvClearTransparentWindow() {
++  gfx::CriticalSectionAutoEnter lock(&mPresentLock);
++
++  RefPtr<DrawTarget> drawTarget = mRemoteBackbufferClient->BorrowDrawTarget();
++  if (!drawTarget) {
++    return IPC_OK();
++  }
++
++  IntSize size = drawTarget->GetSize();
++  if (size.IsEmpty()) {
++    return IPC_OK();
++  }
++
++  drawTarget->ClearRect(Rect(0, 0, size.width, size.height));
++
++  Unused << mRemoteBackbufferClient->PresentDrawTarget(
++      IntRect(0, 0, size.width, size.height));
++
++  return IPC_OK();
++}
++
+ nsIWidget* CompositorWidgetParent::RealWidget() { return nullptr; }
+ 
+ void CompositorWidgetParent::ObserveVsync(VsyncObserver* aObserver) {
+diff --git a/widget/windows/CompositorWidgetParent.h b/widget/windows/CompositorWidgetParent.h
+index 1eb471c07f5b60514c88ab93e5226e997bce49e5..487d20ce342adf82f44f130ef904dad2085ea93d 100644
+--- a/widget/windows/CompositorWidgetParent.h
++++ b/widget/windows/CompositorWidgetParent.h
+@@ -35,6 +35,7 @@ class CompositorWidgetParent final : public PCompositorWidgetParent,
+   void EndRemoteDrawingInRegion(
+       gfx::DrawTarget* aDrawTarget,
+       const LayoutDeviceIntRegion& aInvalidRegion) override;
++  bool NeedsToDeferEndRemoteDrawing() override;
+   LayoutDeviceIntSize GetClientSize() override;
+   already_AddRefed<gfx::DrawTarget> GetBackBufferDrawTarget(
+       gfx::DrawTarget* aScreenTarget, const gfx::IntRect& aRect,
+@@ -53,6 +54,7 @@ class CompositorWidgetParent final : public PCompositorWidgetParent,
+       const bool& aIsFullyOccluded) override;
+   mozilla::ipc::IPCResult RecvUpdateTransparency(
+       const TransparencyMode& aTransparencyMode) override;
++  mozilla::ipc::IPCResult RecvClearTransparentWindow() override;
+   void ActorDestroy(ActorDestroyReason aWhy) override;
+ 
+   nsIWidget* RealWidget() override;
+diff --git a/widget/windows/InProcessWinCompositorWidget.cpp b/widget/windows/InProcessWinCompositorWidget.cpp
+index 6fd9568253bbf196895c826b056e3955121a1f7f..a705d67f42ceb9c2ace3bc842da0911fd8d7a489 100644
+--- a/widget/windows/InProcessWinCompositorWidget.cpp
++++ b/widget/windows/InProcessWinCompositorWidget.cpp
+@@ -5,9 +5,12 @@
+ 
+ #include "InProcessWinCompositorWidget.h"
+ 
++#include "mozilla/StaticPrefs_layers.h"
++#include "mozilla/gfx/DeviceManagerDx.h"
+ #include "mozilla/gfx/Point.h"
+ #include "mozilla/layers/Compositor.h"
+ #include "mozilla/layers/CompositorThread.h"
++#include "mozilla/webrender/RenderThread.h"
+ #include "mozilla/widget/PlatformWidgetTypes.h"
+ #include "gfxPlatform.h"
+ #include "HeadlessCompositorWidget.h"
+@@ -16,6 +19,7 @@
+ #include "nsWindow.h"
+ #include "VsyncDispatcher.h"
+ #include "WinCompositorWindowThread.h"
++#include "VRShMem.h"
+ 
+ #include <ddraw.h>
+ 
+@@ -33,10 +37,11 @@ RefPtr<CompositorWidget> CompositorWidget::CreateLocal(
+     return new HeadlessCompositorWidget(
+         aInitData.get_HeadlessCompositorWidgetInitData(), aOptions,
+         static_cast<HeadlessWidget*>(aWidget));
++  } else {
++    return new InProcessWinCompositorWidget(
++        aInitData.get_WinCompositorWidgetInitData(), aOptions,
++        static_cast<nsWindow*>(aWidget));
+   }
+-  return new InProcessWinCompositorWidget(
+-      aInitData.get_WinCompositorWidgetInitData(), aOptions,
+-      static_cast<nsWindow*>(aWidget));
+ }
+ 
+ InProcessWinCompositorWidget::InProcessWinCompositorWidget(
+@@ -45,14 +50,25 @@ InProcessWinCompositorWidget::InProcessWinCompositorWidget(
+     : WinCompositorWidget(aInitData, aOptions),
+       mWindow(aWindow),
+       mWnd(reinterpret_cast<HWND>(aInitData.hWnd())),
++      mTransparentSurfaceLock("mTransparentSurfaceLock"),
++      mMemoryDC(nullptr),
+       mCompositeDC(nullptr),
+       mLockedBackBufferData(nullptr) {
+   MOZ_ASSERT(mWindow);
+   MOZ_ASSERT(mWnd && ::IsWindow(mWnd));
++
++  // mNotDeferEndRemoteDrawing is set on the main thread during init,
++  // but is only accessed after on the compositor thread.
++  mNotDeferEndRemoteDrawing =
++      StaticPrefs::layers_offmainthreadcomposition_frame_rate() == 0 ||
++      gfxPlatform::IsInLayoutAsapMode() || gfxPlatform::ForceSoftwareVsync();
+ }
+ 
+ void InProcessWinCompositorWidget::OnDestroyWindow() {
+   gfx::CriticalSectionAutoEnter presentLock(&mPresentLock);
++  MutexAutoLock lock(mTransparentSurfaceLock);
++  mTransparentSurface = nullptr;
++  mMemoryDC = nullptr;
+ }
+ 
+ bool InProcessWinCompositorWidget::OnWindowResize(
+@@ -60,6 +76,10 @@ bool InProcessWinCompositorWidget::OnWindowResize(
+   return true;
+ }
+ 
++bool InProcessWinCompositorWidget::DrawsToMemoryDC() const {
++  return ::GetWindowLongPtrW(mWnd, GWL_EXSTYLE) & WS_EX_LAYERED;
++}
++
+ bool InProcessWinCompositorWidget::PreRender(WidgetRenderingContext* aContext) {
+   // This can block waiting for WM_SETTEXT to finish
+   // Using PreRender is unnecessarily pessimistic because
+@@ -84,18 +104,28 @@ LayoutDeviceIntSize InProcessWinCompositorWidget::GetClientSize() {
+ 
+ already_AddRefed<gfx::DrawTarget>
+ InProcessWinCompositorWidget::StartRemoteDrawing() {
++  MutexAutoLock lock(mTransparentSurfaceLock);
++
+   MOZ_ASSERT(!mCompositeDC);
+ 
++  RefPtr<gfxASurface> surf;
++  if (DrawsToMemoryDC()) {
++    surf = EnsureTransparentSurface();
++  }
++
+   // Must call this after EnsureTransparentSurface(), since it could update
+   // the DC.
+   HDC dc = GetWindowSurface();
+-  if (!dc) {
+-    return nullptr;
++  if (!surf) {
++    if (!dc) {
++      return nullptr;
++    }
++    uint32_t flags = TransparencyModeIs(TransparencyMode::Opaque)
++                         ? 0
++                         : gfxWindowsSurface::FLAG_IS_TRANSPARENT;
++    surf = new gfxWindowsSurface(dc, flags);
+   }
+-  uint32_t flags = TransparencyModeIs(TransparencyMode::Opaque)
+-                       ? 0
+-                       : gfxWindowsSurface::FLAG_IS_TRANSPARENT;
+-  RefPtr<gfxASurface> surf = new gfxWindowsSurface(dc, flags);
++
+   IntSize size = surf->GetSize();
+   if (size.width <= 0 || size.height <= 0) {
+     if (dc) {
+@@ -118,12 +148,45 @@ InProcessWinCompositorWidget::StartRemoteDrawing() {
+ 
+ void InProcessWinCompositorWidget::EndRemoteDrawing() {
+   MOZ_ASSERT(!mLockedBackBufferData);
++
++  if (DrawsToMemoryDC()) {
++    MOZ_ASSERT(mTransparentSurface);
++    RedrawTransparentWindow();
++  }
+   if (mCompositeDC) {
+     FreeWindowSurface(mCompositeDC);
+   }
+   mCompositeDC = nullptr;
+ }
+ 
++bool InProcessWinCompositorWidget::NeedsToDeferEndRemoteDrawing() {
++  if (mNotDeferEndRemoteDrawing) {
++    return false;
++  }
++
++  IDirectDraw7* ddraw = DeviceManagerDx::Get()->GetDirectDraw();
++  if (!ddraw) {
++    return false;
++  }
++
++  DWORD scanLine = 0;
++  int height = ::GetSystemMetrics(SM_CYSCREEN);
++  HRESULT ret = ddraw->GetScanLine(&scanLine);
++  if (ret == DDERR_VERTICALBLANKINPROGRESS) {
++    scanLine = 0;
++  } else if (ret != DD_OK) {
++    return false;
++  }
++
++  // Check if there is a risk of tearing with GDI.
++  if (static_cast<int>(scanLine) > height / 2) {
++    // No need to defer.
++    return false;
++  }
++
++  return true;
++}
++
+ already_AddRefed<gfx::DrawTarget>
+ InProcessWinCompositorWidget::GetBackBufferDrawTarget(
+     gfx::DrawTarget* aScreenTarget, const gfx::IntRect& aRect,
+@@ -173,9 +236,45 @@ void InProcessWinCompositorWidget::EnterPresentLock() { mPresentLock.Enter(); }
+ 
+ void InProcessWinCompositorWidget::LeavePresentLock() { mPresentLock.Leave(); }
+ 
++RefPtr<gfxASurface> InProcessWinCompositorWidget::EnsureTransparentSurface() {
++  mTransparentSurfaceLock.AssertCurrentThreadOwns();
++  MOZ_ASSERT(DrawsToMemoryDC());
++
++  IntSize size = GetClientSize().ToUnknownSize();
++  if (!mTransparentSurface || mTransparentSurface->GetSize() != size) {
++    mTransparentSurface = nullptr;
++    mMemoryDC = nullptr;
++    CreateTransparentSurface(size);
++  }
++
++  RefPtr<gfxASurface> surface = mTransparentSurface;
++  return surface.forget();
++}
++
++void InProcessWinCompositorWidget::CreateTransparentSurface(
++    const gfx::IntSize& aSize) {
++  mTransparentSurfaceLock.AssertCurrentThreadOwns();
++  MOZ_ASSERT(!mTransparentSurface && !mMemoryDC);
++  RefPtr<gfxWindowsSurface> surface =
++      new gfxWindowsSurface(aSize, SurfaceFormat::A8R8G8B8_UINT32);
++  mTransparentSurface = surface;
++  mMemoryDC = surface->GetDC();
++}
++
+ void InProcessWinCompositorWidget::UpdateTransparency(TransparencyMode aMode) {
+   gfx::CriticalSectionAutoEnter presentLock(&mPresentLock);
++  MutexAutoLock lock(mTransparentSurfaceLock);
++  if (TransparencyModeIs(aMode)) {
++    return;
++  }
++
+   SetTransparencyMode(aMode);
++  mTransparentSurface = nullptr;
++  mMemoryDC = nullptr;
++
++  if (DrawsToMemoryDC()) {
++    EnsureTransparentSurface();
++  }
+ }
+ 
+ void InProcessWinCompositorWidget::NotifyVisibilityUpdated(
+@@ -188,10 +287,54 @@ bool InProcessWinCompositorWidget::GetWindowIsFullyOccluded() const {
+   return isFullyOccluded;
+ }
+ 
+-HDC InProcessWinCompositorWidget::GetWindowSurface() { return ::GetDC(mWnd); }
++void InProcessWinCompositorWidget::ClearTransparentWindow() {
++  gfx::CriticalSectionAutoEnter presentLock(&mPresentLock);
++  MutexAutoLock lock(mTransparentSurfaceLock);
++  if (!mTransparentSurface) {
++    return;
++  }
++
++  EnsureTransparentSurface();
++
++  IntSize size = mTransparentSurface->GetSize();
++  if (!size.IsEmpty()) {
++    RefPtr<DrawTarget> drawTarget =
++        gfxPlatform::CreateDrawTargetForSurface(mTransparentSurface, size);
++    if (!drawTarget) {
++      return;
++    }
++    drawTarget->ClearRect(Rect(0, 0, size.width, size.height));
++    RedrawTransparentWindow();
++  }
++}
++
++bool InProcessWinCompositorWidget::RedrawTransparentWindow() {
++  MOZ_ASSERT(DrawsToMemoryDC());
++
++  LayoutDeviceIntSize size = GetClientSize();
++
++  ::GdiFlush();
++
++  BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
++  SIZE winSize = {size.width, size.height};
++  POINT srcPos = {0, 0};
++  HWND hWnd = WinUtils::GetTopLevelHWND(mWnd, true);
++  RECT winRect;
++  ::GetWindowRect(hWnd, &winRect);
++
++  // perform the alpha blend
++  return !!::UpdateLayeredWindow(hWnd, nullptr, (POINT*)&winRect, &winSize,
++                                 mMemoryDC, &srcPos, 0, &bf, ULW_ALPHA);
++}
++
++HDC InProcessWinCompositorWidget::GetWindowSurface() {
++  return DrawsToMemoryDC() ? mMemoryDC : ::GetDC(mWnd);
++}
+ 
+ void InProcessWinCompositorWidget::FreeWindowSurface(HDC dc) {
+-  ::ReleaseDC(mWnd, dc);
++  if (!DrawsToMemoryDC()) {
++    ::ReleaseDC(mWnd, dc);
++  }
+ }
+ 
+ bool InProcessWinCompositorWidget::IsHidden() const { return ::IsIconic(mWnd); }
+diff --git a/widget/windows/InProcessWinCompositorWidget.h b/widget/windows/InProcessWinCompositorWidget.h
+index b1799de8c3716e7c78a598853b3c40d19ecf98bc..d612fb52dabb1546721c004d146cca19f96e3150 100644
+--- a/widget/windows/InProcessWinCompositorWidget.h
++++ b/widget/windows/InProcessWinCompositorWidget.h
+@@ -29,6 +29,7 @@ class InProcessWinCompositorWidget final
+   void PostRender(WidgetRenderingContext*) override;
+   already_AddRefed<gfx::DrawTarget> StartRemoteDrawing() override;
+   void EndRemoteDrawing() override;
++  bool NeedsToDeferEndRemoteDrawing() override;
+   LayoutDeviceIntSize GetClientSize() override;
+   already_AddRefed<gfx::DrawTarget> GetBackBufferDrawTarget(
+       gfx::DrawTarget* aScreenTarget, const gfx::IntRect& aRect,
+@@ -46,6 +47,19 @@ class InProcessWinCompositorWidget final
+   bool OnWindowResize(const LayoutDeviceIntSize& aSize) override;
+   void UpdateTransparency(TransparencyMode aMode) override;
+   void NotifyVisibilityUpdated(bool aIsFullyOccluded) override;
++  void ClearTransparentWindow() override;
++
++  bool DrawsToMemoryDC() const;
++  bool RedrawTransparentWindow();
++
++  // Ensure that a transparent surface exists, then return it.
++  RefPtr<gfxASurface> EnsureTransparentSurface();
++
++  HDC GetTransparentDC() const { return mMemoryDC; }
++
++  mozilla::Mutex& GetTransparentSurfaceLock() {
++    return mTransparentSurfaceLock;
++  }
+ 
+   bool GetWindowIsFullyOccluded() const override;
+ 
+@@ -60,19 +74,28 @@ class InProcessWinCompositorWidget final
+   HDC GetWindowSurface();
+   void FreeWindowSurface(HDC dc);
+ 
++  void CreateTransparentSurface(const gfx::IntSize& aSize);
++
+   nsWindow* mWindow;
+ 
+   HWND mWnd;
+ 
+   gfx::CriticalSection mPresentLock;
+ 
++  // Transparency handling.
++  mozilla::Mutex mTransparentSurfaceLock MOZ_UNANNOTATED;
++
+   // Visibility handling.
+   mozilla::Atomic<bool, MemoryOrdering::Relaxed> mIsFullyOccluded;
+ 
++  RefPtr<gfxASurface> mTransparentSurface;
++  HDC mMemoryDC;
+   HDC mCompositeDC;
+ 
+   // Locked back buffer of BasicCompositor
+   uint8_t* mLockedBackBufferData;
++
++  bool mNotDeferEndRemoteDrawing;
+ };
+ 
+ }  // namespace mozilla::widget
+diff --git a/widget/windows/PCompositorWidget.ipdl b/widget/windows/PCompositorWidget.ipdl
+index 62888b7d9426e5b364a82fb94671d84a556bd241..81cc9a3891b695193acefcffd425f0db4385bec9 100644
+--- a/widget/windows/PCompositorWidget.ipdl
++++ b/widget/windows/PCompositorWidget.ipdl
+@@ -35,6 +35,7 @@ parent:
+   sync LeavePresentLock();
+   async NotifyVisibilityUpdated(bool aIsFullyOccluded);
+   async UpdateTransparency(TransparencyMode aMode);
++  sync ClearTransparentWindow();
+   async __delete__();
+ 
+ child:
+diff --git a/widget/windows/RemoteBackbuffer.cpp b/widget/windows/RemoteBackbuffer.cpp
+index 425e7d022f68626cc6e81837d13a30a6e107ccf1..e743fd484668e4dd8280b3ae3bfb18ca6889e845 100644
+--- a/widget/windows/RemoteBackbuffer.cpp
++++ b/widget/windows/RemoteBackbuffer.cpp
+@@ -255,6 +255,36 @@ class PresentableSharedImage {
+ 
+   bool PresentToWindow(HWND aWindowHandle,
+                        Span<const IpcSafeRect> aDirtyRects) {
++    if (::GetWindowLongPtrW(aWindowHandle, GWL_EXSTYLE) & WS_EX_LAYERED) {
++      BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
++      POINT srcPos = {0, 0};
++      RECT clientRect = {};
++      if (!::GetClientRect(aWindowHandle, &clientRect)) {
++        return false;
++      }
++      MOZ_ASSERT(clientRect.left == 0);
++      MOZ_ASSERT(clientRect.top == 0);
++      int32_t width = clientRect.right;
++      int32_t height = clientRect.bottom;
++      SIZE winSize = {width, height};
++      // Window resize could cause the client area to be different than
++      // mSharedImage's size. If the client area doesn't match,
++      // PresentToWindow() returns false without calling UpdateLayeredWindow().
++      // Another call to UpdateLayeredWindow() will follow shortly, since the
++      // resize will eventually force the backbuffer to repaint itself again.
++      // When client area is larger than mSharedImage's size,
++      // UpdateLayeredWindow() draws the window completely invisible. But it
++      // does not return false.
++      if (width != mSharedImage.GetWidth() ||
++          height != mSharedImage.GetHeight()) {
++        return false;
++      }
++
++      return !!::UpdateLayeredWindow(
++          aWindowHandle, nullptr /*paletteDC*/, nullptr /*newPos*/, &winSize,
++          mDeviceContext, &srcPos, 0 /*colorKey*/, &bf, ULW_ALPHA);
++    }
++
+     gfx::IntRect sharedImageRect{0, 0, mSharedImage.GetWidth(),
+                                  mSharedImage.GetHeight()};
+ 
+diff --git a/widget/windows/WinCompositorWidget.h b/widget/windows/WinCompositorWidget.h
+index 7206f97dab7f4b8310638251f568fd497058be2b..1c4fcbba1e54407d29fb66a6c7268a75252f6aba 100644
+--- a/widget/windows/WinCompositorWidget.h
++++ b/widget/windows/WinCompositorWidget.h
+@@ -30,6 +30,7 @@ class PlatformCompositorWidgetDelegate : public CompositorWidgetDelegate {
+ 
+   // Transparency handling.
+   virtual void UpdateTransparency(TransparencyMode aMode) = 0;
++  virtual void ClearTransparentWindow() = 0;
+ 
+   // Deliver visibility info
+   virtual void NotifyVisibilityUpdated(bool aIsFullyOccluded) = 0;
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 59b1f941d0da904a9264f8d0bd261b4df55572cf..7f03aa802973e6eab5e4cd5778d4233834964c40 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -1545,8 +1545,15 @@ void nsWindow::Show(bool aState) {
+ #endif  // defined(ACCESSIBILITY)
+   }
+ 
+-  MOZ_ASSERT_IF(mWindowType == WindowType::Popup,
+-                ChooseWindowClass(mWindowType) == kClassNameDropShadow);
++  if (mWindowType == WindowType::Popup) {
++    MOZ_ASSERT(ChooseWindowClass(mWindowType) == kClassNameDropShadow);
++    // WS_EX_COMPOSITED conflicts with the WS_EX_LAYERED style and causes
++    // some popup menus to become invisible.
++    LONG_PTR exStyle = ::GetWindowLongPtrW(mWnd, GWL_EXSTYLE);
++    if (exStyle & WS_EX_LAYERED) {
++      ::SetWindowLongPtrW(mWnd, GWL_EXSTYLE, exStyle & ~WS_EX_COMPOSITED);
++    }
++  }
+ 
+   bool syncInvalidate = false;
+ 
+@@ -1695,6 +1702,13 @@ void nsWindow::Show(bool aState) {
+         }
+       }
+     } else {
++      // Clear contents to avoid ghosting of old content if we display
++      // this window again.
++      if (wasVisible && mTransparencyMode == TransparencyMode::Transparent) {
++        if (mCompositorWidgetDelegate) {
++          mCompositorWidgetDelegate->ClearTransparentWindow();
++        }
++      }
+       if (mWindowType != WindowType::Dialog) {
+         ::ShowWindow(mWnd, SW_HIDE);
+       } else {
+@@ -7130,6 +7144,17 @@ void nsWindow::SetTransparencyMode(TransparencyMode aMode) {
+   }
+ 
+   MOZ_ASSERT(WinUtils::GetTopLevelHWND(mWnd, true) == mWnd);
++  if (IsPopup()) {
++    // This can probably go away if we make transparent popups report true in
++    // WidgetTypeSupportsAcceleration(). See there for context.
++    LONG_PTR exStyle = ::GetWindowLongPtr(mWnd, GWL_EXSTYLE);
++    if (aMode == TransparencyMode::Transparent) {
++      exStyle |= WS_EX_LAYERED;
++    } else {
++      exStyle &= ~WS_EX_LAYERED;
++    }
++    ::SetWindowLongPtrW(mWnd, GWL_EXSTYLE, exStyle);
++  }
+   MOZ_ASSERT(GetTopLevelWindow(true) == this);
+ 
+   mTransparencyMode = aMode;
+@@ -8546,7 +8546,13 @@ void nsWindow::PickerClosed() {
+   }
+ }
+ 
+-bool nsWindow::WidgetTypeSupportsAcceleration() { return true; }
++bool nsWindow::WidgetTypeSupportsAcceleration() {
++  if (IsPopup()) {
++    return mTransparencyMode != TransparencyMode::Transparent &&
++           !DeviceManagerDx::Get()->IsWARP();
++  }
++  return true;
++}
+ 
+ bool nsWindow::DispatchTouchEventFromWMPointer(
+     UINT msg, LPARAM aLParam, const WinPointerInfo& aPointerInfo,
+diff --git a/widget/windows/nsWindowGfx.cpp b/widget/windows/nsWindowGfx.cpp
+index b52909f869e8f60c8388557c583af45328d2625c..1e83295b272607f9152d69b33dd2a0df83508125 100644
+--- a/widget/windows/nsWindowGfx.cpp
++++ b/widget/windows/nsWindowGfx.cpp
+@@ -193,6 +193,18 @@ bool nsWindow::OnPaint() {
+     listener->WillPaintWindow(this);
+   }
+ 
++  // For layered translucent popups all drawing should go to memory DC and no
++  // WM_PAINT messages are normally generated. To support asynchronous painting
++  // we force generation of WM_PAINT messages by invalidating window areas with
++  // RedrawWindow, InvalidateRect or InvalidateRgn function calls.
++  const bool usingMemoryDC = IsPopup() && isFallback && isTransparent;
++  const LayoutDeviceIntRect winRect = [&] {
++    RECT r;
++    ::GetWindowRect(mWnd, &r);
++    ::MapWindowPoints(nullptr, mWnd, (LPPOINT)&r, 2);
++    return WinUtils::ToIntRect(r);
++  }();
++
+   bool didPaint = false;
+   // BeginPaint/EndPaint must be called to make Windows think that invalid
+   // area is painted. Otherwise it will continue sending the same message
+@@ -202,8 +214,40 @@ bool nsWindow::OnPaint() {
+   // [1]:
+   // https://learn.microsoft.com/en-us/windows/win32/gdi/the-wm-paint-message
+   HDC hDC = ::BeginPaint(mWnd, &ps);
+-  auto endPaint = MakeScopeExit([&] {
++  LayoutDeviceIntRegion region;
++  LayoutDeviceIntRegion regionToClear;
++  if (usingMemoryDC) {
+     ::EndPaint(mWnd, &ps);
++    // We're guaranteed to have a widget proxy since we called
++    // GetLayerManager().
++    hDC = mBasicLayersSurface->GetTransparentDC();
++    region = LayoutDeviceIntRegion{winRect};
++  } else {
++    region = GetRegionToPaint(ps, hDC);
++    // Clear the translucent region if needed.
++    if (isTransparent) {
++      auto translucentRegion = GetTranslucentRegion();
++      // Clear the parts of the translucent region that aren't clear already or
++      // that Windows has told us to repaint.
++      // NOTE(emilio): Ordering of region ops is a bit subtle to avoid
++      // unnecessary copies, but we want to end up with:
++      //   regionToClear = translucentRegion - (mClearedRegion - region)
++      //   mClearedRegion = translucentRegion;
++      //   And add translucentRegion to region afterwards.
++      regionToClear = translucentRegion;
++      if (!mClearedRegion.IsEmpty()) {
++        mClearedRegion.SubOut(region);
++        regionToClear.SubOut(mClearedRegion);
++      }
++      region.OrWith(translucentRegion);
++      mClearedRegion = std::move(translucentRegion);
++    }
++  }
++
++  auto endPaint = MakeScopeExit([&] {
++    if (!usingMemoryDC) {
++      ::EndPaint(mWnd, &ps);
++    }
+     if (didPaint) {
+       mLastPaintEndTime = TimeStamp::Now();
+       if (nsIWidgetListener* listener = GetPaintListener()) {
+@@ -212,35 +256,23 @@ bool nsWindow::OnPaint() {
+     }
+   });
+ 
+-  LayoutDeviceIntRegion region = GetRegionToPaint(ps, hDC);
+-  LayoutDeviceIntRegion regionToClear;
+-  // Clear the translucent region if needed.
+-  if (isTransparent) {
+-    auto translucentRegion = GetTranslucentRegion();
+-    // Clear the parts of the translucent region that aren't clear already or
+-    // that Windows has told us to repaint.
+-    // NOTE(emilio): Ordering of region ops is a bit subtle to avoid
+-    // unnecessary copies, but we want to end up with:
+-    //   regionToClear = translucentRegion - (mClearedRegion - region)
+-    //   mClearedRegion = translucentRegion;
+-    //   And add translucentRegion to region afterwards.
+-    regionToClear = translucentRegion;
+-    if (!mClearedRegion.IsEmpty()) {
+-      mClearedRegion.SubOut(region);
+-      regionToClear.SubOut(mClearedRegion);
+-    }
+-    region.OrWith(translucentRegion);
+-    mClearedRegion = std::move(translucentRegion);
+-  }
+-
+   if (region.IsEmpty() || !GetPaintListener()) {
+     return false;
+   }
+ 
+   Maybe<FallbackPaintContext> fallback;
+   if (isFallback) {
+-    uint32_t flags = isTransparent ? gfxWindowsSurface::FLAG_IS_TRANSPARENT : 0;
+-    RefPtr<gfxASurface> targetSurface = new gfxWindowsSurface(hDC, flags);
++    RefPtr<gfxASurface> targetSurface;
++    if (usingMemoryDC) {
++      // This mutex needs to be held when EnsureTransparentSurface is
++      // called.
++      MutexAutoLock lock(mBasicLayersSurface->GetTransparentSurfaceLock());
++      targetSurface = mBasicLayersSurface->EnsureTransparentSurface();
++    }
++    if (!targetSurface) {
++      uint32_t flags = isTransparent ? gfxWindowsSurface::FLAG_IS_TRANSPARENT : 0;
++      targetSurface = new gfxWindowsSurface(hDC, flags);
++    }
+     RECT paintRect;
+     ::GetClientRect(mWnd, &paintRect);
+     RefPtr<DrawTarget> dt = gfxPlatform::CreateDrawTargetForSurface(
+@@ -251,6 +283,9 @@ bool nsWindow::OnPaint() {
+       return false;
+     }
+ 
++    if (usingMemoryDC) {
++      dt->ClearRect(Rect(dt->GetRect()));
++    }
+     fallback.emplace(this, std::move(targetSurface), std::move(dt));
+   }
+ 
+@@ -288,6 +323,14 @@ bool nsWindow::OnPaint() {
+     result = listener->PaintWindow(this, region);
+   }
+ 
++  if (usingMemoryDC) {
++    // Data from offscreen drawing surface was copied to memory bitmap of
++    // transparent bitmap. Now it can be read from memory bitmap to apply
++    // alpha channel and after that displayed on the screen.
++    fallback.reset();
++    mBasicLayersSurface->RedrawTransparentWindow();
++  }
++
+   if (!isFallback && !gfxEnv::MOZ_DISABLE_FORCE_PRESENT()) {
+     NS_DispatchToMainThread(NewRunnableMethod("nsWindow::ForcePresent", this,
+                                               &nsWindow::ForcePresent));

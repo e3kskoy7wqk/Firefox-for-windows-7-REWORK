@@ -1,0 +1,100 @@
+diff --git a/browser/installer/Makefile.in b/browser/installer/Makefile.in
+index 7c014851c543..5ebf0299e856 100644
+--- a/browser/installer/Makefile.in
++++ b/browser/installer/Makefile.in
+@@ -75,6 +75,7 @@ ifdef MSVC_C_RUNTIME_1_DLL
+ DEFINES += -DMSVC_C_RUNTIME_1_DLL=$(MSVC_C_RUNTIME_1_DLL)
+ endif
+ DEFINES += -DMSVC_CXX_RUNTIME_DLL=$(MSVC_CXX_RUNTIME_DLL)
++DEFINES += -DMSVC_CONCUR_RUNTIME_DLL=$(MSVC_CONCUR_RUNTIME_DLL)
+ endif
+ ifdef WIN_UCRT_REDIST_DIR
+ DEFINES += -DMOZ_PACKAGE_WIN_UCRT_DLLS=1
+diff --git a/browser/installer/package-manifest.in b/browser/installer/package-manifest.in
+index 0a436ff05c8a..92e7d6181d6c 100644
+--- a/browser/installer/package-manifest.in
++++ b/browser/installer/package-manifest.in
+@@ -100,10 +100,16 @@
+ @BINPATH@/@MSVC_C_RUNTIME_1_DLL@
+ #endif
+ @BINPATH@/@MSVC_CXX_RUNTIME_DLL@
++@BINPATH@/@MSVC_CONCUR_RUNTIME_DLL@
+ #endif
+ #if MOZ_PACKAGE_WIN_UCRT_DLLS
+ @BINPATH@/api-ms-win-*.dll
+ @BINPATH@/ucrtbase.dll
++@BINPATH@/advapiwp.dll
++@BINPATH@/DWrite.dll
++@BINPATH@/krnwrp.dll
++@BINPATH@/olewp.dll
++@BINPATH@/shellwp.dll
+ #endif
+ #endif
+ #ifdef MOZ_GTK
+diff --git a/build/win32/moz.build b/build/win32/moz.build
+index 32defa1dc8e7..0f8b1edb6a79 100644
+--- a/build/win32/moz.build
++++ b/build/win32/moz.build
+@@ -27,20 +27,10 @@ if CONFIG["CC_TYPE"] == "clang":
+ 
+ 
+ if CONFIG["WIN32_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
+-    for f in ["MSVC_C_RUNTIME_DLL", "MSVC_C_RUNTIME_1_DLL", "MSVC_CXX_RUNTIME_DLL"]:
++    for f in ["MSVC_C_RUNTIME_DLL", "MSVC_C_RUNTIME_1_DLL", "MSVC_CXX_RUNTIME_DLL", "MSVC_CONCUR_RUNTIME_DLL"]:
+         if CONFIG[f]:
+             FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN32_REDIST_DIR"], CONFIG[f])]
+ 
+ if CONFIG["WIN_UCRT_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
+-    win7_ucrt_redists = [
+-        "api-ms-win-core-file-l1-2-0.dll",
+-        "api-ms-win-core-file-l2-1-0.dll",
+-        "api-ms-win-core-localization-l1-2-0.dll",
+-        "api-ms-win-core-processthreads-l1-1-1.dll",
+-        "api-ms-win-core-synch-l1-2-0.dll",
+-        "api-ms-win-core-timezone-l1-1-0.dll",
+-        "api-ms-win-crt-*.dll",
+-        "ucrtbase.dll",
+-    ]
+-    for f in win7_ucrt_redists:
++    for f in ["api-ms-win-*.dll", "ucrtbase.dll", "advapiwp.dll", "DWrite.dll", "krnwrp.dll", "olewp.dll", "shellwp.dll"]:
+         FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN_UCRT_REDIST_DIR"], f)]
+diff --git a/gfx/thebes/gfxWindowsPlatform.cpp b/gfx/thebes/gfxWindowsPlatform.cpp
+index c405b5a03168..49cadf633e26 100644
+--- a/gfx/thebes/gfxWindowsPlatform.cpp
++++ b/gfx/thebes/gfxWindowsPlatform.cpp
+@@ -1926,7 +1926,7 @@ void gfxWindowsPlatform::BuildContentDeviceData(ContentDeviceData* aOut) {
+ 
+ bool gfxWindowsPlatform::CheckVariationFontSupport() {
+   // Variation font support is only available on Fall Creators Update or later.
+-  return IsWin10FallCreatorsUpdateOrLater();
++  return true;//return IsWin10FallCreatorsUpdateOrLater();
+ }
+ 
+ void gfxWindowsPlatform::GetPlatformDisplayInfo(
+diff --git a/build/moz.configure/windows.configure b/build/moz.configure/windows.configure
+index 0f4cc510a5e03f1320a663fe9189fb1250b5c960..be1e97c4f1817dae165329f9937972cb95132463 100644
+--- a/build/moz.configure/windows.configure
++++ b/build/moz.configure/windows.configure
+@@ -601,6 +601,7 @@ with only_when(depends(c_compiler)(lambda c: c.type == "clang-cl")):
+         when=depends(target)(lambda target: target.cpu != "x86"),
+     )
+     set_config("MSVC_CXX_RUNTIME_DLL", "msvcp140.dll")
++    set_config("MSVC_CONCUR_RUNTIME_DLL", "concrt140.dll")
+ 
+     # Disable warnings about using MSVC-specific secure CRT functions.
+     set_define("_CRT_SECURE_NO_WARNINGS", True)
+diff --git a/toolkit/mozapps/installer/upload-files.mk b/toolkit/mozapps/installer/upload-files.mk
+index 01b3f95e3a9a..618c2e2806f5 100644
+--- a/toolkit/mozapps/installer/upload-files.mk
++++ b/toolkit/mozapps/installer/upload-files.mk
+@@ -73,6 +73,10 @@ endif
+ ifdef MSVC_CXX_RUNTIME_DLL
+   JSSHELL_BINS += $(MSVC_CXX_RUNTIME_DLL)
+ endif
++ifdef MSVC_CONCUR_RUNTIME_DLL
++  JSSHELL_BINS += $(MSVC_CONCUR_RUNTIME_DLL)
++endif
++
+ 
+ ifdef WIN_UCRT_REDIST_DIR
+   JSSHELL_BINS += $(notdir $(wildcard $(DIST)/bin/api-ms-win-*.dll))

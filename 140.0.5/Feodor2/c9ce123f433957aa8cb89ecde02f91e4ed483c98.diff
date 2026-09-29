@@ -1,0 +1,22 @@
+diff --git a/dom/geolocation/Geolocation.cpp b/dom/geolocation/Geolocation.cpp
+index 9124b34b3690..ff6fe276e3f5 100644
+--- a/dom/geolocation/Geolocation.cpp
++++ b/dom/geolocation/Geolocation.cpp
+@@ -55,6 +55,7 @@ class nsIPrincipal;
+ 
+ #ifdef XP_WIN
+ #  include "WindowsLocationProvider.h"
++#  include "mozilla/WindowsVersion.h"
+ #endif
+ 
+ // Some limit to the number of get or watch geolocation requests
+@@ -527,7 +528,8 @@ nsresult nsGeolocationService::Init() {
+ #endif
+ 
+ #ifdef XP_WIN
+-  if (Preferences::GetBool("geo.provider.ms-windows-location", false)) {
++  if (Preferences::GetBool("geo.provider.ms-windows-location", false) &&
++      IsWin8OrLater()) {
+     mProvider = new WindowsLocationProvider();
+   }
+ #endif

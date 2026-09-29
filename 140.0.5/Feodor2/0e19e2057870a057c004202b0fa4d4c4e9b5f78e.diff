@@ -1,0 +1,1525 @@
+diff --git a/dom/media/ipc/RemoteDecoderModule.cpp b/dom/media/ipc/RemoteDecoderModule.cpp
+index 4d61f67a0ef0..1716e2fe8b4f 100644
+--- a/dom/media/ipc/RemoteDecoderModule.cpp
++++ b/dom/media/ipc/RemoteDecoderModule.cpp
+@@ -8,11 +8,14 @@
+ #ifdef MOZ_AV1
+ #  include "AOMDecoder.h"
+ #endif
++#include "OpusDecoder.h"
+ #include "RemoteAudioDecoder.h"
+ #include "RemoteDecoderManagerChild.h"
+ #include "RemoteMediaDataDecoder.h"
+ #include "RemoteVideoDecoder.h"
+ #include "VideoUtils.h"
++#include "VorbisDecoder.h"
++#include "WAVDecoder.h"
+ #include "gfxConfig.h"
+ #include "mozilla/RemoteDecodeUtils.h"
+ 
+@@ -70,7 +73,7 @@ RemoteDecoderModule::AsyncCreateDecoder(const CreateDecoderParams& aParams) {
+     // that IsDefaultPlaybackDeviceMono provides.  We want to avoid calls
+     // to IsDefaultPlaybackDeviceMono on RDD because initializing audio
+     // backends on RDD will be blocked by the sandbox.
+-    if (aParams.mConfig.mMimeType.Equals("audio/opus") &&
++    if (OpusDataDecoder::IsOpus(aParams.mConfig.mMimeType) &&
+         IsDefaultPlaybackDeviceMono()) {
+       CreateDecoderParams params = aParams;
+       params.mOptions += CreateDecoderParams::Option::DefaultPlaybackDeviceMono;
+diff --git a/dom/media/mediasource/MediaSourceDemuxer.cpp b/dom/media/mediasource/MediaSourceDemuxer.cpp
+index 6df15cb2d4d0..676776d4d29b 100644
+--- a/dom/media/mediasource/MediaSourceDemuxer.cpp
++++ b/dom/media/mediasource/MediaSourceDemuxer.cpp
+@@ -7,7 +7,9 @@
+ #include "MediaSourceDemuxer.h"
+ 
+ #include "MediaSourceUtils.h"
++#include "OpusDecoder.h"
+ #include "SourceBufferList.h"
++#include "VorbisDecoder.h"
+ #include "VideoUtils.h"
+ #include "nsPrintfCString.h"
+ 
+@@ -275,9 +277,9 @@ MediaSourceTrackDemuxer::MediaSourceTrackDemuxer(MediaSourceDemuxer* aParent,
+       mManager(aManager),
+       mReset(true),
+       mPreRoll(TimeUnit::FromMicroseconds(
+-          mParent->GetTrackInfo(mType)->mMimeType.EqualsLiteral("audio/opus") ||
+-                  mParent->GetTrackInfo(mType)->mMimeType.EqualsLiteral(
+-                      "audio/vorbis")
++          OpusDataDecoder::IsOpus(mParent->GetTrackInfo(mType)->mMimeType) ||
++                  VorbisDataDecoder::IsVorbis(
++                      mParent->GetTrackInfo(mType)->mMimeType)
+               ? 80000
+           : mParent->GetTrackInfo(mType)->mMimeType.EqualsLiteral(
+                 "audio/mp4a-latm")
+diff --git a/dom/media/mp4/DecoderData.cpp b/dom/media/mp4/DecoderData.cpp
+index 185bfb87e418..a197c968a4e1 100644
+--- a/dom/media/mp4/DecoderData.cpp
++++ b/dom/media/mp4/DecoderData.cpp
+@@ -13,6 +13,8 @@
+ #include "MP4Metadata.h"
+ #include "mozilla/Logging.h"
+ 
++// OpusDecoder header is really needed only by MP4 in rust
++#include "OpusDecoder.h"
+ #include "mp4parse.h"
+ 
+ #define LOG(...) \
+diff --git a/dom/media/ogg/OggCodecState.cpp b/dom/media/ogg/OggCodecState.cpp
+index 126ebae99943..0e8f5920b39b 100644
+--- a/dom/media/ogg/OggCodecState.cpp
++++ b/dom/media/ogg/OggCodecState.cpp
+@@ -17,6 +17,7 @@
+ 
+ #include "OggCodecState.h"
+ #include "OggRLBox.h"
++#include "OpusDecoder.h"
+ #include "OpusParser.h"
+ #include "VideoUtils.h"
+ #include "XiphExtradata.h"
+diff --git a/dom/media/platforms/MediaCodecsSupport.cpp b/dom/media/platforms/MediaCodecsSupport.cpp
+index 13c10ab3899f..8672df3e3d89 100644
+--- a/dom/media/platforms/MediaCodecsSupport.cpp
++++ b/dom/media/platforms/MediaCodecsSupport.cpp
+@@ -10,12 +10,14 @@
+ #endif
+ #include "MediaCodecsSupport.h"
+ #include "MP4Decoder.h"
++#include "OpusDecoder.h"
+ #include "PlatformDecoderModule.h"
+ #include "VPXDecoder.h"
++#include "VorbisDecoder.h"
++#include "WAVDecoder.h"
+ #include "mozilla/AppShutdown.h"
+ #include "mozilla/gfx/gfxVars.h"
+ #include "nsTHashMap.h"
+-#include "VideoUtils.h"
+ 
+ using MediaCodecsSupport = mozilla::media::MediaCodecsSupport;
+ 
+@@ -261,16 +263,16 @@ MediaCodec MCSInfo::GetMediaCodecFromMimeType(const nsACString& aMimeType) {
+   if (MP4Decoder::IsAAC(aMimeType)) {
+     return MediaCodec::AAC;
+   }
+-  if (aMimeType.EqualsLiteral("audio/vorbis")) {
++  if (VorbisDataDecoder::IsVorbis(aMimeType)) {
+     return MediaCodec::Vorbis;
+   }
+   if (aMimeType.EqualsLiteral("audio/flac")) {
+     return MediaCodec::FLAC;
+   }
+-  if (IsWaveMimetype(aMimeType)) {
++  if (WaveDataDecoder::IsWave(aMimeType)) {
+     return MediaCodec::Wave;
+   }
+-  if (aMimeType.EqualsLiteral("audio/opus")) {
++  if (OpusDataDecoder::IsOpus(aMimeType)) {
+     return MediaCodec::Opus;
+   }
+   if (aMimeType.EqualsLiteral("audio/mpeg")) {
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index 2964527e0795..9ee5a9a1e7ed 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -19,8 +19,11 @@
+ #include "MP4Decoder.h"
+ #include "MediaChangeMonitor.h"
+ #include "MediaInfo.h"
++#include "OpusDecoder.h"
+ #include "VPXDecoder.h"
+ #include "VideoUtils.h"
++#include "VorbisDecoder.h"
++#include "WAVDecoder.h"
+ #include "mozilla/ClearOnShutdown.h"
+ #include "mozilla/RemoteDecodeUtils.h"
+ #include "mozilla/RemoteDecoderManagerChild.h"
+@@ -879,16 +882,16 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
+     if (aMimeType.EqualsLiteral("audio/mpeg")) {
+       return MCSInfo::GetDecodeSupportSet(MediaCodec::MP3, aSupported);
+     }
+-    if (aMimeType.EqualsLiteral("audio/opus")) {
++    if (OpusDataDecoder::IsOpus(aMimeType)) {
+       return MCSInfo::GetDecodeSupportSet(MediaCodec::Opus, aSupported);
+     }
+-    if (aMimeType.EqualsLiteral("audio/vorbis")) {
++    if (VorbisDataDecoder::IsVorbis(aMimeType)) {
+       return MCSInfo::GetDecodeSupportSet(MediaCodec::Vorbis, aSupported);
+     }
+     if (aMimeType.EqualsLiteral("audio/flac")) {
+       return MCSInfo::GetDecodeSupportSet(MediaCodec::FLAC, aSupported);
+     }
+-    if (IsWaveMimetype(aMimeType)) {
++    if (WaveDataDecoder::IsWave(aMimeType)) {
+       return MCSInfo::GetDecodeSupportSet(MediaCodec::Wave, aSupported);
+     }
+   }
+diff --git a/dom/media/platforms/agnostic/AgnosticDecoderModule.cpp b/dom/media/platforms/agnostic/AgnosticDecoderModule.cpp
+index 7bdc30b43248..c846928cc2aa 100644
+--- a/dom/media/platforms/agnostic/AgnosticDecoderModule.cpp
++++ b/dom/media/platforms/agnostic/AgnosticDecoderModule.cpp
+@@ -6,7 +6,10 @@
+ 
+ #include "AgnosticDecoderModule.h"
+ 
++#include "OpusDecoder.h"
+ #include "VPXDecoder.h"
++#include "VorbisDecoder.h"
++#include "WAVDecoder.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/StaticPrefs_media.h"
+ #include "VideoUtils.h"
+@@ -129,6 +132,9 @@ media::DecodeSupportSet AgnosticDecoderModule::Supports(
+       // something goes wrong with launching the RDD process.
+       (AOMDecoder::IsAV1(mimeType) && IsAvailable(DecoderType::AV1)) ||
+ #endif
++      (VorbisDataDecoder::IsVorbis(mimeType) && IsAvailable(DecoderType::Vorbis)) ||
++      (WaveDataDecoder::IsWave(mimeType) && IsAvailable(DecoderType::Wave)) ||
++      (OpusDataDecoder::IsOpus(mimeType) && IsAvailable(DecoderType::Opus));
+       (VPXDecoder::IsVPX(mimeType) && IsAvailable(DecoderType::VPX));
+   MOZ_LOG(sPDMLog, LogLevel::Debug,
+           ("Agnostic decoder %s requested type '%s'",
+@@ -173,7 +180,22 @@ already_AddRefed<MediaDataDecoder> AgnosticDecoderModule::CreateVideoDecoder(
+ 
+ already_AddRefed<MediaDataDecoder> AgnosticDecoderModule::CreateAudioDecoder(
+     const CreateDecoderParams& aParams) {
+-  return nullptr;
++  if (Supports(SupportDecoderParams(aParams), nullptr /* diagnostic */)
++          .isEmpty()) {
++    return nullptr;
++  }
++  RefPtr<MediaDataDecoder> m;
++
++  const TrackInfo& config = aParams.mConfig;
++  if (VorbisDataDecoder::IsVorbis(config.mMimeType)) {
++    m = new VorbisDataDecoder(aParams);
++  } else if (OpusDataDecoder::IsOpus(config.mMimeType)) {
++    m = new OpusDataDecoder(aParams);
++  } else if (WaveDataDecoder::IsWave(config.mMimeType)) {
++    m = new WaveDataDecoder(aParams);
++  }
++
++  return m.forget();
+ }
+ 
+ /* static */
+diff --git a/dom/media/platforms/agnostic/OpusDecoder.cpp b/dom/media/platforms/agnostic/OpusDecoder.cpp
+new file mode 100644
+index 000000000000..130f25ab9f8e
+--- /dev/null
++++ b/dom/media/platforms/agnostic/OpusDecoder.cpp
+@@ -0,0 +1,360 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "OpusDecoder.h"
++
++#include <inttypes.h>  // For PRId64
++
++#include "OpusParser.h"
++#include "TimeUnits.h"
++#include "VideoUtils.h"
++#include "VorbisDecoder.h"  // For VorbisLayout
++#include "mozilla/EndianUtils.h"
++#include "mozilla/PodOperations.h"
++#include "mozilla/SyncRunnable.h"
++#include <opus/opus.h>
++extern "C" {
++#include <opus/opus_multistream.h>
++}
++
++#define OPUS_DEBUG(arg, ...)                                           \
++  DDMOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, "::%s: " arg, __func__, \
++            ##__VA_ARGS__)
++
++namespace mozilla {
++
++OpusDataDecoder::OpusDataDecoder(const CreateDecoderParams& aParams)
++    : mInfo(aParams.AudioConfig()),
++      mOpusDecoder(nullptr),
++      mSkip(0),
++      mDecodedHeader(false),
++      mPaddingDiscarded(false),
++      mFrames(0),
++      mChannelMap(AudioConfig::ChannelLayout::UNKNOWN_MAP),
++      mDefaultPlaybackDeviceMono(aParams.mOptions.contains(
++          CreateDecoderParams::Option::DefaultPlaybackDeviceMono)) {}
++
++OpusDataDecoder::~OpusDataDecoder() {
++  if (mOpusDecoder) {
++    opus_multistream_decoder_destroy(mOpusDecoder);
++    mOpusDecoder = nullptr;
++  }
++}
++
++RefPtr<ShutdownPromise> OpusDataDecoder::Shutdown() {
++  // mThread may not be set if Init hasn't been called first.
++  MOZ_ASSERT(!mThread || mThread->IsOnCurrentThread());
++  return ShutdownPromise::CreateAndResolve(true, __func__);
++}
++
++RefPtr<MediaDataDecoder::InitPromise> OpusDataDecoder::Init() {
++  mThread = GetCurrentSerialEventTarget();
++  if (!mInfo.mCodecSpecificConfig.is<OpusCodecSpecificData>()) {
++    MOZ_ASSERT_UNREACHABLE();
++    OPUS_DEBUG("Opus decoder got non-opus codec specific data");
++    return InitPromise::CreateAndReject(
++        MediaResult(
++            NS_ERROR_DOM_MEDIA_FATAL_ERR,
++            RESULT_DETAIL("Opus decoder got non-opus codec specific data!")),
++        __func__);
++  }
++  const OpusCodecSpecificData opusCodecSpecificData =
++      mInfo.mCodecSpecificConfig.as<OpusCodecSpecificData>();
++  RefPtr<MediaByteBuffer> opusHeaderBlob =
++      opusCodecSpecificData.mHeadersBinaryBlob;
++  size_t length = opusHeaderBlob->Length();
++  uint8_t* p = opusHeaderBlob->Elements();
++  if (NS_FAILED(DecodeHeader(p, length))) {
++    OPUS_DEBUG("Error decoding header!");
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Error decoding header!")),
++        __func__);
++  }
++
++  MOZ_ASSERT(mMappingTable.Length() >= uint32_t(mOpusParser->mChannels));
++  int r;
++  mOpusDecoder = opus_multistream_decoder_create(
++      mOpusParser->mRate, mOpusParser->mChannels, mOpusParser->mStreams,
++      mOpusParser->mCoupledStreams, mMappingTable.Elements(), &r);
++
++  if (!mOpusDecoder) {
++    OPUS_DEBUG("Error creating decoder!");
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Error creating decoder!")),
++        __func__);
++  }
++
++  // Opus has a special feature for stereo coding where it represent wide
++  // stereo channels by 180-degree out of phase. This improves quality, but
++  // needs to be disabled when the output is downmixed to mono. Playback number
++  // of channels are set in AudioSink, using the same method
++  // `DecideAudioPlaybackChannels()`, and triggers downmix if needed.
++  if (mDefaultPlaybackDeviceMono || DecideAudioPlaybackChannels(mInfo) == 1) {
++    opus_multistream_decoder_ctl(mOpusDecoder,
++                                 OPUS_SET_PHASE_INVERSION_DISABLED(1));
++  }
++
++  mSkip = mOpusParser->mPreSkip;
++  mPaddingDiscarded = false;
++
++  if (opusCodecSpecificData.mContainerCodecDelayFrames !=
++      mOpusParser->mPreSkip) {
++    NS_WARNING(
++        "Invalid Opus header: container CodecDelay and Opus pre-skip do not "
++        "match!");
++  }
++  OPUS_DEBUG("Opus preskip in extradata: %" PRId64 " frames",
++             opusCodecSpecificData.mContainerCodecDelayFrames);
++
++  if (mInfo.mRate != (uint32_t)mOpusParser->mRate) {
++    NS_WARNING("Invalid Opus header: container and codec rate do not match!");
++  }
++  if (mInfo.mChannels != (uint32_t)mOpusParser->mChannels) {
++    NS_WARNING(
++        "Invalid Opus header: container and codec channels do not match!");
++  }
++
++  return r == OPUS_OK
++             ? InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__)
++             : InitPromise::CreateAndReject(
++                   MediaResult(
++                       NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                       RESULT_DETAIL(
++                           "could not create opus multistream decoder!")),
++                   __func__);
++}
++
++nsresult OpusDataDecoder::DecodeHeader(const unsigned char* aData,
++                                       size_t aLength) {
++  MOZ_ASSERT(!mOpusParser);
++  MOZ_ASSERT(!mOpusDecoder);
++  MOZ_ASSERT(!mDecodedHeader);
++  mDecodedHeader = true;
++
++  mOpusParser = MakeUnique<OpusParser>();
++  if (!mOpusParser->DecodeHeader(const_cast<unsigned char*>(aData), aLength)) {
++    return NS_ERROR_FAILURE;
++  }
++  int channels = mOpusParser->mChannels;
++
++  mMappingTable.SetLength(channels);
++  AudioConfig::ChannelLayout vorbisLayout(
++      channels, VorbisDataDecoder::VorbisLayout(channels));
++  if (vorbisLayout.IsValid()) {
++    mChannelMap = vorbisLayout.Map();
++
++    AudioConfig::ChannelLayout smpteLayout(
++        AudioConfig::ChannelLayout::SMPTEDefault(vorbisLayout));
++
++    AutoTArray<uint8_t, 8> map;
++    map.SetLength(channels);
++    if (mOpusParser->mChannelMapping == 1 &&
++        vorbisLayout.MappingTable(smpteLayout, &map)) {
++      for (int i = 0; i < channels; i++) {
++        mMappingTable[i] = mOpusParser->mMappingTable[map[i]];
++      }
++    } else {
++      // Use Opus set channel mapping and return channels as-is.
++      PodCopy(mMappingTable.Elements(), mOpusParser->mMappingTable, channels);
++    }
++  } else {
++    // Create a dummy mapping table so that channel ordering stay the same
++    // during decoding.
++    for (int i = 0; i < channels; i++) {
++      mMappingTable[i] = i;
++    }
++  }
++
++  return NS_OK;
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> OpusDataDecoder::Decode(
++    MediaRawData* aSample) {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  PROCESS_DECODE_LOG(aSample);
++  uint32_t channels = mOpusParser->mChannels;
++
++  if (mPaddingDiscarded) {
++    // Discard padding should be used only on the final packet, so
++    // decoding after a padding discard is invalid.
++    OPUS_DEBUG("Opus error, discard padding on interstitial packet");
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Discard padding on interstitial packet")),
++        __func__);
++  }
++
++  if (!mLastFrameTime ||
++      mLastFrameTime.ref() != aSample->mTime.ToMicroseconds()) {
++    // We are starting a new block.
++    mFrames = 0;
++    mLastFrameTime = Some(aSample->mTime.ToMicroseconds());
++  }
++
++  // Maximum value is 63*2880, so there's no chance of overflow.
++  int frames_number =
++      opus_packet_get_nb_frames(aSample->Data(), aSample->Size());
++  if (frames_number <= 0) {
++    OPUS_DEBUG("Invalid packet header: r=%d length=%zu", frames_number,
++               aSample->Size());
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("Invalid packet header: r=%d length=%u",
++                                  frames_number, uint32_t(aSample->Size()))),
++        __func__);
++  }
++
++  int samples = opus_packet_get_samples_per_frame(
++      aSample->Data(), opus_int32(mOpusParser->mRate));
++
++  // A valid Opus packet must be between 2.5 and 120 ms long (48kHz).
++  CheckedInt32 totalFrames =
++      CheckedInt32(frames_number) * CheckedInt32(samples);
++  if (!totalFrames.isValid()) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("Frames count overflow")),
++        __func__);
++  }
++
++  int frames = totalFrames.value();
++  if (frames < 120 || frames > 5760) {
++    OPUS_DEBUG("Invalid packet frames: %d", frames);
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("Invalid packet frames:%d", frames)),
++        __func__);
++  }
++
++  AlignedAudioBuffer buffer(frames * channels);
++  if (!buffer) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
++  }
++
++  // Decode to the appropriate sample type.
++#ifdef MOZ_SAMPLE_TYPE_FLOAT32
++  int ret = opus_multistream_decode_float(mOpusDecoder, aSample->Data(),
++                                          aSample->Size(), buffer.get(), frames,
++                                          false);
++#else
++  int ret =
++      opus_multistream_decode(mOpusDecoder, aSample->Data(), aSample->Size(),
++                              buffer.get(), frames, false);
++#endif
++  if (ret < 0) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("Opus decoding error:%d", ret)),
++        __func__);
++  }
++  NS_ASSERTION(ret == frames, "Opus decoded too few audio samples");
++  auto startTime = aSample->mTime;
++
++  OPUS_DEBUG("Decoding frames: [%lf, %lf]", aSample->mTime.ToSeconds(),
++             aSample->GetEndTime().ToSeconds());
++
++  // Trim the initial frames while the decoder is settling.
++  if (mSkip > 0) {
++    int32_t skipFrames = std::min<int32_t>(mSkip, frames);
++    int32_t keepFrames = frames - skipFrames;
++    OPUS_DEBUG("Opus decoder trimming %d of %d frames", skipFrames, frames);
++    PodMove(buffer.get(), buffer.get() + skipFrames * channels,
++            keepFrames * channels);
++    startTime = startTime + media::TimeUnit(skipFrames, mOpusParser->mRate);
++    frames = keepFrames;
++    mSkip -= skipFrames;
++    aSample->mTime += media::TimeUnit(skipFrames, 48000);
++    aSample->mDuration -= media::TimeUnit(skipFrames, 48000);
++    OPUS_DEBUG("Adjusted frame after trimming pre-roll: [%lf, %lf]",
++               aSample->mTime.ToSeconds(), aSample->GetEndTime().ToSeconds());
++  }
++
++  // Apply the header gain if one was specified.
++#ifdef MOZ_SAMPLE_TYPE_FLOAT32
++  if (mOpusParser->mGain != 1.0f) {
++    float gain = mOpusParser->mGain;
++    uint32_t samples = frames * channels;
++    for (uint32_t i = 0; i < samples; i++) {
++      buffer[i] *= gain;
++    }
++  }
++#else
++  if (mOpusParser->mGain_Q16 != 65536) {
++    int64_t gain_Q16 = mOpusParser->mGain_Q16;
++    uint32_t samples = frames * channels;
++    for (uint32_t i = 0; i < samples; i++) {
++      int32_t val = static_cast<int32_t>((gain_Q16 * buffer[i] + 32768) >> 16);
++      buffer[i] = static_cast<AudioDataValue>(MOZ_CLIP_TO_15(val));
++    }
++  }
++#endif
++
++  auto duration = media::TimeUnit(frames, mOpusParser->mRate);
++  if (!duration.IsValid()) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
++                    RESULT_DETAIL("Overflow converting WebM audio duration")),
++        __func__);
++  }
++  auto time = startTime -
++              media::TimeUnit(mOpusParser->mPreSkip, mOpusParser->mRate) +
++              media::TimeUnit(mFrames, mOpusParser->mRate);
++  if (!time.IsValid()) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
++                    RESULT_DETAIL("Overflow shifting tstamp by codec delay")),
++        __func__);
++  };
++
++  mFrames += frames;
++  mTotalFrames += frames;
++
++  OPUS_DEBUG("Total frames so far: %" PRId64, mTotalFrames);
++
++  if (!frames) {
++    return DecodePromise::CreateAndResolve(DecodedData(), __func__);
++  }
++
++  // Trim extra allocated frames.
++  buffer.SetLength(frames * channels);
++
++  return DecodePromise::CreateAndResolve(
++      DecodedData{new AudioData(aSample->mOffset, time, std::move(buffer),
++                                mOpusParser->mChannels, mOpusParser->mRate,
++                                mChannelMap)},
++      __func__);
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> OpusDataDecoder::Drain() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  return DecodePromise::CreateAndResolve(DecodedData(), __func__);
++}
++
++RefPtr<MediaDataDecoder::FlushPromise> OpusDataDecoder::Flush() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  if (!mOpusDecoder) {
++    return FlushPromise::CreateAndResolve(true, __func__);
++  }
++
++  MOZ_ASSERT(mOpusDecoder);
++  // Reset the decoder.
++  opus_multistream_decoder_ctl(mOpusDecoder, OPUS_RESET_STATE);
++  mSkip = mOpusParser->mPreSkip;
++  mPaddingDiscarded = false;
++  mLastFrameTime.reset();
++  return FlushPromise::CreateAndResolve(true, __func__);
++}
++
++/* static */
++bool OpusDataDecoder::IsOpus(const nsACString& aMimeType) {
++  return aMimeType.EqualsLiteral("audio/opus");
++}
++
++}  // namespace mozilla
++#undef OPUS_DEBUG
+diff --git a/dom/media/platforms/agnostic/OpusDecoder.h b/dom/media/platforms/agnostic/OpusDecoder.h
+new file mode 100644
+index 000000000000..3df34712924d
+--- /dev/null
++++ b/dom/media/platforms/agnostic/OpusDecoder.h
+@@ -0,0 +1,70 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++#if !defined(OpusDecoder_h_)
++#  define OpusDecoder_h_
++
++#  include "PlatformDecoderModule.h"
++
++#  include "mozilla/Maybe.h"
++#  include "nsTArray.h"
++
++struct OpusMSDecoder;
++
++namespace mozilla {
++
++class OpusParser;
++
++DDLoggedTypeDeclNameAndBase(OpusDataDecoder, MediaDataDecoder);
++
++class OpusDataDecoder final : public MediaDataDecoder,
++                              public DecoderDoctorLifeLogger<OpusDataDecoder> {
++ public:
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(OpusDataDecoder, final);
++
++  explicit OpusDataDecoder(const CreateDecoderParams& aParams);
++
++  RefPtr<InitPromise> Init() override;
++  RefPtr<DecodePromise> Decode(MediaRawData* aSample) override;
++  RefPtr<DecodePromise> Drain() override;
++  RefPtr<FlushPromise> Flush() override;
++  RefPtr<ShutdownPromise> Shutdown() override;
++  nsCString GetDescriptionName() const override {
++    return "opus audio decoder"_ns;
++  }
++  nsCString GetCodecName() const override { return "opus"_ns; }
++
++  // Return true if mimetype is Opus
++  static bool IsOpus(const nsACString& aMimeType);
++
++ private:
++  ~OpusDataDecoder();
++
++  nsresult DecodeHeader(const unsigned char* aData, size_t aLength);
++
++  const AudioInfo mInfo;
++  nsCOMPtr<nsISerialEventTarget> mThread;
++
++  // Opus decoder state
++  UniquePtr<OpusParser> mOpusParser;
++  OpusMSDecoder* mOpusDecoder;
++
++  uint16_t mSkip;  // Samples left to trim before playback.
++  bool mDecodedHeader;
++
++  // Opus padding should only be discarded on the final packet.  Once this
++  // is set to true, if the reader attempts to decode any further packets it
++  // will raise an error so we can indicate that the file is invalid.
++  bool mPaddingDiscarded;
++  int64_t mFrames;
++  int64_t mTotalFrames = 0;
++  Maybe<int64_t> mLastFrameTime;
++  AutoTArray<uint8_t, 8> mMappingTable;
++  AudioConfig::ChannelLayout::ChannelMap mChannelMap;
++  bool mDefaultPlaybackDeviceMono;
++};
++
++}  // namespace mozilla
++#endif
+diff --git a/dom/media/platforms/agnostic/VorbisDecoder.cpp b/dom/media/platforms/agnostic/VorbisDecoder.cpp
+new file mode 100644
+index 000000000000..1c9dde01484f
+--- /dev/null
++++ b/dom/media/platforms/agnostic/VorbisDecoder.cpp
+@@ -0,0 +1,363 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "VorbisDecoder.h"
++
++#include "VideoUtils.h"
++#include "XiphExtradata.h"
++#include "mozilla/Logging.h"
++#include "mozilla/PodOperations.h"
++#include "mozilla/SyncRunnable.h"
++
++#undef LOG
++#define LOG(type, msg) MOZ_LOG(sPDMLog, type, msg)
++
++namespace mozilla {
++
++ogg_packet InitVorbisPacket(const unsigned char* aData, size_t aLength,
++                            bool aBOS, bool aEOS, int64_t aGranulepos,
++                            int64_t aPacketNo) {
++  ogg_packet packet;
++  packet.packet = const_cast<unsigned char*>(aData);
++  packet.bytes = aLength;
++  packet.b_o_s = aBOS;
++  packet.e_o_s = aEOS;
++  packet.granulepos = aGranulepos;
++  packet.packetno = aPacketNo;
++  return packet;
++}
++
++VorbisDataDecoder::VorbisDataDecoder(const CreateDecoderParams& aParams)
++    : mInfo(aParams.AudioConfig()), mPacketCount(0), mFrames(0) {
++  // Zero these member vars to avoid crashes in Vorbis clear functions when
++  // destructor is called before |Init|.
++  PodZero(&mVorbisBlock);
++  PodZero(&mVorbisDsp);
++  PodZero(&mVorbisInfo);
++  PodZero(&mVorbisComment);
++}
++
++VorbisDataDecoder::~VorbisDataDecoder() {
++  vorbis_block_clear(&mVorbisBlock);
++  vorbis_dsp_clear(&mVorbisDsp);
++  vorbis_info_clear(&mVorbisInfo);
++  vorbis_comment_clear(&mVorbisComment);
++}
++
++RefPtr<ShutdownPromise> VorbisDataDecoder::Shutdown() {
++  // mThread may not be set if Init hasn't been called first.
++  MOZ_ASSERT(!mThread || mThread->IsOnCurrentThread());
++  return ShutdownPromise::CreateAndResolve(true, __func__);
++}
++
++RefPtr<MediaDataDecoder::InitPromise> VorbisDataDecoder::Init() {
++  mThread = GetCurrentSerialEventTarget();
++  vorbis_info_init(&mVorbisInfo);
++  vorbis_comment_init(&mVorbisComment);
++  PodZero(&mVorbisDsp);
++  PodZero(&mVorbisBlock);
++
++  AutoTArray<unsigned char*, 4> headers;
++  AutoTArray<size_t, 4> headerLens;
++  MOZ_ASSERT(mInfo.mCodecSpecificConfig.is<VorbisCodecSpecificData>(),
++             "Vorbis decoder should get vorbis codec specific data");
++  RefPtr<MediaByteBuffer> vorbisHeaderBlob =
++      GetAudioCodecSpecificBlob(mInfo.mCodecSpecificConfig);
++  if (!XiphExtradataToHeaders(headers, headerLens, vorbisHeaderBlob->Elements(),
++                              vorbisHeaderBlob->Length())) {
++    LOG(LogLevel::Warning, ("VorbisDecoder: could not get vorbis header"));
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Could not get vorbis header.")),
++        __func__);
++  }
++  for (size_t i = 0; i < headers.Length(); i++) {
++    if (NS_FAILED(DecodeHeader(headers[i], headerLens[i]))) {
++      LOG(LogLevel::Warning,
++          ("VorbisDecoder: could not get decode vorbis header"));
++      return InitPromise::CreateAndReject(
++          MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                      RESULT_DETAIL("Could not decode vorbis header.")),
++          __func__);
++    }
++  }
++
++  MOZ_ASSERT(mPacketCount == 3);
++
++  int r = vorbis_synthesis_init(&mVorbisDsp, &mVorbisInfo);
++  if (r) {
++    LOG(LogLevel::Warning, ("VorbisDecoder: could not init vorbis decoder"));
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Systhesis init fail.")),
++        __func__);
++  }
++
++  r = vorbis_block_init(&mVorbisDsp, &mVorbisBlock);
++  if (r) {
++    LOG(LogLevel::Warning, ("VorbisDecoder: could not init vorbis block"));
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Block init fail.")),
++        __func__);
++  }
++
++  if (mInfo.mRate != (uint32_t)mVorbisDsp.vi->rate) {
++    LOG(LogLevel::Warning, ("VorbisDecoder: Invalid Vorbis header: container "
++                            "and codec rate do not match!"));
++  }
++  if (mInfo.mChannels != (uint32_t)mVorbisDsp.vi->channels) {
++    LOG(LogLevel::Warning, ("VorbisDecoder: Invalid Vorbis header: container "
++                            "and codec channels do not match!"));
++  }
++
++  AudioConfig::ChannelLayout layout(mVorbisDsp.vi->channels);
++  if (!layout.IsValid()) {
++    LOG(LogLevel::Warning,
++        ("VorbisDecoder: Invalid Vorbis header: invalid channel layout!"));
++    return InitPromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
++                    RESULT_DETAIL("Invalid audio layout.")),
++        __func__);
++  }
++
++  return InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__);
++}
++
++nsresult VorbisDataDecoder::DecodeHeader(const unsigned char* aData,
++                                         size_t aLength) {
++  bool bos = mPacketCount == 0;
++  ogg_packet pkt =
++      InitVorbisPacket(aData, aLength, bos, false, 0, mPacketCount++);
++  MOZ_ASSERT(mPacketCount <= 3);
++
++  int r = vorbis_synthesis_headerin(&mVorbisInfo, &mVorbisComment, &pkt);
++  return r == 0 ? NS_OK : NS_ERROR_FAILURE;
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> VorbisDataDecoder::Decode(
++    MediaRawData* aSample) {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  PROCESS_DECODE_LOG(aSample);
++
++  const unsigned char* aData = aSample->Data();
++  size_t aLength = aSample->Size();
++  int64_t aOffset = aSample->mOffset;
++
++  MOZ_ASSERT(mPacketCount >= 3);
++
++  if (!mLastFrameTime ||
++      mLastFrameTime.ref() != aSample->mTime.ToMicroseconds()) {
++    // We are starting a new block.
++    mFrames = 0;
++    mLastFrameTime = Some(aSample->mTime.ToMicroseconds());
++  }
++
++  ogg_packet pkt =
++      InitVorbisPacket(aData, aLength, false, aSample->mEOS,
++                       aSample->mTimecode.ToMicroseconds(), mPacketCount++);
++
++  int err = vorbis_synthesis(&mVorbisBlock, &pkt);
++  if (err) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("vorbis_synthesis:%d", err)),
++        __func__);
++    LOG(LogLevel::Warning, ("vorbis_synthesis returned an error"));
++  }
++
++  err = vorbis_synthesis_blockin(&mVorbisDsp, &mVorbisBlock);
++  if (err) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                    RESULT_DETAIL("vorbis_synthesis_blockin:%d", err)),
++        __func__);
++    LOG(LogLevel::Warning, ("vorbis_synthesis_blockin returned an error"));
++  }
++
++  float** pcm = nullptr;
++  int32_t frames = vorbis_synthesis_pcmout(&mVorbisDsp, &pcm);
++  if (frames == 0) {
++    return DecodePromise::CreateAndResolve(DecodedData(), __func__);
++  }
++
++  DecodedData results;
++  while (frames > 0) {
++    uint32_t channels = mVorbisDsp.vi->channels;
++    uint32_t rate = mVorbisDsp.vi->rate;
++    AlignedAudioBuffer buffer(frames * channels);
++    if (!buffer) {
++      LOG(LogLevel::Warning, ("VorbisDecoder: cannot allocate buffer"));
++      return DecodePromise::CreateAndReject(
++          MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
++    }
++    for (uint32_t j = 0; j < channels; ++j) {
++      float* channel = pcm[j];
++      for (uint32_t i = 0; i < uint32_t(frames); ++i) {
++        buffer[i * channels + j] = channel[i];
++      }
++    }
++
++    auto duration = media::TimeUnit(frames, rate);
++    if (!duration.IsValid()) {
++      LOG(LogLevel::Warning, ("VorbisDecoder: invalid packet duration"));
++      return DecodePromise::CreateAndReject(
++          MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
++                      RESULT_DETAIL("Overflow converting audio duration")),
++          __func__);
++    }
++    auto total_duration = media::TimeUnit(mFrames, rate);
++    if (!total_duration.IsValid()) {
++      LOG(LogLevel::Warning, ("VorbisDecoder: invalid total duration"));
++      return DecodePromise::CreateAndReject(
++          MediaResult(
++              NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
++              RESULT_DETAIL("Overflow converting audio total_duration")),
++          __func__);
++    }
++
++    auto time = total_duration + aSample->mTime;
++    if (!time.IsValid()) {
++      LOG(LogLevel::Warning, ("VorbisDecoder: invalid sample time"));
++      return DecodePromise::CreateAndReject(
++          MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
++                      RESULT_DETAIL(
++                          "Overflow adding total_duration and aSample->mTime")),
++          __func__);
++    };
++
++    if (!mAudioConverter) {
++      const AudioConfig::ChannelLayout layout =
++          AudioConfig::ChannelLayout(channels, VorbisLayout(channels));
++      AudioConfig in(layout, channels, rate);
++      AudioConfig out(AudioConfig::ChannelLayout::SMPTEDefault(layout),
++                      channels, rate);
++      mAudioConverter = MakeUnique<AudioConverter>(in, out);
++    }
++    MOZ_ASSERT(mAudioConverter->CanWorkInPlace());
++    AudioSampleBuffer data(std::move(buffer));
++    data = mAudioConverter->Process(std::move(data));
++
++    RefPtr<AudioData> audio =
++        new AudioData(aOffset, time, data.Forget(), channels, rate,
++                      mAudioConverter->OutputConfig().Layout().Map());
++    MOZ_DIAGNOSTIC_ASSERT(duration == audio->mDuration, "must be equal");
++    results.AppendElement(std::move(audio));
++    mFrames += frames;
++    err = vorbis_synthesis_read(&mVorbisDsp, frames);
++    if (err) {
++      LOG(LogLevel::Warning, ("VorbisDecoder: vorbis_synthesis_read"));
++      return DecodePromise::CreateAndReject(
++          MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
++                      RESULT_DETAIL("vorbis_synthesis_read:%d", err)),
++          __func__);
++    }
++
++    frames = vorbis_synthesis_pcmout(&mVorbisDsp, &pcm);
++  }
++  return DecodePromise::CreateAndResolve(std::move(results), __func__);
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> VorbisDataDecoder::Drain() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  return DecodePromise::CreateAndResolve(DecodedData(), __func__);
++}
++
++RefPtr<MediaDataDecoder::FlushPromise> VorbisDataDecoder::Flush() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  // Ignore failed results from vorbis_synthesis_restart. They
++  // aren't fatal and it fails when ResetDecode is called at a
++  // time when no vorbis data has been read.
++  vorbis_synthesis_restart(&mVorbisDsp);
++  mLastFrameTime.reset();
++  return FlushPromise::CreateAndResolve(true, __func__);
++}
++
++/* static */
++bool VorbisDataDecoder::IsVorbis(const nsACString& aMimeType) {
++  return aMimeType.EqualsLiteral("audio/vorbis");
++}
++
++/* static */
++const AudioConfig::Channel* VorbisDataDecoder::VorbisLayout(
++    uint32_t aChannels) {
++  // From https://www.xiph.org/vorbis/doc/Vorbis_I_spec.html
++  // Section 4.3.9.
++  typedef AudioConfig::Channel Channel;
++
++  switch (aChannels) {
++    case 1:  // the stream is monophonic
++    {
++      static const Channel config[] = {AudioConfig::CHANNEL_FRONT_CENTER};
++      return config;
++    }
++    case 2:  // the stream is stereo. channel order: left, right
++    {
++      static const Channel config[] = {AudioConfig::CHANNEL_FRONT_LEFT,
++                                       AudioConfig::CHANNEL_FRONT_RIGHT};
++      return config;
++    }
++    case 3:  // the stream is a 1d-surround encoding. channel order: left,
++             // center, right
++    {
++      static const Channel config[] = {AudioConfig::CHANNEL_FRONT_LEFT,
++                                       AudioConfig::CHANNEL_FRONT_CENTER,
++                                       AudioConfig::CHANNEL_FRONT_RIGHT};
++      return config;
++    }
++    case 4:  // the stream is quadraphonic surround. channel order: front left,
++             // front right, rear left, rear right
++    {
++      static const Channel config[] = {
++          AudioConfig::CHANNEL_FRONT_LEFT, AudioConfig::CHANNEL_FRONT_RIGHT,
++          AudioConfig::CHANNEL_BACK_LEFT, AudioConfig::CHANNEL_BACK_RIGHT};
++      return config;
++    }
++    case 5:  // the stream is five-channel surround. channel order: front left,
++             // center, front right, rear left, rear right
++    {
++      static const Channel config[] = {
++          AudioConfig::CHANNEL_FRONT_LEFT, AudioConfig::CHANNEL_FRONT_CENTER,
++          AudioConfig::CHANNEL_FRONT_RIGHT, AudioConfig::CHANNEL_BACK_LEFT,
++          AudioConfig::CHANNEL_BACK_RIGHT};
++      return config;
++    }
++    case 6:  // the stream is 5.1 surround. channel order: front left, center,
++             // front right, rear left, rear right, LFE
++    {
++      static const Channel config[] = {
++          AudioConfig::CHANNEL_FRONT_LEFT,  AudioConfig::CHANNEL_FRONT_CENTER,
++          AudioConfig::CHANNEL_FRONT_RIGHT, AudioConfig::CHANNEL_BACK_LEFT,
++          AudioConfig::CHANNEL_BACK_RIGHT,  AudioConfig::CHANNEL_LFE};
++      return config;
++    }
++    case 7:  // surround. channel order: front left, center, front right, side
++             // left, side right, rear center, LFE
++    {
++      static const Channel config[] = {
++          AudioConfig::CHANNEL_FRONT_LEFT,  AudioConfig::CHANNEL_FRONT_CENTER,
++          AudioConfig::CHANNEL_FRONT_RIGHT, AudioConfig::CHANNEL_SIDE_LEFT,
++          AudioConfig::CHANNEL_SIDE_RIGHT,  AudioConfig::CHANNEL_BACK_CENTER,
++          AudioConfig::CHANNEL_LFE};
++      return config;
++    }
++    case 8:  // the stream is 7.1 surround. channel order: front left, center,
++             // front right, side left, side right, rear left, rear right, LFE
++    {
++      static const Channel config[] = {
++          AudioConfig::CHANNEL_FRONT_LEFT,  AudioConfig::CHANNEL_FRONT_CENTER,
++          AudioConfig::CHANNEL_FRONT_RIGHT, AudioConfig::CHANNEL_SIDE_LEFT,
++          AudioConfig::CHANNEL_SIDE_RIGHT,  AudioConfig::CHANNEL_BACK_LEFT,
++          AudioConfig::CHANNEL_BACK_RIGHT,  AudioConfig::CHANNEL_LFE};
++      return config;
++    }
++    default:
++      return nullptr;
++  }
++}
++
++}  // namespace mozilla
++#undef LOG
+diff --git a/dom/media/platforms/agnostic/VorbisDecoder.h b/dom/media/platforms/agnostic/VorbisDecoder.h
+new file mode 100644
+index 000000000000..b460fbb6c26a
+--- /dev/null
++++ b/dom/media/platforms/agnostic/VorbisDecoder.h
+@@ -0,0 +1,62 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++#if !defined(VorbisDecoder_h_)
++#  define VorbisDecoder_h_
++
++#  include "AudioConverter.h"
++#  include "PlatformDecoderModule.h"
++#  include "mozilla/Maybe.h"
++
++#  include <vorbis/codec.h>
++
++namespace mozilla {
++
++DDLoggedTypeDeclNameAndBase(VorbisDataDecoder, MediaDataDecoder);
++
++class VorbisDataDecoder final
++    : public MediaDataDecoder,
++      public DecoderDoctorLifeLogger<VorbisDataDecoder> {
++ public:
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VorbisDataDecoder, final);
++
++  explicit VorbisDataDecoder(const CreateDecoderParams& aParams);
++
++  RefPtr<InitPromise> Init() override;
++  RefPtr<DecodePromise> Decode(MediaRawData* aSample) override;
++  RefPtr<DecodePromise> Drain() override;
++  RefPtr<FlushPromise> Flush() override;
++  RefPtr<ShutdownPromise> Shutdown() override;
++  nsCString GetDescriptionName() const override {
++    return "vorbis audio decoder"_ns;
++  }
++  nsCString GetCodecName() const override { return "vorbis"_ns; }
++
++  // Return true if mimetype is Vorbis
++  static bool IsVorbis(const nsACString& aMimeType);
++  static const AudioConfig::Channel* VorbisLayout(uint32_t aChannels);
++
++ private:
++  ~VorbisDataDecoder();
++
++  nsresult DecodeHeader(const unsigned char* aData, size_t aLength);
++
++  const AudioInfo mInfo;
++  nsCOMPtr<nsISerialEventTarget> mThread;
++
++  // Vorbis decoder state
++  vorbis_info mVorbisInfo;
++  vorbis_comment mVorbisComment;
++  vorbis_dsp_state mVorbisDsp;
++  vorbis_block mVorbisBlock;
++
++  int64_t mPacketCount;
++  int64_t mFrames;
++  Maybe<int64_t> mLastFrameTime;
++  UniquePtr<AudioConverter> mAudioConverter;
++};
++
++}  // namespace mozilla
++#endif
+diff --git a/dom/media/platforms/agnostic/WAVDecoder.cpp b/dom/media/platforms/agnostic/WAVDecoder.cpp
+new file mode 100644
+index 000000000000..e8dc0dc38db8
+--- /dev/null
++++ b/dom/media/platforms/agnostic/WAVDecoder.cpp
+@@ -0,0 +1,162 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "WAVDecoder.h"
++
++#include "AudioSampleFormat.h"
++#include "BufferReader.h"
++#include "VideoUtils.h"
++#include "mozilla/Casting.h"
++#include "mozilla/SyncRunnable.h"
++
++namespace mozilla {
++
++int16_t DecodeALawSample(uint8_t aValue) {
++  aValue = aValue ^ 0x55;
++  int8_t sign = (aValue & 0x80) ? -1 : 1;
++  uint8_t exponent = (aValue & 0x70) >> 4;
++  uint8_t mantissa = aValue & 0x0F;
++  int16_t sample = mantissa << 4;
++  switch (exponent) {
++    case 0:
++      sample += 8;
++      break;
++    case 1:
++      sample += 0x108;
++      break;
++    default:
++      sample += 0x108;
++      sample <<= exponent - 1;
++  }
++  return sign * sample;
++}
++
++int16_t DecodeULawSample(uint8_t aValue) {
++  aValue = aValue ^ 0xFF;
++  int8_t sign = (aValue & 0x80) ? -1 : 1;
++  uint8_t exponent = (aValue & 0x70) >> 4;
++  uint8_t mantissa = aValue & 0x0F;
++  int16_t sample = (33 + 2 * mantissa) * (2 << (exponent + 1)) - 33;
++  return sign * sample;
++}
++
++WaveDataDecoder::WaveDataDecoder(const CreateDecoderParams& aParams)
++    : mInfo(aParams.AudioConfig()) {}
++
++RefPtr<ShutdownPromise> WaveDataDecoder::Shutdown() {
++  // mThread may not be set if Init hasn't been called first.
++  MOZ_ASSERT(!mThread || mThread->IsOnCurrentThread());
++  return ShutdownPromise::CreateAndResolve(true, __func__);
++}
++
++RefPtr<MediaDataDecoder::InitPromise> WaveDataDecoder::Init() {
++  mThread = GetCurrentSerialEventTarget();
++  return InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__);
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> WaveDataDecoder::Decode(
++    MediaRawData* aSample) {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  size_t aLength = aSample->Size();
++  BufferReader aReader(aSample->Data(), aLength);
++  int64_t aOffset = aSample->mOffset;
++
++  int32_t frames = aLength * 8 / mInfo.mBitDepth / mInfo.mChannels;
++
++  AlignedAudioBuffer buffer(frames * mInfo.mChannels);
++  if (!buffer) {
++    return DecodePromise::CreateAndReject(
++        MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
++  }
++  for (int i = 0; i < frames; ++i) {
++    for (unsigned int j = 0; j < mInfo.mChannels; ++j) {
++      if (mInfo.mProfile == 3) {  // IEEE Float Data
++        auto res = aReader.ReadLEU32();
++        if (res.isErr()) {
++          return DecodePromise::CreateAndReject(
++              MediaResult(res.unwrapErr(), __func__), __func__);
++        }
++        float sample = BitwiseCast<float>(res.unwrap());
++        buffer[i * mInfo.mChannels + j] =
++            FloatToAudioSample<AudioDataValue>(sample);
++      } else if (mInfo.mProfile == 6) {  // ALAW Data
++        auto res = aReader.ReadU8();
++        if (res.isErr()) {
++          return DecodePromise::CreateAndReject(
++              MediaResult(res.unwrapErr(), __func__), __func__);
++        }
++        int16_t decoded = DecodeALawSample(res.unwrap());
++        buffer[i * mInfo.mChannels + j] =
++            Int16ToAudioSample<AudioDataValue>(decoded);
++      } else if (mInfo.mProfile == 7) {  // ULAW Data
++        auto res = aReader.ReadU8();
++        if (res.isErr()) {
++          return DecodePromise::CreateAndReject(
++              MediaResult(res.unwrapErr(), __func__), __func__);
++        }
++        int16_t decoded = DecodeULawSample(res.unwrap());
++        buffer[i * mInfo.mChannels + j] =
++            Int16ToAudioSample<AudioDataValue>(decoded);
++      } else {  // PCM Data
++        if (mInfo.mBitDepth == 8) {
++          auto res = aReader.ReadU8();
++          if (res.isErr()) {
++            return DecodePromise::CreateAndReject(
++                MediaResult(res.unwrapErr(), __func__), __func__);
++          }
++          buffer[i * mInfo.mChannels + j] =
++              UInt8bitToAudioSample<AudioDataValue>(res.unwrap());
++        } else if (mInfo.mBitDepth == 16) {
++          auto res = aReader.ReadLE16();
++          if (res.isErr()) {
++            return DecodePromise::CreateAndReject(
++                MediaResult(res.unwrapErr(), __func__), __func__);
++          }
++          buffer[i * mInfo.mChannels + j] =
++              Int16ToAudioSample<AudioDataValue>(res.unwrap());
++        } else if (mInfo.mBitDepth == 24) {
++          auto res = aReader.ReadLE24();
++          if (res.isErr()) {
++            return DecodePromise::CreateAndReject(
++                MediaResult(res.unwrapErr(), __func__), __func__);
++          }
++          buffer[i * mInfo.mChannels + j] =
++              Int24ToAudioSample<AudioDataValue>(res.unwrap());
++        }
++      }
++    }
++  }
++
++  return DecodePromise::CreateAndResolve(
++      DecodedData{new AudioData(aOffset, aSample->mTime, std::move(buffer),
++                                mInfo.mChannels, mInfo.mRate)},
++      __func__);
++}
++
++RefPtr<MediaDataDecoder::DecodePromise> WaveDataDecoder::Drain() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  return DecodePromise::CreateAndResolve(DecodedData(), __func__);
++}
++
++RefPtr<MediaDataDecoder::FlushPromise> WaveDataDecoder::Flush() {
++  MOZ_ASSERT(mThread->IsOnCurrentThread());
++  return FlushPromise::CreateAndResolve(true, __func__);
++}
++
++/* static */
++bool WaveDataDecoder::IsWave(const nsACString& aMimeType) {
++  // Some WebAudio uses "audio/x-wav",
++  // WAVdemuxer uses "audio/wave; codecs=aNum".
++  return aMimeType.EqualsLiteral("audio/x-wav") ||
++         aMimeType.EqualsLiteral("audio/wave; codecs=1") ||
++         aMimeType.EqualsLiteral("audio/wave; codecs=3") ||
++         aMimeType.EqualsLiteral("audio/wave; codecs=6") ||
++         aMimeType.EqualsLiteral("audio/wave; codecs=7") ||
++         aMimeType.EqualsLiteral("audio/wave; codecs=65534");
++}
++
++}  // namespace mozilla
++#undef LOG
+diff --git a/dom/media/platforms/agnostic/WAVDecoder.h b/dom/media/platforms/agnostic/WAVDecoder.h
+new file mode 100644
+index 000000000000..8e3b614bd93d
+--- /dev/null
++++ b/dom/media/platforms/agnostic/WAVDecoder.h
+@@ -0,0 +1,44 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim:set ts=2 sw=2 sts=2 et cindent: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#if !defined(WaveDecoder_h_)
++#  define WaveDecoder_h_
++
++#  include "PlatformDecoderModule.h"
++
++namespace mozilla {
++
++DDLoggedTypeDeclNameAndBase(WaveDataDecoder, MediaDataDecoder);
++
++class WaveDataDecoder final : public MediaDataDecoder,
++                              public DecoderDoctorLifeLogger<WaveDataDecoder> {
++ public:
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WaveDataDecoder, final);
++
++  explicit WaveDataDecoder(const CreateDecoderParams& aParams);
++
++  // Return true if mimetype is Wave
++  static bool IsWave(const nsACString& aMimeType);
++
++  RefPtr<InitPromise> Init() override;
++  RefPtr<DecodePromise> Decode(MediaRawData* aSample) override;
++  RefPtr<DecodePromise> Drain() override;
++  RefPtr<FlushPromise> Flush() override;
++  RefPtr<ShutdownPromise> Shutdown() override;
++  nsCString GetDescriptionName() const override {
++    return "wave audio decoder"_ns;
++  }
++  nsCString GetCodecName() const override { return "wave"_ns; }
++
++ private:
++  ~WaveDataDecoder() = default;
++
++  const AudioInfo mInfo;
++  nsCOMPtr<nsISerialEventTarget> mThread;
++};
++
++}  // namespace mozilla
++#endif
+diff --git a/dom/media/platforms/ffmpeg/FFmpegAudioDecoder.cpp b/dom/media/platforms/ffmpeg/FFmpegAudioDecoder.cpp
+index 43041f81ea87..8b14a7b8cc29 100644
+--- a/dom/media/platforms/ffmpeg/FFmpegAudioDecoder.cpp
++++ b/dom/media/platforms/ffmpeg/FFmpegAudioDecoder.cpp
+@@ -425,23 +425,41 @@ MediaResult FFmpegAudioDecoder<LIBAV_VER>::DoDecode(MediaRawData* aSample,
+ 
+ AVCodecID FFmpegAudioDecoder<LIBAV_VER>::GetCodecId(const nsACString& aMimeType,
+                                                     const AudioInfo& aInfo) {
+-  if (aMimeType.EqualsLiteral("audio/mp4a-latm")) {
+-    return AV_CODEC_ID_AAC;
+-  }
+-#ifdef FFVPX_VERSION
+   if (aMimeType.EqualsLiteral("audio/mpeg")) {
++#ifdef FFVPX_VERSION
++    if (!StaticPrefs::media_ffvpx_mp3_enabled()) {
++      return AV_CODEC_ID_NONE;
++    }
++#endif
+     return AV_CODEC_ID_MP3;
+   }
+   if (aMimeType.EqualsLiteral("audio/flac")) {
+     return AV_CODEC_ID_FLAC;
+   }
++  if (aMimeType.EqualsLiteral("audio/mp4a-latm")) {
++    return AV_CODEC_ID_AAC;
++  }
+   if (aMimeType.EqualsLiteral("audio/vorbis")) {
++#ifdef FFVPX_VERSION
++    if (!StaticPrefs::media_ffvpx_vorbis_enabled()) {
++      return AV_CODEC_ID_NONE;
++    }
++#endif
+     return AV_CODEC_ID_VORBIS;
+   }
++#ifdef FFVPX_VERSION
+   if (aMimeType.EqualsLiteral("audio/opus")) {
++    if (!StaticPrefs::media_ffvpx_opus_enabled()) {
++      return AV_CODEC_ID_NONE;
++    }
+     return AV_CODEC_ID_OPUS;
+   }
++#endif
++#ifdef FFVPX_VERSION
+   if (aMimeType.Find("wav") != kNotFound) {
++    if (!StaticPrefs::media_ffvpx_wav_enabled()) {
++      return AV_CODEC_ID_NONE;
++    }
+     if (aMimeType.EqualsLiteral("audio/x-wav") ||
+         aMimeType.EqualsLiteral("audio/wave; codecs=1") ||
+         aMimeType.EqualsLiteral("audio/wave; codecs=65534")) {
+diff --git a/dom/media/platforms/moz.build b/dom/media/platforms/moz.build
+index 34acf4e8d15e..5c6e25b3980b 100644
+--- a/dom/media/platforms/moz.build
++++ b/dom/media/platforms/moz.build
+@@ -8,7 +8,10 @@ EXPORTS += [
+     "agnostic/AgnosticDecoderModule.h",
+     "agnostic/BlankDecoderModule.h",
+     "agnostic/DummyMediaDataDecoder.h",
++    "agnostic/OpusDecoder.h",
++    "agnostic/VorbisDecoder.h",
+     "agnostic/VPXDecoder.h",
++    "agnostic/WAVDecoder.h",
+     "AllocationPolicy.h",
+     "EncoderConfig.h",
+     "MediaCodecsSupport.h",
+@@ -29,7 +32,10 @@ UNIFIED_SOURCES += [
+     "agnostic/BlankDecoderModule.cpp",
+     "agnostic/DummyMediaDataDecoder.cpp",
+     "agnostic/NullDecoderModule.cpp",
++    "agnostic/OpusDecoder.cpp",
++    "agnostic/VorbisDecoder.cpp",
+     "agnostic/VPXDecoder.cpp",
++    "agnostic/WAVDecoder.cpp",
+     "AllocationPolicy.cpp",
+     "EncoderConfig.cpp",
+     "MediaCodecsSupport.cpp",
+diff --git a/dom/media/platforms/wmf/WMFDecoderModule.cpp b/dom/media/platforms/wmf/WMFDecoderModule.cpp
+index b3aae1e750f4..080613024c59 100644
+--- a/dom/media/platforms/wmf/WMFDecoderModule.cpp
++++ b/dom/media/platforms/wmf/WMFDecoderModule.cpp
+@@ -303,9 +303,12 @@ bool WMFDecoderModule::CanCreateMFTDecoder(const WMFStreamType& aType) {
+         return false;
+       }
+       break;
+-    // Always use ffvpx for mp3
+     case WMFStreamType::MP3:
+-      return false;
++      // Prefer ffvpx mp3 decoder over WMF.
++      if (StaticPrefs::media_ffvpx_mp3_enabled()) {
++        return false;
++      }
++      break;
+     default:
+       break;
+   }
+diff --git a/dom/media/platforms/wmf/WMFUtils.cpp b/dom/media/platforms/wmf/WMFUtils.cpp
+index d096979919a4..1def2325ca95 100644
+--- a/dom/media/platforms/wmf/WMFUtils.cpp
++++ b/dom/media/platforms/wmf/WMFUtils.cpp
+@@ -16,7 +16,9 @@
+ #  include "AOMDecoder.h"
+ #endif
+ #include "MP4Decoder.h"
++#include "OpusDecoder.h"
+ #include "VideoUtils.h"
++#include "VorbisDecoder.h"
+ #include "VPXDecoder.h"
+ #include "mozilla/ArrayUtils.h"
+ #include "mozilla/CheckedInt.h"
+@@ -115,10 +117,10 @@ WMFStreamType GetStreamTypeFromMimeType(const nsCString& aMimeType) {
+   if (aMimeType.EqualsLiteral("audio/mpeg")) {
+     return WMFStreamType::MP3;
+   }
+-  if (aMimeType.EqualsLiteral("audio/opus")) {
++  if (OpusDataDecoder::IsOpus(aMimeType)) {
+     return WMFStreamType::OPUS;
+   }
+-  if (aMimeType.EqualsLiteral("audio/vorbis")) {
++  if (VorbisDataDecoder::IsVorbis(aMimeType)) {
+     return WMFStreamType::VORBIS;
+   }
+   return WMFStreamType::Unknown;
+@@ -302,10 +304,10 @@ GUID AudioMimeTypeToMediaFoundationSubtype(const nsACString& aMimeType) {
+   if (MP4Decoder::IsAAC(aMimeType)) {
+     return MFAudioFormat_AAC;
+   }
+-  if (aMimeType.EqualsLiteral("audio/vorbis")) {
++  if (VorbisDataDecoder::IsVorbis(aMimeType)) {
+     return MFAudioFormat_Vorbis;
+   }
+-  if (aMimeType.EqualsLiteral("audio/opus")) {
++  if (OpusDataDecoder::IsOpus(aMimeType)) {
+     return MFAudioFormat_Opus;
+   }
+   NS_WARNING("Unsupport audio mimetype");
+diff --git a/dom/media/webm/WebMDemuxer.cpp b/dom/media/webm/WebMDemuxer.cpp
+index da1411820510..1681640fd311 100644
+--- a/dom/media/webm/WebMDemuxer.cpp
++++ b/dom/media/webm/WebMDemuxer.cpp
+@@ -9,6 +9,7 @@
+ #ifdef MOZ_AV1
+ #  include "AOMDecoder.h"
+ #endif
++#include "OpusDecoder.h"
+ #include "VPXDecoder.h"
+ #include "WebMDemuxer.h"
+ #include "WebMBufferedParser.h"
+diff --git a/ipc/glue/test/browser/head.js b/ipc/glue/test/browser/head.js
+index 0d7a24a4c3f5..f012202fb955 100644
+--- a/ipc/glue/test/browser/head.js
++++ b/ipc/glue/test/browser/head.js
+@@ -139,12 +139,20 @@ function audioTestData() {
+           decoder: "ffvpx audio decoder",
+         },
+         WINNT: {
+-          process: "Utility Generic",
+-          decoder: "ffvpx audio decoder",
++          process: SpecialPowers.getBoolPref("media.ffvpx.mp3.enabled")
++            ? "Utility Generic"
++            : "Utility WMF",
++          decoder: SpecialPowers.getBoolPref("media.ffvpx.mp3.enabled")
++            ? "ffvpx audio decoder"
++            : "wmf audio decoder",
+         },
+         Darwin: {
+-          process: "Utility Generic",
+-          decoder: "ffvpx audio decoder",
++          process: SpecialPowers.getBoolPref("media.ffvpx.mp3.enabled")
++            ? "Utility Generic"
++            : "Utility AppleMedia",
++          decoder: SpecialPowers.getBoolPref("media.ffvpx.mp3.enabled")
++            ? "ffvpx audio decoder"
++            : "apple coremedia decoder",
+         },
+       },
+     },
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 1f38a4e092b6..45a1c059c270 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -10100,6 +10100,42 @@
+   mirror: once
+ #endif # MOZ_WIDGET_GTK
+ 
++-   name: media.ffvpx.mp3.enabled
++    type: RelaxedAtomicBool
++#ifdef MOZ_FFVPX
++    value: true
++#else
++    value: false
++#endif
++    mirror: always
++
++-   name: media.ffvpx.vorbis.enabled
++    type: RelaxedAtomicBool
++#ifdef MOZ_FFVPX
++    value: true
++#else
++    value: false
++#endif
++    mirror: always
++
++-   name: media.ffvpx.opus.enabled
++    type: RelaxedAtomicBool
++#ifdef MOZ_FFVPX
++    value: true
++#else
++    value: false
++#endif
++    mirror: always
++
++-   name: media.ffvpx.wav.enabled
++    type: RelaxedAtomicBool
++#ifdef MOZ_FFVPX
++    value: true
++#else
++    value: false
++#endif
++    mirror: always
++
+ # Set to true in marionette tests to disable the sanity test
+ # which would lead to unnecessary start of the RDD process.
+ -   name: media.sanity-test.disabled

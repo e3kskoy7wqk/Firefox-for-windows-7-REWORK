@@ -1,0 +1,1 @@
+Bug 1391696 - Use GetTickCount64 without a GetProcAddress check in Timestamp_windows.cpp. r=froydnj    2017-08-19 02:08:11    9341d972dda23437a57f9c0bb780dac8a64062e7

@@ -1,0 +1,45 @@
+diff --git a/config/a/windows.h b/config/a/windows.h
+new file mode 100644
+index 000000000000..07c9331a14c8
+--- /dev/null
++++ b/config/a/windows.h
+@@ -0,0 +1,24 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef mozilla_windowsA_h
++#define mozilla_windowsA_h
++
++// Include the "real" windows.h header.
++//
++// Also turn off deprecation warnings, as we may be wrapping deprecated fns.
++
++#pragma GCC system_header
++#include_next <windows.h>
++
++#define LWSTDAPI_(type)   EXTERN_C DECLSPEC_IMPORT type STDAPICALLTYPE
++LWSTDAPI_(LSTATUS) SHRegGetValueW(_In_ HKEY hkey, _In_opt_ LPCWSTR pszSubKey, _In_opt_ LPCWSTR pszValue,
++    _In_ int srrfFlags, _Out_opt_ DWORD *pdwType, _Out_writes_bytes_to_opt_(*pcbData,*pcbData) void *pvData,
++    _Inout_opt_ DWORD *pcbData);
++#define RegGetValueW   SHRegGetValueW
++#pragma comment (lib, "shlwapi.lib")
++
++#endif // !defined(mozilla_windowsA_h)
+diff --git a/moz.build b/moz.build
+index ed74a5543597..e84a525f1fa5 100644
+--- a/moz.build
++++ b/moz.build
+@@ -171,6 +171,10 @@ if not CONFIG["JS_STANDALONE"] or not CONFIG["MOZ_BUILD_APP"]:
+     GENERATED_FILES["buildid.h"].script = "build/variables.py:buildid_header"
+     GENERATED_FILES["source-repo.h"].script = "build/variables.py:source_repo_header"
+ 
++EXPORTS += [
++    "config/a/windows.h",
++]
++
+ if CONFIG["MOZ_BUILD_APP"]:
+     # Bring in the configuration for the configured application.
+     include("/" + CONFIG["MOZ_BUILD_APP"] + "/app.mozbuild")

@@ -1,0 +1,94 @@
+From d2fca4fc616ec5b983662f7205eb1a044e91ac46 Mon Sep 17 00:00:00 2001
+From: K4sum1 <k4sum1@eclipse.cx>
+Date: Sat, 15 Jun 2024 08:37:14 -0500
+Subject: [PATCH] Vista media foundation support
+
+---
+ dom/media/platforms/PDMFactory.cpp   | 11 ++++++++++-
+ dom/media/platforms/wmf/WMFUtils.cpp | 22 ++++++++++++++--------
+ 2 files changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index a3b07b1ca185..ef8b802e4515 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -522,7 +522,16 @@ void PDMFactory::CreateGpuPDMs() {
+   if (StaticPrefs::media_ffvpx_hw_enabled()) {
+     StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
+   }
+-  if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
++  if (StaticPrefs::media_wmf_enabled() && IsVistaOrLater() && !IsWin7AndPre2000Compatible()) {
++    // *Only* use WMF on Vista and later, as if Firefox is run in Windows 95
++    // compatibility mode on Windows 7 (it does happen!) we may crash trying
++    // to startup WMF. So we need to detect the OS version here, as in
++    // compatibility mode IsVistaOrLater() and friends behave as if we're on
++    // the emulated version of Windows. See bug 1279171.
++    // Additionally, we don't want to start the RemoteDecoderModule if we
++    // expect it's not going to work (i.e. on Windows older than Vista).
++    // IsWin7AndPre2000Compatible() uses GetVersionEx as the user specified OS version can
++    // be reflected when compatibility mode is in effect.
+     StartupPDM(WMFDecoderModule::Create());
+   }
+ #endif
+@@ -638,7 +638,9 @@ void PDMFactory::CreateContentPDMs() {
+         RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_AppleMedia));
+ #endif
+ #ifdef XP_WIN
+-    StartupPDM(RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_WMF));
++    if (IsVistaOrLater() && !IsWin7AndPre2000Compatible()) {
++      StartupPDM(RemoteDecoderModule::Create(RemoteDecodeIn::UtilityProcess_WMF));
++    }
+ #endif
+     // WMF and AppleMedia should be created before Generic because the order
+     // affects what decoder module would be chose first.
+diff --git a/dom/media/platforms/wmf/WMFUtils.cpp b/dom/media/platforms/wmf/WMFUtils.cpp
+index fe81a052b3cf..79935496718a 100644
+--- a/dom/media/platforms/wmf/WMFUtils.cpp
++++ b/dom/media/platforms/wmf/WMFUtils.cpp
+@@ -228,13 +228,13 @@ LoadDLLs() {
+ 
+ HRESULT
+ MediaFoundationInitializer::MFStartup() {
+-  if (IsWin7AndPre2000Compatible()) {
+-    /*
+-     * Specific exclude the usage of WMF on Win 7 with compatibility mode
+-     * prior to Win 2000 as we may crash while trying to startup WMF.
+-     * Using GetVersionEx API which takes compatibility mode into account.
+-     * See Bug 1279171.
+-     */
++  if (!IsVistaOrLater() || IsWin7AndPre2000Compatible()) {
++    // *Only* use WMF on Vista and later, as if Firefox is run in Windows 95
++    // compatibility mode on Windows 7 (it does happen!) we may crash trying
++    // to startup WMF. So we need to detect the OS version here, as in
++    // compatibility mode IsVistaOrLater() and friends behave as if we're on
++    // the emulated version of Windows. See bug 1279171.
++    // Using GetVersionEx API which takes compatibility mode into account.
+     return E_FAIL;
+   }
+ 
+@@ -243,6 +243,7 @@ MFStartup() {
+     return hr;
+   }
+ 
++  const int MF_VISTA_VERSION = (0x0001 << 16 | MF_API_VERSION);
+   const int MF_WIN7_VERSION = (0x0002 << 16 | MF_API_VERSION);
+ 
+   // decltype is unusable for functions having default parameters
+@@ -250,8 +251,13 @@ MFStartup() {
+   ENSURE_FUNCTION_PTR_(MFStartup, Mfplat.dll)
+ 
+   hr = E_FAIL;
+-  mozilla::mscom::EnsureMTA(
++  if (!IsWin7OrLater()) {
++    mozilla::mscom::EnsureMTA(
++      [&]() -> void { hr = MFStartupPtr(MF_VISTA_VERSION , MFSTARTUP_FULL); });
++    } else {
++    mozilla::mscom::EnsureMTA(
+       [&]() -> void { hr = MFStartupPtr(MF_WIN7_VERSION, MFSTARTUP_FULL); });
++    }
+   return hr;
+ }
+ 
+-- 
+2.45.1.windows.1
+

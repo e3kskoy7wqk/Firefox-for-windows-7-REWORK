@@ -1,0 +1,68 @@
+diff --git a/widget/windows/nsFilePicker.cpp b/widget/windows/nsFilePicker.cpp
+index efa8f346ce4a208ac37087fa7cd85a726591bb38..774bc835b7801c8360baeacdbb216bf2c1abe03c 100644
+--- a/widget/windows/nsFilePicker.cpp
++++ b/widget/windows/nsFilePicker.cpp
+@@ -51,6 +51,7 @@
+ #include "mozilla/widget/filedialog/WinFileDialogCommands.h"
+ #include "mozilla/widget/filedialog/WinFileDialogParent.h"
+ 
++using mozilla::MakeUnique;
+ using mozilla::LogLevel;
+ using mozilla::UniquePtr;
+ 
+@@ -67,6 +68,34 @@ MOZ_RUNINIT UniquePtr<char16_t[], nsFilePicker::FreeDeleter>
+ ///////////////////////////////////////////////////////////////////////////////
+ // Helper classes
+ 
++// Manages the current working path.
++class AutoRestoreWorkingPath {
++ public:
++  AutoRestoreWorkingPath() {
++    DWORD bufferLength = GetCurrentDirectoryW(0, nullptr);
++    if (!bufferLength) {
++      return;
++    }
++
++    mWorkingPath = MakeUnique<wchar_t[]>(bufferLength);
++    DWORD pathLength = GetCurrentDirectoryW(bufferLength, mWorkingPath.get());
++    if (!pathLength || pathLength >= bufferLength) {
++      mWorkingPath = nullptr;
++    }
++  }
++
++  ~AutoRestoreWorkingPath() {
++    if (HasWorkingPath()) {
++      ::SetCurrentDirectoryW(mWorkingPath.get());
++    }
++  }
++
++  inline bool HasWorkingPath() const { return mWorkingPath != nullptr; }
++
++ private:
++  UniquePtr<wchar_t[]> mWorkingPath;
++};
++
+ // Manages matching PickerOpen/PickerClosed calls on the parent widget.
+ class AutoWidgetPickerState {
+   static RefPtr<nsWindow> GetWindowForWidget(nsIWidget* aWidget) {
+@@ -103,7 +132,7 @@ class AutoWidgetPickerState {
+ ///////////////////////////////////////////////////////////////////////////////
+ // nsIFilePicker
+ 
+-nsFilePicker::nsFilePicker() = default;
++nsFilePicker::nsFilePicker() : mDlgWnd(nullptr) {}
+ 
+ NS_IMPL_ISUPPORTS(nsFilePicker, nsIFilePicker)
+ 
+diff --git a/widget/windows/nsFilePicker.h b/widget/windows/nsFilePicker.h
+index 15e8aa3d259cbfda4d00901025f2b3c080ed6d5c..5564986622a8f7064a65174eb9345dc3267430c0 100644
+--- a/widget/windows/nsFilePicker.h
++++ b/widget/windows/nsFilePicker.h
+@@ -119,6 +119,7 @@ class nsFilePicker final : public nsBaseWinFilePicker {
+   int32_t mSelectedType = 1;
+   nsCOMArray<nsIFile> mFiles;
+   nsString mUnicodeFile;
++  HWND mDlgWnd;
+ 
+   struct FreeDeleter {
+     void operator()(void* aPtr) { ::free(aPtr); }

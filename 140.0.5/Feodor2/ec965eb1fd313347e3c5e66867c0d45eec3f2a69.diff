@@ -1,0 +1,48 @@
+diff --git a/tools/profiler/core/ETWTools.cpp b/tools/profiler/core/ETWTools.cpp
+index b8fab9b31674..75739dba10c2 100644
+--- a/tools/profiler/core/ETWTools.cpp
++++ b/tools/profiler/core/ETWTools.cpp
+@@ -37,10 +37,10 @@ static void NTAPI ETWEnableCallback(LPCGUID aSourceId, ULONG aIsEnabled,
+ }
+ 
+ void Init() {
+-  TraceLoggingRegisterEx(kFirefoxTraceLoggingProvider, ETWEnableCallback,
+-                         nullptr);
++//TraceLoggingRegisterEx(kFirefoxTraceLoggingProvider, ETWEnableCallback,
++//                       nullptr);
+ }
+ 
+-void Shutdown() { TraceLoggingUnregister(kFirefoxTraceLoggingProvider); }
++void Shutdown() { }//TraceLoggingUnregister(kFirefoxTraceLoggingProvider); }
+ 
+ }  // namespace ETW
+diff --git a/tools/profiler/public/ETWTools.h b/tools/profiler/public/ETWTools.h
+index aeb9214058c0..4397d60bb3a7 100644
+--- a/tools/profiler/public/ETWTools.h
++++ b/tools/profiler/public/ETWTools.h
+@@ -341,9 +341,9 @@ static inline void EmitETWMarker(const mozilla::ProfilerString8View& aName,
+       return;
+     }
+ 
+-    static const __declspec(allocate(_tlgSegMetadataEvents))
+-    __declspec(align(1)) constexpr StaticMetaData<MarkerType>
+-        staticData;
++//  static const __declspec(allocate(_tlgSegMetadataEvents))
++//  __declspec(align(1)) constexpr StaticMetaData<MarkerType>
++//      staticData;
+ 
+     // Allocate the exact amount of descriptors required by this event.
+     std::array<EVENT_DATA_DESCRIPTOR, GetETWDescriptorCount<MarkerType>()>
+@@ -385,9 +385,9 @@ static inline void EmitETWMarker(const mozilla::ProfilerString8View& aName,
+       }
+     }
+ 
+-    _tlgWriteTransfer(kFirefoxTraceLoggingProvider,
+-                      &staticData.metaData.Channel, NULL, NULL,
+-                      descriptors.size(), descriptors.data());
++//  _tlgWriteTransfer(kFirefoxTraceLoggingProvider,
++//                    &staticData.metaData.Channel, NULL, NULL,
++//                    descriptors.size(), descriptors.data());
+   }
+ }
+ 

@@ -1,0 +1,393 @@
+diff --git a/browser/installer/Makefile.in b/browser/installer/Makefile.in
+index 2e55ed4b83dcd4b9a761e04c57ec56f8e6673b8f..92ed86d87dcdbb3d6c978e2f7d38869393684f28 100644
+--- a/browser/installer/Makefile.in
++++ b/browser/installer/Makefile.in
+@@ -53,6 +53,9 @@ DEFINES += -DJAREXT=
+ 
+ ifdef MOZ_ANGLE_RENDERER
+ DEFINES += -DMOZ_ANGLE_RENDERER=$(MOZ_ANGLE_RENDERER)
++ifdef MOZ_D3DCOMPILER_VISTA_DLL
++DEFINES += -DMOZ_D3DCOMPILER_VISTA_DLL=$(MOZ_D3DCOMPILER_VISTA_DLL)
++endif
+ endif
+ 
+ ifdef MOZ_ENABLE_SKIA_PDF
+@@ -73,6 +76,9 @@ DEFINES += -DMSVC_C_RUNTIME_1_DLL=$(MSVC_C_RUNTIME_1_DLL)
+ endif
+ DEFINES += -DMSVC_CXX_RUNTIME_DLL=$(MSVC_CXX_RUNTIME_DLL)
+ endif
++ifdef WIN_UCRT_REDIST_DIR
++DEFINES += -DMOZ_PACKAGE_WIN_UCRT_DLLS=1
++endif
+ endif
+ endif
+ 
+diff --git a/browser/installer/package-manifest.in b/browser/installer/package-manifest.in
+index 861ba1c484a4688857a3025455532ea9551b616a..3308e2a76e065d2639f09563873234553c41c221 100644
+--- a/browser/installer/package-manifest.in
++++ b/browser/installer/package-manifest.in
+@@ -98,6 +98,10 @@
+ #endif
+ @BINPATH@/@MSVC_CXX_RUNTIME_DLL@
+ #endif
++#if MOZ_PACKAGE_WIN_UCRT_DLLS
++@BINPATH@/api-ms-win-*.dll
++@BINPATH@/ucrtbase.dll
++#endif
+ #endif
+ #ifdef MOZ_GTK
+ ; This is a standalone binary launched by Firefox on Linux to verify
+@@ -124,10 +128,13 @@
+ ; build because we haven't run the relevant parts of configure, so we guess
+ ; here and trust what came from our source build.
+ #if defined(MOZ_ARTIFACT_BUILDS) && defined(XP_WIN)
++@BINPATH@/api-ms-win-*.dll
++@BINPATH@/ucrtbase.dll
+ @BINPATH@/vcruntime*.dll
+ @BINPATH@/msvcp*.dll
+ @BINPATH@/libEGL.dll
+ @BINPATH@/libGLESv2.dll
++@BINPATH@/d3dcompiler_47.dll
+ #endif
+ 
+ [browser]
+@@ -210,6 +217,10 @@
+ #ifdef MOZ_ANGLE_RENDERER
+ @BINPATH@/libEGL.dll
+ @BINPATH@/libGLESv2.dll
++
++#ifdef MOZ_D3DCOMPILER_VISTA_DLL
++@BINPATH@/@MOZ_D3DCOMPILER_VISTA_DLL@
++#endif
+ #endif # MOZ_ANGLE_RENDERER
+ 
+ #ifdef MOZ_DXCOMPILER
+diff --git a/build/moz.configure/windows.configure b/build/moz.configure/windows.configure
+index 098cf06a667eef05b9b34ebeb98a51a645c7184a..b38cc1f6726c8b3d825cb87e45703d32c8ea74ec 100644
+--- a/build/moz.configure/windows.configure
++++ b/build/moz.configure/windows.configure
+@@ -525,6 +525,21 @@ def win32_redist_dir(redist, automation, c_compiler, vc_path, target):
+ 
+ 
+ set_config("WIN32_REDIST_DIR", win32_redist_dir)
++
++
++option(env="WIN_UCRT_REDIST_DIR", nargs=1, help="Directory containing the Windows UCRT")
++
++
++@depends("WIN_UCRT_REDIST_DIR")
++@imports("os")
++def win_ucrt_redist_dir(redist):
++    if redist:
++        if os.path.isdir(redist[0]):
++            return redist[0]
++        configure_error(f"Invalid Windows UCRT Redist directory: {redist[0]}")
++
++
++set_config("WIN_UCRT_REDIST_DIR", win_ucrt_redist_dir)
+ 
+ 
+ @template
+diff --git a/build/win32/moz.build b/build/win32/moz.build
+index d8d61a22db473f2029dec8892dad5616c4573c45..32defa1dc8e78c06d59aa8d3043de95a5152f0d2 100644
+--- a/build/win32/moz.build
++++ b/build/win32/moz.build
+@@ -30,3 +30,17 @@ if CONFIG["WIN32_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
+     for f in ["MSVC_C_RUNTIME_DLL", "MSVC_C_RUNTIME_1_DLL", "MSVC_CXX_RUNTIME_DLL"]:
+         if CONFIG[f]:
+             FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN32_REDIST_DIR"], CONFIG[f])]
++
++if CONFIG["WIN_UCRT_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
++    win7_ucrt_redists = [
++        "api-ms-win-core-file-l1-2-0.dll",
++        "api-ms-win-core-file-l2-1-0.dll",
++        "api-ms-win-core-localization-l1-2-0.dll",
++        "api-ms-win-core-processthreads-l1-1-1.dll",
++        "api-ms-win-core-synch-l1-2-0.dll",
++        "api-ms-win-core-timezone-l1-1-0.dll",
++        "api-ms-win-crt-*.dll",
++        "ucrtbase.dll",
++    ]
++    for f in win7_ucrt_redists:
++        FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN_UCRT_REDIST_DIR"], f)]
+diff --git a/gfx/angle/moz.build b/gfx/angle/moz.build
+index ee870a088e938b076129e584b82f71706488ba04..406f2422ec88b3ac9239b9af917a22e805c1174d 100644
+--- a/gfx/angle/moz.build
++++ b/gfx/angle/moz.build
+@@ -12,3 +12,8 @@ DIRS += [
+ # Only build libEGL/libGLESv2 on Windows
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+     DIRS += ["targets/libEGL", "targets/libGLESv2"]
++
++if CONFIG["MOZ_ANGLE_RENDERER"] and CONFIG["MOZ_D3DCOMPILER_VISTA_DLL_PATH"]:
++    FINAL_TARGET_FILES += [
++        "%" + CONFIG["MOZ_D3DCOMPILER_VISTA_DLL_PATH"],
++    ]
+diff --git a/gfx/gl/moz.build b/gfx/gl/moz.build
+index 965b0add48e68f45020151ccd0c110b6bd26705d..330e57a3f79aed1a9c7976c86b0948273fdec139 100644
+--- a/gfx/gl/moz.build
++++ b/gfx/gl/moz.build
+@@ -148,6 +148,9 @@ include("/ipc/chromium/chromium-config.mozbuild")
+ 
+ FINAL_LIBRARY = "xul"
+ 
++if CONFIG["MOZ_D3DCOMPILER_VISTA_DLL"]:
++    DEFINES["MOZ_D3DCOMPILER_VISTA_DLL"] = CONFIG["MOZ_D3DCOMPILER_VISTA_DLL"]
++
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+     CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+     CFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+diff --git a/python/mozbuild/mozpack/executables.py b/python/mozbuild/mozpack/executables.py
+index 38f09028264a0065182b7784d9a83d6efe6c325f..dd6849cabe3c41cd960a44bd305e0ec0e1283156 100644
+--- a/python/mozbuild/mozpack/executables.py
++++ b/python/mozbuild/mozpack/executables.py
+@@ -91,6 +91,11 @@ def may_strip(path):
+     """
+     from buildconfig import substs
+ 
++    # Bug 1658632: clang-11-based strip complains about d3dcompiler_47.dll.
++    # It's not clear why this happens, but as a quick fix just avoid stripping
++    # this DLL. It's not from our build anyway.
++    if "d3dcompiler" in path:
++        return False
+     return bool(substs.get("PKG_STRIP"))
+ 
+ 
+diff --git a/toolkit/content/license.html b/toolkit/content/license.html
+index c7d530621c5d2d5291b8b486e73c24a1a8b2ec62..58d73015f0b52cd48f3076428f4cf8804f508bcb 100644
+--- a/toolkit/content/license.html
++++ b/toolkit/content/license.html
+@@ -6175,6 +6175,7 @@ Copyright (c) &lt;year&gt;, Xiph.org Foundation
+     <p>These terms apply to the following files;
+     they are referred to below as "Distributable Code":
+       <ul>
++        <li><var>d3d*.dll</var> (Direct3D libraries)</li>
+         <li><var>msvc*.dll</var> (C and C++ runtime libraries)</li>
+         <li><var>vcruntime*.dll</var> (Visual C++ Runtime)</li>
+       </ul>
+diff --git a/toolkit/library/build/dependentlibs.py b/toolkit/library/build/dependentlibs.py
+index 8a8e9b053a81831ae67f220dcc70f5a10f95894a..e1471170f23c85cdbaf90d27fc6bea38d99d1107 100644
+--- a/toolkit/library/build/dependentlibs.py
++++ b/toolkit/library/build/dependentlibs.py
+@@ -101,6 +101,10 @@ def is_skiplisted(dep):
+     # size (around 10MB).
+     if dep.startswith("icu"):
+         return True
++    # Same thing with d3dcompiler_47.dll, but to a lesser extent,
++    # and we were going to dynamically load it anyway.
++    if dep.startswith("d3dcompiler_47"):
++        return True
+     # dxcompiler.dll is also large and we dynamically load it.
+     if dep.startswith(("dxcompiler", " dxil")):
+         return True
+diff --git a/toolkit/library/gtest/TestUCRTDepends.cpp b/toolkit/library/gtest/TestUCRTDepends.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..a2faaf5ce37fffb51ebcdac9dc091fcc1d471d9e
+--- /dev/null
++++ b/toolkit/library/gtest/TestUCRTDepends.cpp
+@@ -0,0 +1,142 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set ts=8 sts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include <windows.h>
++#include <stdio.h>
++#include <string.h>
++#include "gtest/gtest.h"
++#include "mozilla/ArrayUtils.h"
++#include "mozilla/Unused.h"
++#include "mozilla/WindowsVersion.h"
++#include "nsDependentString.h"
++#include "nsReadableUtils.h"
++#include "nsUnicharUtils.h"
++#include "nsWindowsHelpers.h"
++
++using namespace mozilla;
++
++constexpr const WCHAR pattern[] = L"\\api-*.dll";
++
++static LPWSTR GetModuleFileDir(HMODULE module, LPWSTR path, DWORD size) {
++  DWORD chars = GetModuleFileNameW(module, path, size);
++  if (chars <= 0 || chars >= MAX_PATH) {
++    return nullptr;
++  }
++
++  // Split the base name from the directory.
++  LPWSTR basename = wcsrchr(path, L'\\');
++  if (!basename) {
++    return nullptr;  // at least one path separator must be present
++  }
++  *basename++ = L'\0';
++  return basename;
++}
++
++// Make sure that Universal CRT forwarder DLLs are not in app directory if it
++// is in Api Sets.
++TEST(TestUCRTDepends, AppDir)
++{
++  WCHAR appdir[MAX_PATH];
++  ASSERT_TRUE(GetModuleFileDir(nullptr, appdir, MAX_PATH));
++
++  WCHAR path[MAX_PATH + ArrayLength(pattern)];
++  swprintf(path, L"%s%s", appdir, pattern);
++
++  WIN32_FIND_DATAW wfd;
++  HANDLE hFind = FindFirstFileW(path, &wfd);
++#if defined(_M_ARM64)  // We do not ship Universal CRT DLLs on aarch64.
++  if (hFind == INVALID_HANDLE_VALUE) {
++    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_FILE_NOT_FOUND));
++    return;
++  }
++#else
++  ASSERT_NE(hFind, INVALID_HANDLE_VALUE);
++#endif
++  do {
++    nsModuleHandle module(LoadLibraryW(wfd.cFileName));
++    EXPECT_TRUE(module);
++    if (!module) {
++      continue;
++    }
++
++    // Get a full path of the loaded module.
++    LPWSTR basename = GetModuleFileDir(module, path, MAX_PATH);
++    ASSERT_TRUE(basename);
++
++    // If the module is in Api Sets, GetModuleFileName returns the redirected
++    // DLL path, so filenames will not match.
++    bool inApiSets = wcsicmp(wfd.cFileName, basename);
++    if (IsWin10OrLater()) {
++      // All files must be in Api Sets on Windows 10.
++      EXPECT_TRUE(inApiSets);
++      continue;
++    }
++    if (IsWin8OrLater()) {
++      if (inApiSets) {
++        continue;  // This file is in Api Sets, OK.
++      }
++      // Universal CRT files are not in Api Sets on Windows 8.
++      EXPECT_TRUE(StringBeginsWith(nsDependentString(wfd.cFileName),
++                                   u"api-ms-win-crt-"_ns,
++                                   nsCaseInsensitiveStringComparator));
++    } else {  // Windows 7
++      // All files must not be in Api Sets on Windows 7.
++      EXPECT_FALSE(inApiSets);
++    }
++    // Files must be loaded from appdir
++    EXPECT_TRUE(!wcsicmp(path, appdir));
++  } while (FindNextFileW(hFind, &wfd));
++  EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_NO_MORE_FILES));
++  BOOL ret = FindClose(hFind);
++  EXPECT_TRUE(ret);
++}
++
++// Make sure that we do not depend on Universal CRT forwarder DLLs in the
++// system directory.
++TEST(TestUCRTDepends, SystemDir)
++{
++  WCHAR appdir[MAX_PATH];
++  ASSERT_TRUE(GetModuleFileDir(nullptr, appdir, MAX_PATH));
++
++  WCHAR path[MAX_PATH + ArrayLength(pattern)];
++  UINT chars = GetSystemDirectoryW(path, MAX_PATH);
++  ASSERT_TRUE(chars > 0 && chars < MAX_PATH);
++  wcscat(path, pattern);
++
++  WIN32_FIND_DATAW wfd;
++  HANDLE hFind = FindFirstFileW(path, &wfd);
++  if (hFind == INVALID_HANDLE_VALUE) {
++    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_FILE_NOT_FOUND));
++    EXPECT_TRUE(IsWin8OrLater());
++    return;  // Not found in the system directory, OK.
++  }
++  // Api Sets forwarders must not be present on Windows 10.
++  EXPECT_FALSE(IsWin10OrLater());
++  do {
++    HMODULE module = GetModuleHandleW(wfd.cFileName);
++    if (!module) {
++      continue;  // We are not using this file, OK.
++    }
++
++    // Get a full path of the loaded module.
++    LPWSTR basename = GetModuleFileDir(module, path, MAX_PATH);
++    ASSERT_TRUE(basename);
++
++    // If the module is in Api Sets, GetModuleFileName returns the redirected
++    // DLL path, so filenames will not match.
++    if (wcsicmp(wfd.cFileName, basename)) {
++      // If this file is in Api Sets, it must not be present in appdir.
++      swprintf(path, L"%s\\%s", appdir, wfd.cFileName);
++      EXPECT_EQ(GetFileAttributesW(path), INVALID_FILE_ATTRIBUTES);
++    } else {
++      // If this file is not in Api Sets, it must be loaded from appdir.
++      EXPECT_TRUE(!wcsicmp(path, appdir));
++    }
++  } while (FindNextFileW(hFind, &wfd));
++  EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_NO_MORE_FILES));
++  BOOL ret = FindClose(hFind);
++  EXPECT_TRUE(ret);
++}
+diff --git a/toolkit/moz.configure b/toolkit/moz.configure
+index b72d08acd4639a80ea5daf10bff69f8dd95c8e56..23f62eb3c5265976214d2a1d5dd46e5b31c475bc 100644
+--- a/toolkit/moz.configure
++++ b/toolkit/moz.configure
+@@ -2678,7 +2678,42 @@ set_config("NASM_ASFLAGS", nasm_asflags)
+ # ==============================================================
+ 
+ with only_when(compile_environment & target_is_windows):
++
++    def d3d_compiler_dll_result(value):
++        if not value.path:
++            return "provided by the OS"
++        return value.path
++
++    @depends(target, valid_windows_sdk_dir, fxc)
++    @checking("for D3D compiler DLL", d3d_compiler_dll_result)
++    @imports("os.path")
++    def d3d_compiler_dll(target, windows_sdk_dir, fxc):
++        suffix = {
++            "x86_64": "x64",
++        }.get(target.cpu, target.cpu)
++
++        name = "d3dcompiler_47.dll"
++
++        if target.cpu == "aarch64":
++            # AArch64 Windows comes with d3dcompiler_47.dll installed
++            return namespace(name=name, path=None)
++
++        if windows_sdk_dir:
++            path = os.path.join(windows_sdk_dir.path, "Redist", "D3D", suffix, name)
++            error_extra = "in Windows SDK at {}".format(windows_sdk_dir.path)
++        else:
++            path = os.path.join(os.path.dirname(fxc), name)
++            error_extra = "alongside FXC at {}".format(fxc)
++
++        if os.path.exists(path):
++            return namespace(name=name, path=path)
++        die("Could not find {} {}".format(name, error_extra))
++
+     set_config("MOZ_ANGLE_RENDERER", True)
++    set_config(
++        "MOZ_D3DCOMPILER_VISTA_DLL", d3d_compiler_dll.name, when=d3d_compiler_dll.path
++    )
++    set_config("MOZ_D3DCOMPILER_VISTA_DLL_PATH", d3d_compiler_dll.path)
+ 
+ with only_when(target_is_windows):
+     option(
+diff --git a/toolkit/mozapps/installer/upload-files.mk b/toolkit/mozapps/installer/upload-files.mk
+index 4cad10c2712aac6969a8f61012a6424b6b1466c5..1abb775f7c4c8356c9625824c051e9742e1310ec 100644
+--- a/toolkit/mozapps/installer/upload-files.mk
++++ b/toolkit/mozapps/installer/upload-files.mk
+@@ -66,6 +66,11 @@ ifdef MSVC_CXX_RUNTIME_DLL
+   JSSHELL_BINS += $(MSVC_CXX_RUNTIME_DLL)
+ endif
+ 
++ifdef WIN_UCRT_REDIST_DIR
++  JSSHELL_BINS += $(notdir $(wildcard $(DIST)/bin/api-ms-win-*.dll))
++  JSSHELL_BINS += ucrtbase.dll
++endif
++
+ ifdef LLVM_SYMBOLIZER
+   JSSHELL_BINS += $(notdir $(LLVM_SYMBOLIZER))
+ endif

@@ -1,0 +1,1 @@
+Bug 1742472 - Use QueryProcessCycleTime on Windows to report total CPU time spent when the CPU has a constant TSC, r=gerald,jrmuizel.    2021-11-24 18:46:45    788093cad8e4bd4ad70d17ef9eba24753cbec5b6

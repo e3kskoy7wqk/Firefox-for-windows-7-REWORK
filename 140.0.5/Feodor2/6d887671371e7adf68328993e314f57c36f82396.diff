@@ -1,0 +1,214 @@
+From 73654ca49c107581e99bed4392023b02970adb42 Mon Sep 17 00:00:00 2001
+From: Bob Owen <bobowencode@gmail.com>
+Date: Wed, 18 Sep 2024 16:24:11 +0000
+Subject: [PATCH] Bug 1918478: Patch in a workable version of
+ GetProcessMitigationPolicy on Windows 7 for widevine.
+ r=aosmond,media-playback-reviewers,win-reviewers,yjuglaret a=diannaS
+
+Differential Revision: https://phabricator.services.mozilla.com/D222310
+---
+ dom/media/gmp/ChromiumCDMAdapter.cpp          | 55 ++++++++++++++++++-
+ mozglue/misc/NativeNt.h                       | 53 ++++++++++++++++++
+ .../mozglue/interceptor/PatcherDetour.h       | 16 +++++-
+ 3 files changed, 121 insertions(+), 3 deletions(-)
+
+diff --git a/dom/media/gmp/ChromiumCDMAdapter.cpp b/dom/media/gmp/ChromiumCDMAdapter.cpp
+index fc3835d48d65..be24165de29b 100644
+--- a/dom/media/gmp/ChromiumCDMAdapter.cpp
++++ b/dom/media/gmp/ChromiumCDMAdapter.cpp
+@@ -20,6 +20,8 @@
+ #ifdef XP_WIN
+ #  include "WinUtils.h"
+ #  include "nsWindowsDllInterceptor.h"
++#  include "mozilla/NativeNt.h"
++#  include "mozilla/WindowsVersion.h"
+ #  include <windows.h>
+ #  include <strsafe.h>
+ #  include <unordered_map>
+@@ -193,6 +195,7 @@ bool ChromiumCDMAdapter::Supports(int32_t aModuleVersion,
+ 
+ #ifdef XP_WIN
+ 
++static WindowsDllInterceptor sKernelBaseIntercept;
+ MOZ_RUNINIT static WindowsDllInterceptor sKernel32Intercept;
+ 
+ typedef DWORD(WINAPI* QueryDosDeviceWFnPtr)(_In_opt_ LPCWSTR lpDeviceName,
+@@ -202,6 +205,13 @@ typedef DWORD(WINAPI* QueryDosDeviceWFnPtr)(_In_opt_ LPCWSTR lpDeviceName,
+ static WindowsDllInterceptor::FuncHookType<QueryDosDeviceWFnPtr>
+     sOriginalQueryDosDeviceWFnPtr;
+ 
++typedef BOOL(WINAPI* GetProcessMitigationPolicyFnPtr)(
++    HANDLE hProcess, PROCESS_MITIGATION_POLICY MitigationPolicy, PVOID lpBuffer,
++    SIZE_T dwLength);
++
++static WindowsDllInterceptor::FuncHookType<GetProcessMitigationPolicyFnPtr>
++    sOriginalGetProcessMitigationPolicyFnPtr;
++
+ static std::unordered_map<std::wstring, std::wstring>* sDeviceNames = nullptr;
+ 
+ DWORD WINAPI QueryDosDeviceWHook(LPCWSTR lpDeviceName, LPWSTR lpTargetPath,
+@@ -260,6 +270,29 @@ static std::wstring GetDeviceMapping(const std::wstring& aDosDeviceName) {
+   return std::wstring(buf, buf + rv);
+ }
+ 
++BOOL WINAPI MozGetProcessMitigationPolicy(
++    HANDLE hProcess, PROCESS_MITIGATION_POLICY MitigationPolicy, PVOID lpBuffer,
++    SIZE_T dwLength) {
++  if (MitigationPolicy != ProcessSystemCallDisablePolicy ||
++      dwLength != sizeof(PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY)) {
++    // We don't use GetProcessPreferredUILanguages, which is patched to create
++    // this workable version of GetProcessMitigationPolicy. However, in theory
++    // other code in our process could bind to GetProcessPreferredUILanguages
++    // before we rename it. As the second and fourth arguments for that function
++    // are pointers, if it is called it will always end up here. FALSE is a
++    // valid return value for GetProcessPreferredUILanguages so in that rare
++    // case it shouldn't be an issue.
++    ::SetLastError(ERROR_INVALID_PARAMETER);
++    return FALSE;
++  }
++
++  auto* policy =
++      reinterpret_cast<PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY*>(
++          lpBuffer);
++  policy->Flags = 0;
++  return TRUE;
++}
++
+ static void InitializeHooks() {
+   static bool initialized = false;
+   if (initialized) {
+@@ -271,9 +304,27 @@ static void InitializeHooks() {
+     sDeviceNames->emplace(name, GetDeviceMapping(name));
+   }
+ 
+-  sKernel32Intercept.Init("kernelbase.dll");
+-  sOriginalQueryDosDeviceWFnPtr.Set(sKernel32Intercept, "QueryDosDeviceW",
++  sKernelBaseIntercept.Init("kernelbase.dll");
++  sOriginalQueryDosDeviceWFnPtr.Set(sKernelBaseIntercept, "QueryDosDeviceW",
+                                     &QueryDosDeviceWHook);
++
++  if (!IsWin8OrLater()) {
++    auto k32mod = ::GetModuleHandleW(L"kernel32.dll");
++    interceptor::MMPolicyInProcess policy;
++    auto k32Exports = nt::PEExportSection<interceptor::MMPolicyInProcess>::Get(
++        k32mod, policy);
++    if (k32Exports.ReplaceExportNameTableEntry("GetProcessPreferredUILanguages",
++                                               "GetProcessMitigationPolicy")) {
++      sKernel32Intercept.Init("kernel32.dll");
++      if (!sOriginalGetProcessMitigationPolicyFnPtr.Set(
++              sKernel32Intercept, "GetProcessMitigationPolicy",
++              &MozGetProcessMitigationPolicy)) {
++        GMP_LOG_WARNING("Failed to hook GetProcessMitigationPolicy");
++      }
++    } else {
++      GMP_LOG_WARNING("Failed to rename to GetProcessMitigationPolicy");
++    }
++  }
+ }
+ #endif
+ 
+diff --git a/mozglue/misc/NativeNt.h b/mozglue/misc/NativeNt.h
+index e28ad0f29141..cbc943497c20 100644
+--- a/mozglue/misc/NativeNt.h
++++ b/mozglue/misc/NativeNt.h
+@@ -1253,6 +1253,59 @@ class MOZ_RAII PEExportSection {
+     return rvaToFunction;
+   }
+ 
++  BOOL ReplaceExportNameTableEntry(const char* aFunctionNameASCII,
++                                   const char* aReplFunctionNameASCII) const {
++    if (!*this || !aFunctionNameASCII || !aReplFunctionNameASCII) {
++      return FALSE;
++    }
++
++    struct NameTableComparator {
++      NameTableComparator(const PEExportSection<MMPolicy>& aExportSection,
++                          const char* aTarget)
++          : mExportSection(aExportSection),
++            mTargetName(aTarget),
++            mTargetNamelength(StrlenASCII(aTarget)) {}
++
++      int operator()(DWORD aRVAToString) const {
++        mozilla::interceptor::TargetObjectArray<MMPolicy, char> itemString(
++            mExportSection.mMMPolicy, mExportSection.mImageBase + aRVAToString,
++            mTargetNamelength + 1);
++        return StrcmpASCII(mTargetName, itemString[0]);
++      }
++
++      const PEExportSection<MMPolicy>& mExportSection;
++      const char* mTargetName;
++      size_t mTargetNamelength;
++    };
++
++    const NameTableComparator comp(*this, aFunctionNameASCII);
++
++    size_t match;
++    if (!mExportNameTable.BinarySearchIf(comp, &match)) {
++      return FALSE;
++    }
++
++    const DWORD* rvaToString = mExportNameTable[match];
++    if (!rvaToString) {
++      return FALSE;
++    }
++
++    auto replNameLen = StrlenASCII(aReplFunctionNameASCII);
++    char* namePtr = reinterpret_cast<char*>(mImageBase + *rvaToString);
++    if (StrlenASCII(namePtr) < replNameLen) {
++      return FALSE;
++    }
++
++    auto replNameLenIncNull = replNameLen + 1;
++    AutoVirtualProtect prot(namePtr, replNameLenIncNull, PAGE_READWRITE);
++    if (!prot) {
++      return FALSE;
++    }
++
++    memcpy(namePtr, aReplFunctionNameASCII, replNameLenIncNull);
++    return TRUE;
++  }
++
+   /**
+    * This functions behaves the same as the native ::GetProcAddress except
+    * the following cases:
+diff --git a/toolkit/xre/dllservices/mozglue/interceptor/PatcherDetour.h b/toolkit/xre/dllservices/mozglue/interceptor/PatcherDetour.h
+index 544be4bc6ef2..02f505866ed5 100644
+--- a/toolkit/xre/dllservices/mozglue/interceptor/PatcherDetour.h
++++ b/toolkit/xre/dllservices/mozglue/interceptor/PatcherDetour.h
+@@ -665,7 +665,7 @@ class WindowsDllDetourPatcher final
+   }
+ 
+ #  if defined(_M_X64)
+-  enum class JumpType { Je, Jne, Jae, Jmp, Call };
++  enum class JumpType { Je, Jne, Jae, Jmp, Call, Js };
+ 
+   static bool GenerateJump(Trampoline<MMPolicyT>& aTramp,
+                            uintptr_t aAbsTargetAddress, const JumpType aType) {
+@@ -696,6 +696,10 @@ class WindowsDllDetourPatcher final
+       // JB RIP+14
+       aTramp.WriteByte(0x72);
+       aTramp.WriteByte(14);
++    } else if (aType == JumpType::Js) {
++      // JNS RIP+14
++      aTramp.WriteByte(0x79);
++      aTramp.WriteByte(14);
+     }
+ 
+     // Near jmp, absolute indirect, address given in r/m32
+@@ -1545,6 +1549,16 @@ class WindowsDllDetourPatcher final
+                           jumpType)) {
+           return;
+         }
++      } else if (*origBytes == 0x78) {
++        // 78 cb    JS rel8
++        uint8_t offset = origBytes[1];
++
++        origBytes += 2;
++
++        if (!GenerateJump(tramp, origBytes.OffsetToAbsolute(offset),
++                          JumpType::Js)) {
++          return;
++        }
+       } else if (*origBytes == 0xff) {
+         uint8_t mod = origBytes[1] & kMaskMod;
+         uint8_t reg = (origBytes[1] & kMaskReg) >> kRegFieldShift;

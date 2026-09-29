@@ -1,0 +1,1 @@
+Bug 1337266 - Don't use LoadLibrary to use Vista+ API in browser/components. r=jimm    2017-02-10 15:40:19    0842ca7fa47afeeacab90fee842d3f87b13a3123

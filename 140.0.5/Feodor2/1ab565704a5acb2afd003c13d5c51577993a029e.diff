@@ -1,0 +1,362 @@
+diff --git a/build/win32/w2kcompat/EnlyzeWinCompatLib.h b/build/win32/w2kcompat/EnlyzeWinCompatLib.h
+new file mode 100644
+index 000000000000..20e163173626
+--- /dev/null
++++ b/build/win32/w2kcompat/EnlyzeWinCompatLib.h
+@@ -0,0 +1,29 @@
++//
++// EnlyzeWinCompatLib - Let MSVC v141_xp targeted applications run on even older Windows versions
++// Copyright (c) 2021 Colin Finck, ENLYZE GmbH <c.finck@enlyze.com>
++// SPDX-License-Identifier: MIT
++//
++
++// To include EnlyzeWinCompatLib in your application, do the following:
++//   1. Add it as a Project Dependency.
++//   2. Turn off Visual Studio's default "Inherit from parent or project defaults" option
++//      in Project Properties -> Linker -> Input -> Additional Dependencies.
++//   3. Include this file in your application.
++//
++// This ensures that EnlyzeWinCompatLib's compatibility code is linked before the Win32 libraries
++// and therefore preferred.
++
++#pragma once
++
++#pragma comment(lib, "kernel32.lib")
++#pragma comment(lib, "user32.lib")
++#pragma comment(lib, "gdi32.lib")
++#pragma comment(lib, "winspool.lib")
++#pragma comment(lib, "comdlg32.lib")
++#pragma comment(lib, "advapi32.lib")
++#pragma comment(lib, "shell32.lib")
++#pragma comment(lib, "ole32.lib")
++#pragma comment(lib, "oleaut32.lib")
++#pragma comment(lib, "uuid.lib")
++#pragma comment(lib, "odbc32.lib")
++#pragma comment(lib, "odbccp32.lib")
+diff --git a/build/win32/w2kcompat/EnlyzeWinCompatLibInternal.h b/build/win32/w2kcompat/EnlyzeWinCompatLibInternal.h
+new file mode 100644
+index 000000000000..9c86bbc6d31f
+--- /dev/null
++++ b/build/win32/w2kcompat/EnlyzeWinCompatLibInternal.h
+@@ -0,0 +1,11 @@
++//
++// EnlyzeWinCompatLib - Let MSVC v141_xp targeted applications run on even older Windows versions
++// Copyright (c) 2021 Colin Finck, ENLYZE GmbH <c.finck@enlyze.com>
++// SPDX-License-Identifier: MIT
++//
++
++#pragma once
++
++#include "targetver.h"
++#include <Windows.h>
++#include <intrin.h>
+diff --git a/build/win32/w2kcompat/moz.build b/build/win32/w2kcompat/moz.build
+new file mode 100644
+index 000000000000..c40645d3b589
+--- /dev/null
++++ b/build/win32/w2kcompat/moz.build
+@@ -0,0 +1,23 @@
++# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
++# vim: set filetype=python:
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++Library("xp_kernel32")
++
++FORCE_STATIC_LIB = True
++NO_EXPAND_LIBS = True
++
++SOURCES += ["xp_kernel32.cpp"]
++
++if CONFIG["TARGET_CPU"] == "x86":
++    SOURCES += ["xp_forwarders_kernel32.asm"]
++    SOURCES["xp_forwarders_kernel32.asm"].flags += ["-safeseh"]
++elif CONFIG["TARGET_CPU"] == "x86_64":
++    SOURCES += ["xp_forwarders_kernel32A.asm"]
++
++CXXFLAGS += [
++    "-clang:-fno-lto",
++    "-fno-builtin",
++]
+diff --git a/build/win32/w2kcompat/targetver.h b/build/win32/w2kcompat/targetver.h
+new file mode 100644
+index 000000000000..026174c4210d
+--- /dev/null
++++ b/build/win32/w2kcompat/targetver.h
+@@ -0,0 +1,14 @@
++//
++// EnlyzeWinCompatLib - Let MSVC v141_xp targeted applications run on even older Windows versions
++// Copyright (c) 2021 Colin Finck, ENLYZE GmbH <c.finck@enlyze.com>
++// SPDX-License-Identifier: MIT
++//
++
++#pragma once
++
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
++
++#define _WIN32_WINNT _WIN32_WINNT_WIN2K
++#include <SDKDDKVer.h>
+diff --git a/build/win32/w2kcompat/xp_forwarders_kernel32.asm b/build/win32/w2kcompat/xp_forwarders_kernel32.asm
+new file mode 100644
+index 000000000000..8df813c508a9
+--- /dev/null
++++ b/build/win32/w2kcompat/xp_forwarders_kernel32.asm
+@@ -0,0 +1,34 @@
++;
++; EnlyzeWinCompatLib - Synchronization & FLS Assembly Wrappers (x86 / stdcall)
++; Copyright (c) 2021 Colin Finck, ENLYZE GmbH <c.finck@enlyze.com>
++; SPDX-License-Identifier: MIT
++;
++
++.model flat
++
++EXTERN _LibInitOnceBeginInitialize@16 : PROC
++EXTERN _LibInitOnceComplete@12 : PROC
++
++.code
++
++PUBLIC _InitOnceBeginInitialize@16
++_InitOnceBeginInitialize@16 PROC
++    jmp _LibInitOnceBeginInitialize@16
++_InitOnceBeginInitialize@16 ENDP
++
++PUBLIC _InitOnceComplete@12
++_InitOnceComplete@12 PROC
++    jmp _LibInitOnceComplete@12
++_InitOnceComplete@12 ENDP
++
++CONST SEGMENT
++
++PUBLIC __imp__InitOnceBeginInitialize@16
++__imp__InitOnceBeginInitialize@16 dd _LibInitOnceBeginInitialize@16
++
++PUBLIC __imp__InitOnceComplete@12
++__imp__InitOnceComplete@12 dd _LibInitOnceComplete@12
++
++CONST ENDS
++
++END
+diff --git a/build/win32/w2kcompat/xp_forwarders_kernel32A.asm b/build/win32/w2kcompat/xp_forwarders_kernel32A.asm
+new file mode 100644
+index 000000000000..265632154068
+--- /dev/null
++++ b/build/win32/w2kcompat/xp_forwarders_kernel32A.asm
+@@ -0,0 +1,35 @@
++;
++; EnlyzeWinCompatLib - Synchronization & FLS Assembly Wrappers (x64)
++; Copyright (c) 2021 Colin Finck, ENLYZE GmbH <c.finck@enlyze.com>
++; SPDX-License-Identifier: MIT
++;
++
++OPTION CASEMAP:NONE
++
++EXTERN LibInitOnceBeginInitialize : PROC
++EXTERN LibInitOnceComplete : PROC
++
++.code
++
++PUBLIC InitOnceBeginInitialize
++InitOnceBeginInitialize PROC
++    jmp LibInitOnceBeginInitialize
++InitOnceBeginInitialize ENDP
++
++PUBLIC InitOnceComplete
++InitOnceComplete PROC
++    jmp LibInitOnceComplete
++InitOnceComplete ENDP
++
++.const
++ALIGN 8
++
++PUBLIC __imp_InitOnceBeginInitialize
++__imp_InitOnceBeginInitialize dq LibInitOnceBeginInitialize
++
++PUBLIC __imp_InitOnceComplete
++__imp_InitOnceComplete dq LibInitOnceComplete
++
++CONST ENDS
++
++END
+diff --git a/build/win32/w2kcompat/xp_kernel32.cpp b/build/win32/w2kcompat/xp_kernel32.cpp
+new file mode 100644
+index 000000000000..f1e3a8876c9c
+--- /dev/null
++++ b/build/win32/w2kcompat/xp_kernel32.cpp
+@@ -0,0 +1,126 @@
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++#include <winternl.h>
++#include <ntstatus.h>
++#include "EnlyzeWinCompatLibInternal.h"
++
++#pragma comment(lib, "ntdll.lib")
++extern "C" DECLSPEC_IMPORT NTSTATUS WINAPI NtWaitForKeyedEvent(HANDLE, const void*, BOOLEAN, const LARGE_INTEGER*);
++extern "C" DECLSPEC_IMPORT NTSTATUS WINAPI NtReleaseKeyedEvent(HANDLE, const void*, BOOLEAN, const LARGE_INTEGER*);
++/******************************************************************
++ *              RtlRunOnceBeginInitialize (NTDLL.@)
++ */
++DWORD WINAPI RtlRunOnceBeginInitialize( INIT_ONCE *once, ULONG flags, void **context )
++{
++    if (flags & RTL_RUN_ONCE_CHECK_ONLY)
++    {
++        ULONG_PTR val = (ULONG_PTR)( once->Ptr );
++
++        if (flags & RTL_RUN_ONCE_ASYNC) return STATUS_INVALID_PARAMETER;
++        if ((val & 3) != 2) return STATUS_UNSUCCESSFUL;
++        if (context) *context = (void *)(val & ~3);
++        return STATUS_SUCCESS;
++    }
++
++    for (;;)
++    {
++        ULONG_PTR next, val = (ULONG_PTR)( once->Ptr );
++
++        switch (val & 3)
++        {
++        case 0:  /* first time */
++            if (!InterlockedCompareExchangePointer( &once->Ptr,
++                                                    (flags & RTL_RUN_ONCE_ASYNC) ? (void *)3 : (void *)1, 0 ))
++                return STATUS_PENDING;
++            break;
++
++        case 1:  /* in progress, wait */
++            if (flags & RTL_RUN_ONCE_ASYNC) return STATUS_INVALID_PARAMETER;
++            next = val & ~3;
++            if (InterlockedCompareExchangePointer( &once->Ptr, (void *)((ULONG_PTR)&next | 1),
++                                                   (void *)val ) == (void *)val)
++                NtWaitForKeyedEvent( 0, &next, FALSE, NULL );
++            break;
++
++        case 2:  /* done */
++            if (context) *context = (void *)(val & ~3);
++            return STATUS_SUCCESS;
++
++        case 3:  /* in progress, async */
++            if (!(flags & RTL_RUN_ONCE_ASYNC)) return STATUS_INVALID_PARAMETER;
++            return STATUS_PENDING;
++        }
++    }
++}
++
++/******************************************************************
++ *              RtlRunOnceComplete (NTDLL.@)
++ */
++DWORD WINAPI RtlRunOnceComplete( INIT_ONCE *once, ULONG flags, void *context )
++{
++    if ((ULONG_PTR)context & 3) return STATUS_INVALID_PARAMETER;
++
++    if (flags & RTL_RUN_ONCE_INIT_FAILED)
++    {
++        if (context) return STATUS_INVALID_PARAMETER;
++        if (flags & RTL_RUN_ONCE_ASYNC) return STATUS_INVALID_PARAMETER;
++    }
++    else context = (void *)((ULONG_PTR)context | 2);
++
++    for (;;)
++    {
++        ULONG_PTR val = (ULONG_PTR)( once->Ptr );
++
++        switch (val & 3)
++        {
++        case 1:  /* in progress */
++            if (InterlockedCompareExchangePointer( &once->Ptr, context, (void *)val ) != (void *)val) break;
++            val &= ~3;
++            while (val)
++            {
++                ULONG_PTR next = *(ULONG_PTR *)val;
++                NtReleaseKeyedEvent( 0, (void *)val, FALSE, NULL );
++                val = next;
++            }
++            return STATUS_SUCCESS;
++
++        case 3:  /* in progress, async */
++            if (!(flags & RTL_RUN_ONCE_ASYNC)) return STATUS_INVALID_PARAMETER;
++            if (InterlockedCompareExchangePointer( &once->Ptr, context, (void *)val ) != (void *)val) break;
++            return STATUS_SUCCESS;
++
++        default:
++            return STATUS_UNSUCCESSFUL;
++        }
++    }
++}
++
++
++extern "C" BOOL WINAPI LibInitOnceBeginInitialize(
++  LPINIT_ONCE lpInitOnce,
++  DWORD       dwFlags,
++  PBOOL       fPending,
++  LPVOID      *lpContext
++)
++{
++    DWORD ret = RtlRunOnceBeginInitialize( lpInitOnce, dwFlags, lpContext );
++
++    *fPending = FALSE;
++    if (ret == STATUS_SUCCESS) return TRUE;
++
++    if (ret == STATUS_PENDING)
++    {
++        *fPending = TRUE;
++        return TRUE;
++    }
++
++    return FALSE;
++}
++
++extern "C" BOOL WINAPI LibInitOnceComplete(
++  LPINIT_ONCE lpInitOnce,
++  DWORD       dwFlags,
++  LPVOID      lpContext
++){
++    return !RtlRunOnceComplete( lpInitOnce, dwFlags, lpContext );
++}
+diff --git a/build/win32/moz.build b/build/win32/moz.build
+index f2ad5c852ca1..12ffbdb86627 100644
+--- a/build/win32/moz.build
++++ b/build/win32/moz.build
+@@ -4,6 +4,7 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
++DIRS += ["w2kcompat"]
+ TEST_DIRS += ["crashinjectdll"]
+ 
+ if CONFIG["ENABLE_TESTS"]:
+diff --git a/config/external/lgpllibs/moz.build b/config/external/lgpllibs/moz.build
+index 1ef140baeace..bcd843e92c57 100644
+--- a/config/external/lgpllibs/moz.build
++++ b/config/external/lgpllibs/moz.build
+@@ -12,6 +12,7 @@
+ 
+ GeckoSharedLibrary("lgpllibs")
+ SHARED_LIBRARY_NAME = "lgpllibs"
++USE_LIBS += ["xp_kernel32"]
+ 
+ # For some reason, mingw builds export way too many symbols.
+ if CONFIG["TARGET_OS"] == "WINNT" and CONFIG["CC_TYPE"] != "clang-cl":
+diff --git a/gfx/angle/targets/libGLESv2/moz.build b/gfx/angle/targets/libGLESv2/moz.build
+index 18d296d084a4..44c1890551dc 100644
+--- a/gfx/angle/targets/libGLESv2/moz.build
++++ b/gfx/angle/targets/libGLESv2/moz.build
+@@ -363,6 +363,7 @@ USE_LIBS += [
+     "angle_image_util",
+     "compression_utils_portable",
+     "translator",
++    "xp_kernel32",
+ ]
+ 
+ DIRS += [
+diff --git a/toolkit/library/moz.build b/toolkit/library/moz.build
+index fa3e006d1af6..d84bd0701176 100644
+--- a/toolkit/library/moz.build
++++ b/toolkit/library/moz.build
+@@ -80,6 +80,7 @@ def Libxul(name, output_category=None):
+         ]
+         RCINCLUDE = "/toolkit/library/xulrunner.rc"
+ 
++    USE_LIBS += ["xp_kernel32"]
+     # Show a breakdown of linker time. (Too verbose for local builds.)
+     if CONFIG["CC_TYPE"] == "clang-cl" and not CONFIG["DEVELOPER_OPTIONS"]:
+         LDFLAGS += ["-time"]

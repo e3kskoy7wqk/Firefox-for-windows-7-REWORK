@@ -1,0 +1,36 @@
+From 54e857337d3ae2b53c75330629d6674dcc1bd7dc Mon Sep 17 00:00:00 2001
+From: Andrew Osmond <aosmond@gmail.com>
+Date: Tue, 14 Apr 2026 01:43:04 +0000
+Subject: [PATCH] Bug 2029827 - Handle ordinal values passed to
+ MozGetProcAddress by Widevine on Windows 7. r=yjuglaret a=RyanVM
+
+Widevine appears to pass an ordinal value of 9 to GetProcAddress which
+makes the strcmp in our replacement method to crash on a bad pointer. We
+should make sure lpProcName is actually a string first.
+
+Differential Revision: https://phabricator.services.mozilla.com/D292266
+---
+ dom/media/gmp/ChromiumCDMAdapter.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dom/media/gmp/ChromiumCDMAdapter.cpp b/dom/media/gmp/ChromiumCDMAdapter.cpp
+index d47946757c68..9f1af2e40c2a 100644
+--- a/dom/media/gmp/ChromiumCDMAdapter.cpp
++++ b/dom/media/gmp/ChromiumCDMAdapter.cpp
+@@ -23,6 +23,7 @@
+ #  include "mozilla/NativeNt.h"
+ #  include "mozilla/WindowsVersion.h"
+ #  include <windows.h>
++#  include <winuser.h>
+ #include "mozilla/RandomNum.h"
+ #  include <strsafe.h>
+ #  include <unordered_map>
+@@ -316,7 +317,7 @@ BOOL WINAPI MozProcessPrng(PBYTE pbData, SIZE_T cbData) {
+ }
+ 
+ FARPROC WINAPI MozGetProcAddress(HMODULE hModule, LPCSTR lpProcName) {
+-  if (strcmp(lpProcName, "ProcessPrng") == 0) {
++  if (!IS_INTRESOURCE(lpProcName) && strcmp(lpProcName, "ProcessPrng") == 0) {
+     return reinterpret_cast<FARPROC>(&MozProcessPrng);
+   }
+ 

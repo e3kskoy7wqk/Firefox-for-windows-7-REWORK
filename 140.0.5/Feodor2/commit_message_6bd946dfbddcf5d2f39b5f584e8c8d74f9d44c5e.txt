@@ -1,0 +1,1 @@
+Bug 1318025 - re-enable thread-safe statics on Windows builds; r=glandium    2016-12-23 22:03:27    6bd946dfbddcf5d2f39b5f584e8c8d74f9d44c5e

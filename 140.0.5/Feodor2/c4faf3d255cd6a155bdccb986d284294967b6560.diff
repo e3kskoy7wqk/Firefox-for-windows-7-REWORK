@@ -1,0 +1,65 @@
+diff --git a/build/moz.configure/windows.configure b/build/moz.configure/windows.configure
+index be1e97c4f1817dae165329f9937972cb95132463..06f0133f2e8d5b8c47c5fbdfc2ad389499f1b8de 100644
+--- a/build/moz.configure/windows.configure
++++ b/build/moz.configure/windows.configure
+@@ -615,7 +615,8 @@ with only_when(depends(c_compiler)(lambda c: c.type == "clang-cl")):
+     set_define("HAVE_IO_H", True)
+ 
+     def win32_subsystem_version():
+-        return "6.01"
++        # Set subsystem version 5 for Windows XP.
++        return "5.01"
+ 
+     set_config(
+         "WIN32_CONSOLE_EXE_LDFLAGS",
+diff --git a/toolkit/library/build/moz.build b/toolkit/library/build/moz.build
+index e18dfc75d71c..3edeccfae54d 100644
+--- a/toolkit/library/build/moz.build
++++ b/toolkit/library/build/moz.build
+@@ -14,6 +14,12 @@ USE_LIBS += ["gkrust"]
+ 
+ Libxul("xul-real")
+ 
++if (
++    CONFIG["OS_ARCH"] == "WINNT"
++    and CONFIG["TARGET_CPU"] == "x86"
++):
++    LDFLAGS += ["-BASE:0x50000000"]
++
+ if CONFIG["COMPILE_ENVIRONMENT"]:
+     if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("cocoa", "uikit"):
+         full_libname = SHARED_LIBRARY_NAME
+diff --git a/security/moz.build b/security/moz.build
+index b30e9c2f72a7..a1c9e7f902fd 100644
+--- a/security/moz.build
++++ b/security/moz.build
+@@ -26,6 +26,12 @@ if CONFIG["MOZ_FOLD_LIBS"]:
+     # TODO: The library name can be changed when bug 845217 is fixed.
+     SHARED_LIBRARY_NAME = "nss3"
+ 
++    if (
++        CONFIG["OS_ARCH"] == "WINNT"
++        and CONFIG["TARGET_CPU"] == "x86"
++    ):
++        LDFLAGS += ["-BASE:0x5A000000"]
++
+     USE_LIBS += [
+         "nspr4",
+         "nss3_static",
+diff --git a/config/external/gkcodecs/moz.build b/config/external/gkcodecs/moz.build
+index 040f6809deca..e1d525428e1f 100644
+--- a/config/external/gkcodecs/moz.build
++++ b/config/external/gkcodecs/moz.build
+@@ -14,5 +14,12 @@
+ GeckoSharedLibrary("gkcodecs")
+ SHARED_LIBRARY_NAME = "gkcodecs"
+ SYMBOLS_FILE = "gkcodecs.symbols"
++
++if (
++    CONFIG["OS_ARCH"] == "WINNT"
++    and CONFIG["TARGET_CPU"] == "x86"
++):
++    LDFLAGS += ["-BASE:0x59000000"]
++
+ if CONFIG["MOZ_SYSTEM_LIBVPX"]:
+     DEFINES["MOZ_SYSTEM_LIBVPX"] = True

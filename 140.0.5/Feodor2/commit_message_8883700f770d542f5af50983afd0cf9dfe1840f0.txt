@@ -1,0 +1,1 @@
+Bug 1955340 - Ensure sidebar-main is opaque when expanded-on-hover with Windows Mica. r=kcochrane,sidebar-reviewers    2025-07-09 06:19:08    8883700f770d542f5af50983afd0cf9dfe1840f0

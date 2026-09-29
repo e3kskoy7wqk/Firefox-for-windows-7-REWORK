@@ -1,0 +1,16 @@
+diff --git a/netwerk/socket/neqo_glue/src/lib.rs b/netwerk/socket/neqo_glue/src/lib.rs
+index 21e82b920d9c..3d036b5031b9 100644
+--- a/netwerk/socket/neqo_glue/src/lib.rs
++++ b/netwerk/socket/neqo_glue/src/lib.rs
+@@ -284,7 +284,10 @@ impl NeqoHttp3Conn {
+             .sni_slicing(static_prefs::pref!("network.http.http3.sni-slicing"))
+             .idle_timeout(Duration::from_secs(idle_timeout.into()))
+             // Disabled on OpenBSD. See <https://bugzilla.mozilla.org/show_bug.cgi?id=1952304>.
+-            .pmtud_iface_mtu(cfg!(not(target_os = "openbsd")))
++            .pmtud_iface_mtu(cfg!(not(any(
++                target_os = "openbsd",
++                target_os = "windows"
++            ))))
+             // MLKEM support is configured further below. By default, disable it.
+             .mlkem(false);
+ 

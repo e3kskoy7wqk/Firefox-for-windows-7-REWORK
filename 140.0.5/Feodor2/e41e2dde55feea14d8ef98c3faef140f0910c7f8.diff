@@ -1,0 +1,12 @@
+diff --git a/toolkit/components/protobuf/src/google/protobuf/stubs/mutex.h b/toolkit/components/protobuf/src/google/protobuf/stubs/mutex.h
+index c4599913be22..f22be95ea600 100644
+--- a/toolkit/components/protobuf/src/google/protobuf/stubs/mutex.h
++++ b/toolkit/components/protobuf/src/google/protobuf/stubs/mutex.h
+@@ -31,6 +31,7 @@
+ #define GOOGLE_PROTOBUF_STUBS_MUTEX_H_
+ 
+ #include <mutex>
++#define GOOGLE_PROTOBUF_SUPPORT_WINDOWS_XP
+ 
+ #ifdef GOOGLE_PROTOBUF_SUPPORT_WINDOWS_XP
+ 

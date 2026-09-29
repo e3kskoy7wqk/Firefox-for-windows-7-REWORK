@@ -1,0 +1,1 @@
+Bug 1875036 - Speed up directory enumeration on Windows. r=win-reviewers,gstoll    2024-04-11 14:52:03    4d8a81cea9d4594213a2e560a806d35afe04ca43

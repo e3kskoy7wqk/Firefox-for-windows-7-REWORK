@@ -1,0 +1,437 @@
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+index 3a2c21125756..fbf3327ee41f 100644
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -27,6 +27,12 @@
+ using namespace mozilla;
+ using namespace mozilla::widget;
+ 
++const wchar_t
++nsLookAndFeel::kThemeLibraryName[] = L"uxtheme.dll";
++
++HMODULE
++nsLookAndFeel::sThemeDLL = nullptr;
++
+ const int NUM_COMMAND_BUTTONS = 3;
+ SIZE nsLookAndFeel::sCommandButtonMetrics[NUM_COMMAND_BUTTONS];
+ bool nsLookAndFeel::sCommandButtonMetricsInitialized = false;
+@@ -100,6 +106,13 @@
+ 
+ UXThemeHandle::operator HANDLE() { return mHandle.valueOr(nullptr); }
+ 
++HMODULE
++nsLookAndFeel::GetThemeDLL() {
++  if (!sThemeDLL)
++    sThemeDLL = ::LoadLibraryW(kThemeLibraryName);
++  return sThemeDLL;
++}
++
+ static const wchar_t* GetUXThemeClassName(UXThemeClass aClass) {
+   switch (aClass) {
+     case UXThemeClass::Button:
+diff --git a/widget/windows/nsLookAndFeel.h b/widget/windows/nsLookAndFeel.h
+index 45a06a1ffe70..0a5851019925 100644
+--- a/widget/windows/nsLookAndFeel.h
++++ b/widget/windows/nsLookAndFeel.h
+@@ -94,6 +94,7 @@
+ 
+ class nsLookAndFeel final : public nsXPLookAndFeel {
+ 
++  static HMODULE sThemeDLL;
+   // We initialize sCommandButtonBoxMetrics separately as a performance
+   // optimization to avoid fetching dummy values for sCommandButtonMetrics
+   // when we don't need those.
+@@ -105,6 +106,8 @@
+   static void EnsureCommandButtonMetrics();
+   static void EnsureCommandButtonBoxMetrics();
+  public:
++  static const wchar_t kThemeLibraryName[];
++  static HMODULE GetThemeDLL();
+   static bool sTitlebarInfoPopulatedAero;
+   static bool sTitlebarInfoPopulatedThemed;
+   nsLookAndFeel();
+diff --git a/widget/windows/nsWinGesture.cpp b/widget/windows/nsWinGesture.cpp
+index 0341072ed0cd..d5d4c053b3dc 100644
+--- a/widget/windows/nsWinGesture.cpp
++++ b/widget/windows/nsWinGesture.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "nscore.h"
+ #include "nsWinGesture.h"
++#include "nsLookAndFeel.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/MouseEvents.h"
+ #include "mozilla/Preferences.h"
+@@ -24,6 +25,22 @@
+ 
+ extern mozilla::LazyLogModule gWindowsLog;
+ 
++const wchar_t nsWinGesture::kGestureLibraryName[] =  L"user32.dll";
++HMODULE nsWinGesture::sLibraryHandle = nullptr;
++nsWinGesture::GetGestureInfoPtr nsWinGesture::getGestureInfo = nullptr;
++nsWinGesture::CloseGestureInfoHandlePtr nsWinGesture::closeGestureInfoHandle = nullptr;
++nsWinGesture::GetGestureExtraArgsPtr nsWinGesture::getGestureExtraArgs = nullptr;
++nsWinGesture::SetGestureConfigPtr nsWinGesture::setGestureConfig = nullptr;
++nsWinGesture::GetGestureConfigPtr nsWinGesture::getGestureConfig = nullptr;
++nsWinGesture::BeginPanningFeedbackPtr nsWinGesture::beginPanningFeedback = nullptr;
++nsWinGesture::EndPanningFeedbackPtr nsWinGesture::endPanningFeedback = nullptr;
++nsWinGesture::UpdatePanningFeedbackPtr nsWinGesture::updatePanningFeedback = nullptr;
++
++nsWinGesture::RegisterTouchWindowPtr nsWinGesture::registerTouchWindow = nullptr;
++nsWinGesture::UnregisterTouchWindowPtr nsWinGesture::unregisterTouchWindow = nullptr;
++nsWinGesture::GetTouchInputInfoPtr nsWinGesture::getTouchInputInfo = nullptr;
++nsWinGesture::CloseTouchInputHandlePtr nsWinGesture::closeTouchInputHandle = nullptr;
++ 
+ static bool gEnableSingleFingerPanEvents = false;
+ 
+ nsWinGesture::nsWinGesture()
+@@ -39,6 +56,58 @@
+ /* Load and shutdown */
+ 
+ bool nsWinGesture::InitLibrary() {
++  if (getGestureInfo) {
++    return true;
++  } else if (sLibraryHandle) {
++    return false;
++  }
++
++  sLibraryHandle = ::LoadLibraryW(kGestureLibraryName);
++  HMODULE hTheme = nsLookAndFeel::GetThemeDLL();
++
++  // gesture interfaces
++  if (sLibraryHandle) {
++    getGestureInfo = (GetGestureInfoPtr)GetProcAddress(sLibraryHandle, "GetGestureInfo");
++    closeGestureInfoHandle = (CloseGestureInfoHandlePtr)GetProcAddress(sLibraryHandle, "CloseGestureInfoHandle");
++    getGestureExtraArgs = (GetGestureExtraArgsPtr)GetProcAddress(sLibraryHandle, "GetGestureExtraArgs");
++    setGestureConfig = (SetGestureConfigPtr)GetProcAddress(sLibraryHandle, "SetGestureConfig");
++    getGestureConfig = (GetGestureConfigPtr)GetProcAddress(sLibraryHandle, "GetGestureConfig");
++    registerTouchWindow = (RegisterTouchWindowPtr)GetProcAddress(sLibraryHandle, "RegisterTouchWindow");
++    unregisterTouchWindow = (UnregisterTouchWindowPtr)GetProcAddress(sLibraryHandle, "UnregisterTouchWindow");
++    getTouchInputInfo = (GetTouchInputInfoPtr)GetProcAddress(sLibraryHandle, "GetTouchInputInfo");
++    closeTouchInputHandle = (CloseTouchInputHandlePtr)GetProcAddress(sLibraryHandle, "CloseTouchInputHandle");
++  }
++
++  if (!getGestureInfo || !closeGestureInfoHandle || !getGestureExtraArgs ||
++    !setGestureConfig || !getGestureConfig) {
++    getGestureInfo         = nullptr;
++    closeGestureInfoHandle = nullptr;
++    getGestureExtraArgs    = nullptr;
++    setGestureConfig       = nullptr;
++    getGestureConfig       = nullptr;
++    return false;
++  }
++  
++  if (!registerTouchWindow || !unregisterTouchWindow || !getTouchInputInfo || !closeTouchInputHandle) {
++    registerTouchWindow   = nullptr;
++    unregisterTouchWindow = nullptr;
++    getTouchInputInfo     = nullptr;
++    closeTouchInputHandle = nullptr;
++  }
++
++  // panning feedback interfaces
++  if (hTheme) {
++    beginPanningFeedback = (BeginPanningFeedbackPtr)GetProcAddress(hTheme, "BeginPanningFeedback");
++    endPanningFeedback = (EndPanningFeedbackPtr)GetProcAddress(hTheme, "EndPanningFeedback");
++    updatePanningFeedback = (UpdatePanningFeedbackPtr)GetProcAddress(hTheme, "UpdatePanningFeedback");
++  }
++
++  if (!beginPanningFeedback || !endPanningFeedback || !updatePanningFeedback) {
++    beginPanningFeedback   = nullptr;
++    endPanningFeedback     = nullptr;
++    updatePanningFeedback  = nullptr;
++  }
++
+   // Check to see if we want single finger gesture input. Only do this once
+   // for the app so we don't have to look it up on every window create.
+   gEnableSingleFingerPanEvents =
+@@ -51,6 +120,9 @@
+ 
+ bool nsWinGesture::SetWinGestureSupport(
+     HWND hWnd, WidgetGestureNotifyEvent::PanDirection aDirection) {
++  if (!getGestureInfo)
++    return false;
++
+   GESTURECONFIG config[GCOUNT];
+ 
+   memset(&config, 0, sizeof(config));
+@@ -90,12 +162,115 @@
+   config[4].dwID = GID_PRESSANDTAP;
+   config[4].dwBlock = 0;
+ 
+-  return SetGestureConfig(hWnd, 0, GCOUNT, (PGESTURECONFIG)&config,
+-                          sizeof(GESTURECONFIG));
++  return SetGestureConfig(hWnd, GCOUNT, (PGESTURECONFIG)&config);
+ }
+ 
+ /* Helpers */
+ 
++bool nsWinGesture::IsAvailable()
++{
++  return getGestureInfo != nullptr;
++}
++
++bool nsWinGesture::RegisterTouchWindow(HWND hWnd)
++{
++  if (!registerTouchWindow)
++    return false;
++
++  return registerTouchWindow(hWnd, TWF_WANTPALM);
++}
++
++bool nsWinGesture::UnregisterTouchWindow(HWND hWnd)
++{
++  if (!unregisterTouchWindow)
++    return false;
++
++  return unregisterTouchWindow(hWnd);
++}
++
++bool nsWinGesture::GetTouchInputInfo(HTOUCHINPUT hTouchInput, uint32_t cInputs, PTOUCHINPUT pInputs)
++{
++  if (!getTouchInputInfo)
++    return false;
++
++  return getTouchInputInfo(hTouchInput, cInputs, pInputs, sizeof(TOUCHINPUT));
++}
++
++bool nsWinGesture::CloseTouchInputHandle(HTOUCHINPUT hTouchInput)
++{
++  if (!closeTouchInputHandle)
++    return false;
++
++  return closeTouchInputHandle(hTouchInput);
++}
++
++bool nsWinGesture::GetGestureInfo(HGESTUREINFO hGestureInfo, PGESTUREINFO pGestureInfo)
++{
++  if (!getGestureInfo || !hGestureInfo || !pGestureInfo)
++    return false;
++
++  ZeroMemory(pGestureInfo, sizeof(GESTUREINFO));
++  pGestureInfo->cbSize = sizeof(GESTUREINFO);
++
++  return getGestureInfo(hGestureInfo, pGestureInfo);
++}
++
++bool nsWinGesture::CloseGestureInfoHandle(HGESTUREINFO hGestureInfo)
++{
++  if (!getGestureInfo || !hGestureInfo)
++    return false;
++
++  return closeGestureInfoHandle(hGestureInfo);
++}
++
++bool nsWinGesture::GetGestureExtraArgs(HGESTUREINFO hGestureInfo, UINT cbExtraArgs, PBYTE pExtraArgs)
++{
++  if (!getGestureInfo || !hGestureInfo || !pExtraArgs)
++    return false;
++
++  return getGestureExtraArgs(hGestureInfo, cbExtraArgs, pExtraArgs);
++}
++
++bool nsWinGesture::SetGestureConfig(HWND hWnd, UINT cIDs, PGESTURECONFIG pGestureConfig)
++{
++  if (!getGestureInfo || !pGestureConfig)
++    return false;
++
++  return setGestureConfig(hWnd, 0, cIDs, pGestureConfig, sizeof(GESTURECONFIG));
++}
++
++bool nsWinGesture::GetGestureConfig(HWND hWnd, DWORD dwFlags, PUINT pcIDs, PGESTURECONFIG pGestureConfig)
++{
++  if (!getGestureInfo || !pGestureConfig)
++    return false;
++
++  return getGestureConfig(hWnd, 0, dwFlags, pcIDs, pGestureConfig, sizeof(GESTURECONFIG));
++}
++
++bool nsWinGesture::BeginPanningFeedback(HWND hWnd)
++{
++  if (!beginPanningFeedback)
++    return false;
++
++  return beginPanningFeedback(hWnd);
++}
++
++bool nsWinGesture::EndPanningFeedback(HWND hWnd)
++{
++  if (!beginPanningFeedback)
++    return false;
++
++  return endPanningFeedback(hWnd, TRUE);
++}
++
++bool nsWinGesture::UpdatePanningFeedback(HWND hWnd, LONG offsetX, LONG offsetY, BOOL fInInertia)
++{
++  if (!beginPanningFeedback)
++    return false;
++
++  return updatePanningFeedback(hWnd, offsetX, offsetY, fInInertia);
++}
++
+ bool nsWinGesture::IsPanEvent(LPARAM lParam) {
+   GESTUREINFO gi;
+ 
+@@ -354,7 +529,7 @@
+     mXAxisFeedback = false;
+     mYAxisFeedback = false;
+     mPixelScrollOverflow = 0;
+-    EndPanningFeedback(hWnd, TRUE);
++    EndPanningFeedback(hWnd);
+     return;
+   }
+ 
+diff --git a/widget/windows/nsWinGesture.h b/widget/windows/nsWinGesture.h
+index 040b460da9d8..9e1b38363526 100644
+--- a/widget/windows/nsWinGesture.h
++++ b/widget/windows/nsWinGesture.h
+@@ -53,6 +53,11 @@
+   bool SetWinGestureSupport(
+       HWND hWnd, mozilla::WidgetGestureNotifyEvent::PanDirection aDirection);
+   bool ShutdownWinGestureSupport();
++  bool RegisterTouchWindow(HWND hWnd);
++  bool UnregisterTouchWindow(HWND hWnd);
++  bool GetTouchInputInfo(HTOUCHINPUT hTouchInput, uint32_t cInputs, PTOUCHINPUT pInputs);
++  bool CloseTouchInputHandle(HTOUCHINPUT hTouchInput);
++  bool IsAvailable();
+ 
+   // Simple gesture process
+   bool ProcessGestureMessage(HWND hWnd, WPARAM wParam, LPARAM lParam,
+@@ -66,7 +71,51 @@
+   void UpdatePanFeedbackY(HWND hWnd, int32_t scrollOverflow, bool& endFeedback);
+   void PanFeedbackFinalize(HWND hWnd, bool endFeedback);
+ 
++public:
++  // Helpers
++  bool GetGestureInfo(HGESTUREINFO hGestureInfo, PGESTUREINFO pGestureInfo);
++  bool CloseGestureInfoHandle(HGESTUREINFO hGestureInfo);
++  bool GetGestureExtraArgs(HGESTUREINFO hGestureInfo, UINT cbExtraArgs, PBYTE pExtraArgs);
++  bool SetGestureConfig(HWND hWnd, UINT cIDs, PGESTURECONFIG pGestureConfig);
++  bool GetGestureConfig(HWND hWnd, DWORD dwFlags, PUINT pcIDs, PGESTURECONFIG pGestureConfig);
++  bool BeginPanningFeedback(HWND hWnd);
++  bool EndPanningFeedback(HWND hWnd);
++  bool UpdatePanningFeedback(HWND hWnd, LONG offsetX, LONG offsetY, BOOL fInInertia);
++
++protected:
++
+  private:
++  // Function prototypes
++  typedef BOOL (WINAPI * GetGestureInfoPtr)(HGESTUREINFO hGestureInfo, PGESTUREINFO pGestureInfo);
++  typedef BOOL (WINAPI * CloseGestureInfoHandlePtr)(HGESTUREINFO hGestureInfo);
++  typedef BOOL (WINAPI * GetGestureExtraArgsPtr)(HGESTUREINFO hGestureInfo, UINT cbExtraArgs, PBYTE pExtraArgs);
++  typedef BOOL (WINAPI * SetGestureConfigPtr)(HWND hwnd, DWORD dwReserved, UINT cIDs, PGESTURECONFIG pGestureConfig, UINT cbSize);
++  typedef BOOL (WINAPI * GetGestureConfigPtr)(HWND hwnd, DWORD dwReserved, DWORD dwFlags, PUINT pcIDs, PGESTURECONFIG pGestureConfig, UINT cbSize);
++  typedef BOOL (WINAPI * BeginPanningFeedbackPtr)(HWND hWnd);
++  typedef BOOL (WINAPI * EndPanningFeedbackPtr)(HWND hWnd, BOOL fAnimateBack);
++  typedef BOOL (WINAPI * UpdatePanningFeedbackPtr)(HWND hWnd, LONG offsetX, LONG offsetY, BOOL fInInertia);
++  typedef BOOL (WINAPI * RegisterTouchWindowPtr)(HWND hWnd, ULONG flags);
++  typedef BOOL (WINAPI * UnregisterTouchWindowPtr)(HWND hWnd);
++  typedef BOOL (WINAPI * GetTouchInputInfoPtr)(HTOUCHINPUT hTouchInput, uint32_t cInputs, PTOUCHINPUT pInputs, int32_t cbSize);
++  typedef BOOL (WINAPI * CloseTouchInputHandlePtr)(HTOUCHINPUT hTouchInput);
++
++  // Static function pointers
++  static GetGestureInfoPtr getGestureInfo;
++  static CloseGestureInfoHandlePtr closeGestureInfoHandle;
++  static GetGestureExtraArgsPtr getGestureExtraArgs;
++  static SetGestureConfigPtr setGestureConfig;
++  static GetGestureConfigPtr getGestureConfig;
++  static BeginPanningFeedbackPtr beginPanningFeedback;
++  static EndPanningFeedbackPtr endPanningFeedback;
++  static UpdatePanningFeedbackPtr updatePanningFeedback;
++  static RegisterTouchWindowPtr registerTouchWindow;
++  static UnregisterTouchWindowPtr unregisterTouchWindow;
++  static GetTouchInputInfoPtr getTouchInputInfo;
++  static CloseTouchInputHandlePtr closeTouchInputHandle;
++
++  static HMODULE sLibraryHandle;
++  static const wchar_t kGestureLibraryName[];
++
+   // Delay load info
+   bool InitLibrary();
+ 
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 210dff583422..80a4f96b47e5 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -1910,15 +1910,14 @@
+ 
+ void nsWindow::RegisterTouchWindow() {
+   mTouchWindow = true;
+-  ::RegisterTouchWindow(mWnd, TWF_WANTPALM);
++  mGesture.RegisterTouchWindow(mWnd);
+   ::EnumChildWindows(mWnd, nsWindow::RegisterTouchForDescendants, 0);
+ }
+ 
+ BOOL CALLBACK nsWindow::RegisterTouchForDescendants(HWND aWnd, LPARAM aMsg) {
+   nsWindow* win = WinUtils::GetNSWindowPtr(aWnd);
+-  if (win) {
+-    ::RegisterTouchWindow(aWnd, TWF_WANTPALM);
+-  }
++  if (win)
++    win->mGesture.RegisterTouchWindow(aWnd);
+   return TRUE;
+ }
+ 
+@@ -7131,8 +7130,7 @@
+   uint32_t cInputs = LOWORD(wParam);
+   PTOUCHINPUT pInputs = new TOUCHINPUT[cInputs];
+ 
+-  if (GetTouchInputInfo((HTOUCHINPUT)lParam, cInputs, pInputs,
+-                        sizeof(TOUCHINPUT))) {
++  if (mGesture.GetTouchInputInfo((HTOUCHINPUT)lParam, cInputs, pInputs)) {
+     MultiTouchInput touchInput, touchEndInput;
+ 
+     // Walk across the touch point array processing each contact point.
+@@ -7222,7 +7220,7 @@
+   }
+ 
+   delete[] pInputs;
+-  CloseTouchInputHandle((HTOUCHINPUT)lParam);
++  mGesture.CloseTouchInputHandle((HTOUCHINPUT)lParam);
+   return true;
+ }
+ 
+@@ -7260,7 +7258,7 @@
+       mGesture.PanFeedbackFinalize(mWnd, endFeedback);
+     }
+ 
+-    CloseGestureInfoHandle((HGESTUREINFO)lParam);
++    mGesture.CloseGestureInfoHandle((HGESTUREINFO)lParam);
+ 
+     return true;
+   }
+@@ -7285,7 +7283,7 @@
+   }
+ 
+   // Only close this if we process and return true.
+-  CloseGestureInfoHandle((HGESTUREINFO)lParam);
++  mGesture.CloseGestureInfoHandle((HGESTUREINFO)lParam);
+ 
+   return true;  // Handled
+ }
+@@ -8106,8 +8104,23 @@
+     return ret;
+   }
+   TOUCHINPUT input;
+-  if (GetTouchInputInfo((HTOUCHINPUT)lParam, cInputs, &input,
+-                        sizeof(TOUCHINPUT))) {
++/* Functions that extract data from touch-screen events.  */
++typedef BOOL (WINAPI * GetTouchInputInfo_proc) (HANDLE, UINT, PTOUCHINPUT, int);
++
++static GetTouchInputInfo_proc pfnGetTouchInputInfo;
++
++  /* Dynamically link to optional system components.  */
++  {
++    HMODULE user_lib = GetModuleHandleW (L"user32.dll");
++
++#define LOAD_PROC(lib, fn) pfn##fn = (fn##_proc) GetProcAddress (lib, #fn)
++
++    LOAD_PROC (user_lib, GetTouchInputInfo);
++#undef LOAD_PROC
++  }
++
++         if (pfnGetTouchInputInfo)
++  if (pfnGetTouchInputInfo((HTOUCHINPUT)lParam, cInputs, &input, sizeof(TOUCHINPUT))) {
+     ret.emplace();
+     ret->x = TOUCH_COORD_TO_PIXEL(input.x);
+     ret->y = TOUCH_COORD_TO_PIXEL(input.y);

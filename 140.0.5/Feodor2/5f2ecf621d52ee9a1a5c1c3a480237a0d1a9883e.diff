@@ -1,0 +1,65 @@
+From dfa19b974ce7a945c2a90b5ceee02e4fb7a4a4ec Mon Sep 17 00:00:00 2001
+From: Bob Owen <bobowencode@gmail.com>
+Date: Thu, 6 Mar 2025 15:52:16 +0000
+Subject: [PATCH] Bug 1944724 p2 - Intercept GetProcAddress for ProcessPrng on
+ Windows 7 for Widevine. r=yjuglaret,media-playback-reviewers,aosmond
+ a=pascalc
+
+Differential Revision: https://phabricator.services.mozilla.com/D238977
+---
+ dom/media/gmp/ChromiumCDMAdapter.cpp | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/dom/media/gmp/ChromiumCDMAdapter.cpp b/dom/media/gmp/ChromiumCDMAdapter.cpp
+index a65ccddc5474..d47946757c68 100644
+--- a/dom/media/gmp/ChromiumCDMAdapter.cpp
++++ b/dom/media/gmp/ChromiumCDMAdapter.cpp
+@@ -23,6 +23,7 @@
+ #  include "mozilla/NativeNt.h"
+ #  include "mozilla/WindowsVersion.h"
+ #  include <windows.h>
++#include "mozilla/RandomNum.h"
+ #  include <strsafe.h>
+ #  include <unordered_map>
+ #  include <vector>
+@@ -219,6 +220,9 @@ typedef BOOL(WINAPI* SetThreadInformationFnPtr)(
+ static WindowsDllInterceptor::FuncHookType<SetThreadInformationFnPtr>
+     sOriginalSetThreadInformationFnPtr;
+ 
++static WindowsDllInterceptor::FuncHookType<decltype(&GetProcAddress)>
++    sOriginalGetProcAddressFnPtr;
++
+ static std::unordered_map<std::wstring, std::wstring>* sDeviceNames = nullptr;
+ 
+ DWORD WINAPI QueryDosDeviceWHook(LPCWSTR lpDeviceName, LPWSTR lpTargetPath,
+@@ -306,6 +310,18 @@ BOOL WINAPI MozSetThreadInformation(
+   return TRUE;
+ }
+ 
++BOOL WINAPI MozProcessPrng(PBYTE pbData, SIZE_T cbData) {
++  return mozilla::GenerateRandomBytesFromOS(pbData, cbData) ? TRUE : FALSE;
++}
++
++FARPROC WINAPI MozGetProcAddress(HMODULE hModule, LPCSTR lpProcName) {
++  if (strcmp(lpProcName, "ProcessPrng") == 0) {
++    return reinterpret_cast<FARPROC>(&MozProcessPrng);
++  }
++
++  return sOriginalGetProcAddressFnPtr(hModule, lpProcName);
++}
++
+ static void InitializeHooks() {
+   static bool initialized = false;
+   if (initialized) {
+@@ -341,6 +358,11 @@ static void InitializeHooks() {
+                                                   &MozSetThreadInformation)) {
+         GMP_LOG_WARNING("Failed to hook SetThreadInformation");
+       }
++
++      if (!sOriginalGetProcAddressFnPtr.Set(
++              sKernel32Intercept, "GetProcAddress", &MozGetProcAddress)) {
++        GMP_LOG_WARNING("Failed to hook GetProcAddress");
++      }
+     } else {
+       GMP_LOG_WARNING(
+           "Failed to rename to GetProcessMitigationPolicy and/or "

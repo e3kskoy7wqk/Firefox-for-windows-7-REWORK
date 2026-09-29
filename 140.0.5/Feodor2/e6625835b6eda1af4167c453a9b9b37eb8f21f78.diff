@@ -1,0 +1,815 @@
+diff --git a/browser/components/migration/IEProfileMigrator.sys.mjs b/browser/components/migration/IEProfileMigrator.sys.mjs
+index d0fd504e1a3e..1a8c231b5511 100644
+--- a/browser/components/migration/IEProfileMigrator.sys.mjs
++++ b/browser/components/migration/IEProfileMigrator.sys.mjs
+@@ -2,11 +2,22 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
++const kLoginsKey =
++  "Software\\Microsoft\\Internet Explorer\\IntelliForms\\Storage2";
++
++import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
++
+ import { MigrationUtils } from "resource:///modules/MigrationUtils.sys.mjs";
+ import { MigratorBase } from "resource:///modules/MigratorBase.sys.mjs";
+ import { MSMigrationUtils } from "resource:///modules/MSMigrationUtils.sys.mjs";
+ 
+-import { PlacesUtils } from "resource://gre/modules/PlacesUtils.sys.mjs";
++const lazy = {};
++
++ChromeUtils.defineESModuleGetters(lazy, {
++  OSCrypto: "resource://gre/modules/OSCrypto_win.sys.mjs",
++  PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
++  ctypes: "resource://gre/modules/ctypes.sys.mjs",
++});
+ 
+ // Resources
+ 
+@@ -48,12 +59,12 @@ History.prototype = {
+ 
+       // The typed urls are already fixed-up, so we can use them for comparison.
+       let transition = typedURLs.has(url.spec)
+-        ? PlacesUtils.history.TRANSITIONS.LINK
+-        : PlacesUtils.history.TRANSITIONS.TYPED;
++        ? lazy.PlacesUtils.history.TRANSITIONS.LINK
++        : lazy.PlacesUtils.history.TRANSITIONS.TYPED;
+ 
+       let time = entry.get("time");
+ 
+-      let visitDate = time ? PlacesUtils.toDate(time) : null;
++      let visitDate = time ? lazy.PlacesUtils.toDate(time) : null;
+       if (visitDate && visitDate < maxDate) {
+         continue;
+       }
+@@ -84,6 +95,260 @@ History.prototype = {
+   },
+ };
+ 
++// IE form password migrator supporting windows from XP until 7 and IE from 7 until 11
++function IE7FormPasswords() {
++  // used to distinguish between this migrator and other passwords migrators in tests.
++  this.name = "IE7FormPasswords";
++}
++
++IE7FormPasswords.prototype = {
++  type: MigrationUtils.resourceTypes.PASSWORDS,
++
++  get exists() {
++    // work only on windows until 7
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++      return false;
++    }
++
++    try {
++      let nsIWindowsRegKey = Ci.nsIWindowsRegKey;
++      let key =
++        Cc["@mozilla.org/windows-registry-key;1"].createInstance(
++          nsIWindowsRegKey
++        );
++      key.open(
++        nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++        kLoginsKey,
++        nsIWindowsRegKey.ACCESS_READ
++      );
++      let count = key.valueCount;
++      key.close();
++      return count > 0;
++    } catch (e) {
++      return false;
++    }
++  },
++
++  async migrate(aCallback) {
++    let uris = []; // the uris of the websites that are going to be migrated
++    for (let entry of Cc[
++      "@mozilla.org/profile/migrator/iehistoryenumerator;1"
++    ].createInstance(Ci.nsISimpleEnumerator)) {
++      let uri = entry.get("uri").QueryInterface(Ci.nsIURI);
++      // MSIE stores some types of URLs in its history that we don't handle, like HTMLHelp
++      // and others. Since we are not going to import the logins that are performed in these URLs
++      // we can just skip them.
++      if (!["http", "https", "ftp"].includes(uri.scheme)) {
++        continue;
++      }
++
++      uris.push(uri);
++    }
++    await this._migrateURIs(uris);
++    aCallback(true);
++  },
++
++  /**
++   * Migrate the logins that were saved for the uris arguments.
++   *
++   * @param {nsIURI[]} uris - the uris that are going to be migrated.
++   */
++  async _migrateURIs(uris) {
++    this.ctypesKernelHelpers = new MSMigrationUtils.CtypesKernelHelpers();
++    this._crypto = new lazy.OSCrypto();
++    let nsIWindowsRegKey = Ci.nsIWindowsRegKey;
++    let key =
++      Cc["@mozilla.org/windows-registry-key;1"].createInstance(
++        nsIWindowsRegKey
++      );
++    key.open(
++      nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++      kLoginsKey,
++      nsIWindowsRegKey.ACCESS_READ
++    );
++
++    let urlsSet = new Set(); // set of the already processed urls.
++    // number of the successfully decrypted registry values
++    let successfullyDecryptedValues = 0;
++    /* The logins are stored in the registry, where the key is a hashed URL and its
++     * value contains the encrypted details for all logins for that URL.
++     *
++     * First iterate through IE history, hashing each URL and looking for a match. If
++     * found, decrypt the value, using the URL as a salt. Finally add any found logins
++     * to the Firefox password manager.
++     */
++
++    let logins = [];
++    for (let uri of uris) {
++      try {
++        // remove the query and the ref parts of the URL
++        let urlObject = new URL(uri.spec);
++        let url = urlObject.origin + urlObject.pathname;
++        // if the current url is already processed, it should be skipped
++        if (urlsSet.has(url)) {
++          continue;
++        }
++        urlsSet.add(url);
++        // hash value of the current uri
++        let hashStr = this._crypto.getIELoginHash(url);
++        if (!key.hasValue(hashStr)) {
++          continue;
++        }
++        let value = key.readBinaryValue(hashStr);
++        // if no value was found, the uri is skipped
++        if (value == null) {
++          continue;
++        }
++        let data;
++        try {
++          // the url is used as salt to decrypt the registry value
++          data = this._crypto.decryptData(value, url);
++        } catch (e) {
++          continue;
++        }
++        // extract the login details from the decrypted data
++        let ieLogins = this._extractDetails(data, uri);
++        // if at least a credential was found in the current data, successfullyDecryptedValues should
++        // be incremented by one
++        if (ieLogins.length) {
++          successfullyDecryptedValues++;
++        }
++        for (let ieLogin of ieLogins) {
++          logins.push({
++            username: ieLogin.username,
++            password: ieLogin.password,
++            origin: ieLogin.url,
++            timeCreated: ieLogin.creation,
++          });
++        }
++      } catch (e) {
++        console.error("Error while importing logins for ", uri.spec, ": ", e);
++      }
++    }
++
++    if (logins.length) {
++      await MigrationUtils.insertLoginsWrapper(logins);
++    }
++
++    // if the number of the imported values is less than the number of values in the key, it means
++    // that not all the values were imported and an error should be reported
++    if (successfullyDecryptedValues < key.valueCount) {
++      console.error(
++        "We failed to decrypt and import some logins. " +
++          "This is likely because we didn't find the URLs where these " +
++          "passwords were submitted in the IE history and which are needed to be used " +
++          "as keys in the decryption."
++      );
++    }
++
++    key.close();
++    this._crypto.finalize();
++    this.ctypesKernelHelpers.finalize();
++  },
++
++  _crypto: null,
++
++  /**
++   * Extract the details of one or more logins from the raw decrypted data.
++   *
++   * @param {string} data - the decrypted data containing raw information.
++   * @param {nsURI} uri - the nsURI of page where the login has occur.
++   * @returns {object[]} array of objects where each of them contains the username, password, URL,
++   * and creation time representing all the logins found in the data arguments.
++   */
++  _extractDetails(data, uri) {
++    // the structure of the header of the IE7 decrypted data for all the logins sharing the same URL
++    let loginData = new lazy.ctypes.StructType("loginData", [
++      // Bytes 0-3 are not needed and not documented
++      { unknown1: lazy.ctypes.uint32_t },
++      // Bytes 4-7 are the header size
++      { headerSize: lazy.ctypes.uint32_t },
++      // Bytes 8-11 are the data size
++      { dataSize: lazy.ctypes.uint32_t },
++      // Bytes 12-19 are not needed and not documented
++      { unknown2: lazy.ctypes.uint32_t },
++      { unknown3: lazy.ctypes.uint32_t },
++      // Bytes 20-23 are the data count: each username and password is considered as a data
++      { dataMax: lazy.ctypes.uint32_t },
++      // Bytes 24-35 are not needed and not documented
++      { unknown4: lazy.ctypes.uint32_t },
++      { unknown5: lazy.ctypes.uint32_t },
++      { unknown6: lazy.ctypes.uint32_t },
++    ]);
++
++    // the structure of a IE7 decrypted login item
++    let loginItem = new lazy.ctypes.StructType("loginItem", [
++      // Bytes 0-3 are the offset of the username
++      { usernameOffset: lazy.ctypes.uint32_t },
++      // Bytes 4-11 are the date
++      { loDateTime: lazy.ctypes.uint32_t },
++      { hiDateTime: lazy.ctypes.uint32_t },
++      // Bytes 12-15 are not needed and not documented
++      { foo: lazy.ctypes.uint32_t },
++      // Bytes 16-19 are the offset of the password
++      { passwordOffset: lazy.ctypes.uint32_t },
++      // Bytes 20-31 are not needed and not documented
++      { unknown1: lazy.ctypes.uint32_t },
++      { unknown2: lazy.ctypes.uint32_t },
++      { unknown3: lazy.ctypes.uint32_t },
++    ]);
++
++    let url = uri.prePath;
++    let results = [];
++    let arr = this._crypto.stringToArray(data);
++    // convert data to ctypes.unsigned_char.array(arr.length)
++    let cdata = lazy.ctypes.unsigned_char.array(arr.length)(arr);
++    // Bytes 0-35 contain the loginData data structure for all the logins sharing the same URL
++    let currentLoginData = lazy.ctypes.cast(cdata, loginData);
++    let headerSize = currentLoginData.headerSize;
++    let currentInfoIndex = loginData.size;
++    // pointer to the current login item
++    let currentLoginItemPointer = lazy.ctypes.cast(
++      cdata.addressOfElement(currentInfoIndex),
++      loginItem.ptr
++    );
++    // currentLoginData.dataMax is the data count: each username and password is considered as
++    // a data. So, the number of logins is the number of data dived by 2
++    let numLogins = currentLoginData.dataMax / 2;
++    for (let n = 0; n < numLogins; n++) {
++      // Bytes 0-31 starting from currentInfoIndex contain the loginItem data structure for the
++      // current login
++      let currentLoginItem = currentLoginItemPointer.contents;
++      let creation =
++        this.ctypesKernelHelpers.fileTimeToSecondsSinceEpoch(
++          currentLoginItem.hiDateTime,
++          currentLoginItem.loDateTime
++        ) * 1000;
++      let currentResult = {
++        creation,
++        url,
++      };
++      // The username is UTF-16 and null-terminated.
++      currentResult.username = lazy.ctypes
++        .cast(
++          cdata.addressOfElement(
++            headerSize + 12 + currentLoginItem.usernameOffset
++          ),
++          lazy.ctypes.char16_t.ptr
++        )
++        .readString();
++      // The password is UTF-16 and null-terminated.
++      currentResult.password = lazy.ctypes
++        .cast(
++          cdata.addressOfElement(
++            headerSize + 12 + currentLoginItem.passwordOffset
++          ),
++          lazy.ctypes.char16_t.ptr
++        )
++        .readString();
++      results.push(currentResult);
++      // move to the next login item
++      currentLoginItemPointer = currentLoginItemPointer.increment();
++    }
++    return results;
++  },
++};
++
+ /**
+  * Internet Explorer profile migrator
+  */
+@@ -102,6 +367,10 @@ export class IEProfileMigrator extends MigratorBase {
+ 
+   getResources() {
+     let resources = [MSMigrationUtils.getBookmarksMigrator(), new History()];
++    // Only support the form password migrator for Windows XP to 7.
++    if (AppConstants.isPlatformAndVersionAtMost("win", "6.1")) {
++      resources.push(new IE7FormPasswords());
++    }
+     let windowsVaultFormPasswordsMigrator =
+       MSMigrationUtils.getWindowsVaultFormPasswordsMigrator();
+     windowsVaultFormPasswordsMigrator.name = "IEVaultFormPasswords";
+diff --git a/browser/components/migration/tests/unit/test_IE7_passwords.js b/browser/components/migration/tests/unit/test_IE7_passwords.js
+new file mode 100644
+index 000000000000..637f87d1b01b
+--- /dev/null
++++ b/browser/components/migration/tests/unit/test_IE7_passwords.js
+@@ -0,0 +1,493 @@
++"use strict";
++
++ChromeUtils.defineESModuleGetters(this, {
++  OSCrypto: "resource://gre/modules/OSCrypto_win.sys.mjs",
++});
++
++const IE7_FORM_PASSWORDS_MIGRATOR_NAME = "IE7FormPasswords";
++const LOGINS_KEY =
++  "Software\\Microsoft\\Internet Explorer\\IntelliForms\\Storage2";
++const EXTENSION = "-backup";
++const TESTED_WEBSITES = {
++  twitter: {
++    uri: makeURI("https://twitter.com"),
++    hash: "A89D42BC6406E27265B1AD0782B6F376375764A301",
++    data: [
++      12, 0, 0, 0, 56, 0, 0, 0, 38, 0, 0, 0, 87, 73, 67, 75, 24, 0, 0, 0, 2, 0,
++      0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 68, 36, 67, 124,
++      118, 212, 208, 1, 8, 0, 0, 0, 18, 0, 0, 0, 68, 36, 67, 124, 118, 212, 208,
++      1, 9, 0, 0, 0, 97, 0, 98, 0, 99, 0, 100, 0, 101, 0, 102, 0, 103, 0, 104,
++      0, 0, 0, 49, 0, 50, 0, 51, 0, 52, 0, 53, 0, 54, 0, 55, 0, 56, 0, 57, 0, 0,
++      0,
++    ],
++    logins: [
++      {
++        username: "abcdefgh",
++        password: "123456789",
++        origin: "https://twitter.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439325854000,
++        timeLastUsed: 1439325854000,
++        timePasswordChanged: 1439325854000,
++        timesUsed: 1,
++      },
++    ],
++  },
++  facebook: {
++    uri: makeURI("https://www.facebook.com/"),
++    hash: "EF44D3E034009CB0FD1B1D81A1FF3F3335213BD796",
++    data: [
++      12, 0, 0, 0, 152, 0, 0, 0, 160, 0, 0, 0, 87, 73, 67, 75, 24, 0, 0, 0, 8,
++      0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 88, 182, 125, 18,
++      121, 212, 208, 1, 9, 0, 0, 0, 20, 0, 0, 0, 88, 182, 125, 18, 121, 212,
++      208, 1, 9, 0, 0, 0, 40, 0, 0, 0, 134, 65, 33, 37, 121, 212, 208, 1, 9, 0,
++      0, 0, 60, 0, 0, 0, 134, 65, 33, 37, 121, 212, 208, 1, 9, 0, 0, 0, 80, 0,
++      0, 0, 45, 242, 246, 62, 121, 212, 208, 1, 9, 0, 0, 0, 100, 0, 0, 0, 45,
++      242, 246, 62, 121, 212, 208, 1, 9, 0, 0, 0, 120, 0, 0, 0, 28, 10, 193, 80,
++      121, 212, 208, 1, 9, 0, 0, 0, 140, 0, 0, 0, 28, 10, 193, 80, 121, 212,
++      208, 1, 9, 0, 0, 0, 117, 0, 115, 0, 101, 0, 114, 0, 110, 0, 97, 0, 109, 0,
++      101, 0, 48, 0, 0, 0, 112, 0, 97, 0, 115, 0, 115, 0, 119, 0, 111, 0, 114,
++      0, 100, 0, 48, 0, 0, 0, 117, 0, 115, 0, 101, 0, 114, 0, 110, 0, 97, 0,
++      109, 0, 101, 0, 49, 0, 0, 0, 112, 0, 97, 0, 115, 0, 115, 0, 119, 0, 111,
++      0, 114, 0, 100, 0, 49, 0, 0, 0, 117, 0, 115, 0, 101, 0, 114, 0, 110, 0,
++      97, 0, 109, 0, 101, 0, 50, 0, 0, 0, 112, 0, 97, 0, 115, 0, 115, 0, 119, 0,
++      111, 0, 114, 0, 100, 0, 50, 0, 0, 0, 117, 0, 115, 0, 101, 0, 114, 0, 110,
++      0, 97, 0, 109, 0, 101, 0, 51, 0, 0, 0, 112, 0, 97, 0, 115, 0, 115, 0, 119,
++      0, 111, 0, 114, 0, 100, 0, 51, 0, 0, 0,
++    ],
++    logins: [
++      {
++        username: "username0",
++        password: "password0",
++        origin: "https://www.facebook.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439326966000,
++        timeLastUsed: 1439326966000,
++        timePasswordChanged: 1439326966000,
++        timesUsed: 1,
++      },
++      {
++        username: "username1",
++        password: "password1",
++        origin: "https://www.facebook.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439326997000,
++        timeLastUsed: 1439326997000,
++        timePasswordChanged: 1439326997000,
++        timesUsed: 1,
++      },
++      {
++        username: "username2",
++        password: "password2",
++        origin: "https://www.facebook.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439327040000,
++        timeLastUsed: 1439327040000,
++        timePasswordChanged: 1439327040000,
++        timesUsed: 1,
++      },
++      {
++        username: "username3",
++        password: "password3",
++        origin: "https://www.facebook.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439327070000,
++        timeLastUsed: 1439327070000,
++        timePasswordChanged: 1439327070000,
++        timesUsed: 1,
++      },
++    ],
++  },
++  live: {
++    uri: makeURI("https://login.live.com/"),
++    hash: "7B506F2D6B81D939A8E0456F036EE8970856FF705E",
++    data: [
++      12, 0, 0, 0, 56, 0, 0, 0, 44, 0, 0, 0, 87, 73, 67, 75, 24, 0, 0, 0, 2, 0,
++      0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 17, 219, 140,
++      148, 212, 208, 1, 9, 0, 0, 0, 20, 0, 0, 0, 212, 17, 219, 140, 148, 212,
++      208, 1, 11, 0, 0, 0, 114, 0, 105, 0, 97, 0, 100, 0, 104, 0, 49, 6, 74, 6,
++      39, 6, 54, 6, 0, 0, 39, 6, 66, 6, 49, 6, 35, 6, 80, 0, 192, 0, 223, 0,
++      119, 0, 246, 0, 114, 0, 100, 0, 0, 0,
++    ],
++    logins: [
++      {
++        username: "riadhرياض",
++        password: "اقرأPÀßwörd",
++        origin: "https://login.live.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439338767000,
++        timeLastUsed: 1439338767000,
++        timePasswordChanged: 1439338767000,
++        timesUsed: 1,
++      },
++    ],
++  },
++  reddit: {
++    uri: makeURI("http://www.reddit.com/"),
++    hash: "B644028D1C109A91EC2C4B9D1F145E55A1FAE42065",
++    data: [
++      12, 0, 0, 0, 152, 0, 0, 0, 212, 0, 0, 0, 87, 73, 67, 75, 24, 0, 0, 0, 8,
++      0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 8, 234, 114,
++      153, 212, 208, 1, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++      0, 6, 0, 0, 0, 97, 93, 131, 116, 153, 212, 208, 1, 3, 0, 0, 0, 14, 0, 0,
++      0, 97, 93, 131, 116, 153, 212, 208, 1, 16, 0, 0, 0, 48, 0, 0, 0, 88, 150,
++      78, 174, 153, 212, 208, 1, 4, 0, 0, 0, 58, 0, 0, 0, 88, 150, 78, 174, 153,
++      212, 208, 1, 29, 0, 0, 0, 118, 0, 0, 0, 79, 102, 137, 34, 154, 212, 208,
++      1, 15, 0, 0, 0, 150, 0, 0, 0, 79, 102, 137, 34, 154, 212, 208, 1, 30, 0,
++      0, 0, 97, 0, 0, 0, 0, 0, 252, 140, 173, 138, 146, 48, 0, 0, 66, 0, 105, 0,
++      116, 0, 116, 0, 101, 0, 32, 0, 98, 0, 101, 0, 115, 0, 116, 0, 228, 0, 116,
++      0, 105, 0, 103, 0, 101, 0, 110, 0, 0, 0, 205, 145, 110, 127, 198, 91, 1,
++      120, 0, 0, 31, 4, 48, 4, 64, 4, 62, 4, 59, 4, 76, 4, 32, 0, 67, 4, 65, 4,
++      63, 4, 53, 4, 72, 4, 61, 4, 62, 4, 32, 0, 65, 4, 49, 4, 64, 4, 62, 4, 72,
++      4, 53, 4, 61, 4, 46, 0, 32, 0, 18, 4, 62, 4, 57, 4, 66, 4, 56, 4, 0, 0,
++      40, 6, 51, 6, 69, 6, 32, 0, 39, 6, 68, 6, 68, 6, 71, 6, 32, 0, 39, 6, 68,
++      6, 49, 6, 45, 6, 69, 6, 70, 6, 0, 0, 118, 0, 101, 0, 117, 0, 105, 0, 108,
++      0, 108, 0, 101, 0, 122, 0, 32, 0, 108, 0, 101, 0, 32, 0, 118, 0, 233, 0,
++      114, 0, 105, 0, 102, 0, 105, 0, 101, 0, 114, 0, 32, 0, 224, 0, 32, 0, 110,
++      0, 111, 0, 117, 0, 118, 0, 101, 0, 97, 0, 117, 0, 0, 0,
++    ],
++    logins: [
++      // This login is present in the data, but should be stripped out
++      // by the validation rules of the importer:
++      // {
++      //   "username": "a",
++      //   "password": "",
++      //   "origin": "http://www.reddit.com",
++      //   "formActionOrigin": "",
++      //   "httpRealm": null,
++      //   "usernameField": "",
++      //   "passwordField": ""
++      // },
++      {
++        username: "購読を",
++        password: "Bitte bestätigen",
++        origin: "http://www.reddit.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439340874000,
++        timeLastUsed: 1439340874000,
++        timePasswordChanged: 1439340874000,
++        timesUsed: 1,
++      },
++      {
++        username: "重置密码",
++        password: "Пароль успешно сброшен. Войти",
++        origin: "http://www.reddit.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439340971000,
++        timeLastUsed: 1439340971000,
++        timePasswordChanged: 1439340971000,
++        timesUsed: 1,
++      },
++      {
++        username: "بسم الله الرحمن",
++        password: "veuillez le vérifier à nouveau",
++        origin: "http://www.reddit.com",
++        formActionOrigin: "",
++        httpRealm: null,
++        usernameField: "",
++        passwordField: "",
++        timeCreated: 1439341166000,
++        timeLastUsed: 1439341166000,
++        timePasswordChanged: 1439341166000,
++        timesUsed: 1,
++      },
++    ],
++  },
++};
++
++const TESTED_URLS = [
++  "http://a.foo.com",
++  "http://b.foo.com",
++  "http://c.foo.com",
++  "http://www.test.net",
++  "http://www.test.net/home",
++  "http://www.test.net/index",
++  "https://a.bar.com",
++  "https://b.bar.com",
++  "https://c.bar.com",
++];
++
++var nsIWindowsRegKey = Ci.nsIWindowsRegKey;
++var Storage2Key;
++
++/*
++ * If the key value exists, it's going to be backed up and replaced, so the value could be restored.
++ * Otherwise a new value is going to be created.
++ */
++function backupAndStore(key, name, value) {
++  if (key.hasValue(name)) {
++    // backup the the current value
++    let type = key.getValueType(name);
++    // create a new value using use the current value name followed by EXTENSION as its new name
++    switch (type) {
++      case nsIWindowsRegKey.TYPE_STRING:
++        key.writeStringValue(name + EXTENSION, key.readStringValue(name));
++        break;
++      case nsIWindowsRegKey.TYPE_BINARY:
++        key.writeBinaryValue(name + EXTENSION, key.readBinaryValue(name));
++        break;
++      case nsIWindowsRegKey.TYPE_INT:
++        key.writeIntValue(name + EXTENSION, key.readIntValue(name));
++        break;
++      case nsIWindowsRegKey.TYPE_INT64:
++        key.writeInt64Value(name + EXTENSION, key.readInt64Value(name));
++        break;
++    }
++  }
++  key.writeBinaryValue(name, value);
++}
++
++// Remove all values where their names are members of the names array from the key of registry
++function removeAllValues(key, names) {
++  for (let name of names) {
++    key.removeValue(name);
++  }
++}
++
++// Restore all the backed up values
++function restore(key) {
++  let count = key.valueCount;
++  let names = []; // the names of the key values
++  for (let i = 0; i < count; ++i) {
++    names.push(key.getValueName(i));
++  }
++
++  for (let name of names) {
++    // backed up values have EXTENSION at the end of their names
++    if (name.lastIndexOf(EXTENSION) == name.length - EXTENSION.length) {
++      let valueName = name.substr(0, name.length - EXTENSION.length);
++      let type = key.getValueType(name);
++      // create a new value using the name before the backup and removed the backed up one
++      switch (type) {
++        case nsIWindowsRegKey.TYPE_STRING:
++          key.writeStringValue(valueName, key.readStringValue(name));
++          key.removeValue(name);
++          break;
++        case nsIWindowsRegKey.TYPE_BINARY:
++          key.writeBinaryValue(valueName, key.readBinaryValue(name));
++          key.removeValue(name);
++          break;
++        case nsIWindowsRegKey.TYPE_INT:
++          key.writeIntValue(valueName, key.readIntValue(name));
++          key.removeValue(name);
++          break;
++        case nsIWindowsRegKey.TYPE_INT64:
++          key.writeInt64Value(valueName, key.readInt64Value(name));
++          key.removeValue(name);
++          break;
++      }
++    }
++  }
++}
++
++function checkLoginsAreEqual(passwordManagerLogin, IELogin, id) {
++  passwordManagerLogin.QueryInterface(Ci.nsILoginMetaInfo);
++  for (let attribute in IELogin) {
++    Assert.equal(
++      passwordManagerLogin[attribute],
++      IELogin[attribute],
++      "The two logins ID " + id + " have the same " + attribute
++    );
++  }
++}
++
++function createRegistryPath(path) {
++  let loginPath = path.split("\\");
++  let parentKey =
++    Cc["@mozilla.org/windows-registry-key;1"].createInstance(nsIWindowsRegKey);
++  let currentPath = [];
++  for (let currentKey of loginPath) {
++    parentKey.open(
++      nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++      currentPath.join("\\"),
++      nsIWindowsRegKey.ACCESS_ALL
++    );
++
++    if (!parentKey.hasChild(currentKey)) {
++      parentKey.createChild(currentKey, 0);
++    }
++    currentPath.push(currentKey);
++    parentKey.close();
++  }
++}
++
++async function getFirstResourceOfType(type) {
++  let migrator = await MigrationUtils.getMigrator("ie");
++  let migrators = migrator.getResources();
++  for (let m of migrators) {
++    if (m.name == IE7_FORM_PASSWORDS_MIGRATOR_NAME && m.type == type) {
++      return m;
++    }
++  }
++  throw new Error("failed to find the " + type + " migrator");
++}
++
++function makeURI(aURL) {
++  return Services.io.newURI(aURL);
++}
++
++add_task(async function setup() {
++  if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++    await Assert.rejects(
++      getFirstResourceOfType(MigrationUtils.resourceTypes.PASSWORDS),
++      /failed to find/,
++      "The migrator doesn't exist for win8+"
++    );
++    return;
++  }
++  // create the path to Storage2 in the registry if it doest exist.
++  createRegistryPath(LOGINS_KEY);
++  Storage2Key =
++    Cc["@mozilla.org/windows-registry-key;1"].createInstance(nsIWindowsRegKey);
++  Storage2Key.open(
++    nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++    LOGINS_KEY,
++    nsIWindowsRegKey.ACCESS_ALL
++  );
++
++  // create a dummy value otherwise the migrator doesn't exist
++  if (!Storage2Key.hasValue("dummy")) {
++    Storage2Key.writeBinaryValue("dummy", "dummy");
++  }
++});
++
++add_task(async function test_passwordsNotAvailable() {
++  if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++    return;
++  }
++
++  let migrator = await getFirstResourceOfType(
++    MigrationUtils.resourceTypes.PASSWORDS
++  );
++  Assert.ok(migrator.exists, "The migrator has to exist");
++  let logins = await Services.logins.getAllLogins();
++  Assert.equal(
++    logins.length,
++    0,
++    "There are no logins at the beginning of the test"
++  );
++
++  let uris = []; // the uris of the migrated logins
++  for (let url of TESTED_URLS) {
++    uris.push(makeURI(url));
++    // in this test, there is no IE login data in the registry, so after the migration, the number
++    // of logins in the store should be 0
++    await migrator._migrateURIs(uris);
++    logins = await Services.logins.getAllLogins();
++    Assert.equal(
++      logins.length,
++      0,
++      "There are no logins after doing the migration without adding values to the registry"
++    );
++  }
++});
++
++add_task(async function test_passwordsAvailable() {
++  if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++    return;
++  }
++
++  let crypto = new OSCrypto();
++  let hashes = []; // the hashes of all migrator websites, this is going to be used for the clean up
++
++  registerCleanupFunction(async () => {
++    Services.logins.removeAllUserFacingLogins();
++    logins = await Services.logins.getAllLogins();
++    Assert.equal(logins.length, 0, "There are no logins after the cleanup");
++    // remove all the values created in this test from the registry
++    removeAllValues(Storage2Key, hashes);
++    // restore all backed up values
++    restore(Storage2Key);
++
++    // clean the dummy value
++    if (Storage2Key.hasValue("dummy")) {
++      Storage2Key.removeValue("dummy");
++    }
++    Storage2Key.close();
++    crypto.finalize();
++  });
++
++  let migrator = await getFirstResourceOfType(
++    MigrationUtils.resourceTypes.PASSWORDS
++  );
++  Assert.ok(migrator.exists, "The migrator has to exist");
++  let logins = await Services.logins.getAllLogins();
++  Assert.equal(
++    logins.length,
++    0,
++    "There are no logins at the beginning of the test"
++  );
++
++  let uris = []; // the uris of the migrated logins
++
++  let loginCount = 0;
++  for (let current in TESTED_WEBSITES) {
++    let website = TESTED_WEBSITES[current];
++    // backup the current the registry value if it exists and replace the existing value/create a
++    // new value with the encrypted data
++    backupAndStore(
++      Storage2Key,
++      website.hash,
++      crypto.encryptData(crypto.arrayToString(website.data), website.uri.spec)
++    );
++    Assert.ok(migrator.exists, "The migrator has to exist");
++    uris.push(website.uri);
++    hashes.push(website.hash);
++
++    await migrator._migrateURIs(uris);
++    logins = await Services.logins.getAllLogins();
++    // check that the number of logins in the password manager has increased as expected which means
++    // that all the values for the current website were imported
++    loginCount += website.logins.length;
++    Assert.equal(
++      logins.length,
++      loginCount,
++      "The number of logins has increased after the migration"
++    );
++    // NB: because telemetry records any login data passed to the login manager, it
++    // also gets told about logins that are duplicates or invalid (for one reason
++    // or another) and so its counts might exceed those of the login manager itself.
++    Assert.greaterOrEqual(
++      MigrationUtils._importQuantities.logins,
++      loginCount,
++      "Telemetry quantities equal or exceed the actual import."
++    );
++    // Reset - this normally happens at the start of a new migration, but we're calling
++    // the migrator directly so can't rely on that:
++    MigrationUtils._importQuantities.logins = 0;
++
++    let startIndex = loginCount - website.logins.length;
++    // compares the imported password manager logins with their expected logins
++    for (let i = 0; i < website.logins.length; i++) {
++      checkLoginsAreEqual(
++        logins[startIndex + i],
++        website.logins[i],
++        " " + current + " - " + i + " "
++      );
++    }
++  }
++});

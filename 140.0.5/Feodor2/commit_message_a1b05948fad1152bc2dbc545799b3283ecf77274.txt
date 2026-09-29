@@ -1,0 +1,1 @@
+Bug 1414186 - Use GetUserPreferredUILanguages for OSPreferences::SystemLocales. r=jfkthame    2017-11-03 15:51:05    a1b05948fad1152bc2dbc545799b3283ecf77274

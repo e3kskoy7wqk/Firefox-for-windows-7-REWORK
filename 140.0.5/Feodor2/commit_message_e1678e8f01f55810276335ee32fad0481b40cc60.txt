@@ -1,0 +1,1 @@
+Bug 1331171 - Part 2: Remove Windows shell integration checks for Windows Vista. r=jimm    2017-01-14 17:19:22    e1678e8f01f55810276335ee32fad0481b40cc60

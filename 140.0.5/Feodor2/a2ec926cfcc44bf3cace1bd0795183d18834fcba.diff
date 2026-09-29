@@ -1,0 +1,50 @@
+diff --git a/gfx/angle/checkout/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp b/gfx/angle/checkout/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
+index a24fbc52f7..4fb02f183c 100644
+--- a/gfx/angle/checkout/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
++++ b/gfx/angle/checkout/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
+@@ -692,6 +692,27 @@ HRESULT Renderer11::callD3D11CreateDevice(PFN_D3D11_CREATE_DEVICE createDevice,
+     return egl::NoError();
+ }
+ 
++#include <strsafe.h>
++
++static HMODULE load_dxgi_module() {
++    TCHAR systemPath[MAX_PATH] = TEXT("");
++    GetSystemDirectory(systemPath, MAX_PATH);
++    StringCchCat(systemPath, MAX_PATH, TEXT("\\dxgi.dll"));
++
++    return LoadLibrary(systemPath);
++}
++
++typedef HRESULT (APIENTRY *PFN_CreateDXGIFactory1)(REFIID riid, void **ppFactory);
++
++HRESULT dyn_CreateDXGIFactory1(REFIID riid, void **ppFactory) {
++    PFN_CreateDXGIFactory1 fpCreateDXGIFactory1 =
++        (PFN_CreateDXGIFactory1)GetProcAddress(load_dxgi_module(), "CreateDXGIFactory1");
++
++    if (fpCreateDXGIFactory1 != NULL)
++        return fpCreateDXGIFactory1(riid, ppFactory);
++
++    return DXGI_ERROR_NOT_FOUND;
++}
+ HRESULT Renderer11::callD3D11CreateDevice(PFN_D3D11_CREATE_DEVICE createDevice, bool debug)
+ {
+     angle::ComPtr<IDXGIAdapter> adapter;
+@@ -723,7 +744,7 @@ egl::Error Renderer11::initializeDXGIAdapter()
+     if (high != 0 || low != 0)
+     {
+         angle::ComPtr<IDXGIFactory1> factory;
+-        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
++        if (SUCCEEDED(dyn_CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+         {
+             angle::ComPtr<IDXGIAdapter> temp;
+             for (UINT i = 0; SUCCEEDED(factory->EnumAdapters(i, &temp)); i++)
+@@ -858,7 +879,7 @@ HRESULT Renderer11::callD3D11On12CreateDevice(PFN_D3D12_CREATE_DEVICE createDevi
+                                               bool debug)
+ {
+     angle::ComPtr<IDXGIFactory4> factory;
+-    HRESULT result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
++    HRESULT result = dyn_CreateDXGIFactory1(IID_PPV_ARGS(&factory));
+     if (FAILED(result))
+     {
+         return result;

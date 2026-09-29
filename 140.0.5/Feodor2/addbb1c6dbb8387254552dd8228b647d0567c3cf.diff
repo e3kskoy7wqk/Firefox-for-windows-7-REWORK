@@ -1,0 +1,13 @@
+diff --git a/mozglue/misc/StackWalk.cpp b/mozglue/misc/StackWalk.cpp
+index c1a4e48ed741..7acdb6e57587 100644
+--- a/mozglue/misc/StackWalk.cpp
++++ b/mozglue/misc/StackWalk.cpp
+@@ -207,7 +202,7 @@ AutoSuppressStackWalking::~AutoSuppressStackWalking() {
+ 
+ bool IsStackWalkingSafe() {
+   // Use strategy (1), if initialized.
+-  if (sStackWalkLocksInitialized) {
++  if (0) {
+     bool isSafe = false;
+     if (::TryAcquireSRWLockShared(sStackWalkLocks[0])) {
+       if (::TryAcquireSRWLockShared(sStackWalkLocks[1])) {

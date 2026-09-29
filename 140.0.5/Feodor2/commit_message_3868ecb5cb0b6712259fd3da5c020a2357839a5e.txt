@@ -1,0 +1,1 @@
+Main patch for Bug 1305453 - Prevent non-esr stand alone installers from installing on XP/Vista. r=rstrong    2016-11-22 04:11:44    3868ecb5cb0b6712259fd3da5c020a2357839a5e
