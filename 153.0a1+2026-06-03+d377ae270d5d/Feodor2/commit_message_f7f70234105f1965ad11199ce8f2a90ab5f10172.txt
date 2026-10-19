@@ -1,0 +1,1 @@
+Bug 1557282 Part 3: Use SetLockdownDefaultDacl and AddRestrictingRandomSid in sandbox policies. r=handyman,gcp    2020-03-13 04:40:25    f7f70234105f1965ad11199ce8f2a90ab5f10172

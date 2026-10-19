@@ -1,0 +1,108 @@
+diff --git a/toolkit/components/alerts/nsAlertsService.cpp b/toolkit/components/alerts/nsAlertsService.cpp
+index dd67ad9831a9..35418dd17656 100644
+--- a/toolkit/components/alerts/nsAlertsService.cpp
++++ b/toolkit/components/alerts/nsAlertsService.cpp
+@@ -22,6 +22,11 @@
+ #include "nsServiceManagerUtils.h"
+ #include "nsXULAlerts.h"
+ 
++#ifdef XP_WIN
++#  include <windows.h>
++#  include <shellapi.h>
++#endif
++
+ #include "nsAlertsService.h"
+ 
+ #include "nsToolkitCompsCID.h"
+@@ -158,12 +154,23 @@ bool nsAlertsService::ShouldShowAlert()
+ 
+ #ifdef XP_WIN
+   if (!xpc::IsInAutomation()) {
+-  QUERY_USER_NOTIFICATION_STATE qstate;
+-  if (SUCCEEDED(SHQueryUserNotificationState(&qstate))) {
+-    if (qstate != QUNS_ACCEPTS_NOTIFICATIONS) {
+-       result = false;
++  HMODULE shellDLL = ::LoadLibraryW(L"shell32.dll");
++  if (!shellDLL)
++    return result;
++
++  SHQueryUserNotificationStatePtr pSHQueryUserNotificationState =
++    (SHQueryUserNotificationStatePtr) ::GetProcAddress(shellDLL, "SHQueryUserNotificationState");
++
++  if (pSHQueryUserNotificationState) {
++    QUERY_USER_NOTIFICATION_STATE qstate;
++    if (SUCCEEDED(pSHQueryUserNotificationState(&qstate))) {
++      if (qstate != QUNS_ACCEPTS_NOTIFICATIONS) {
++         result = false;
++      }
+     }
+   }
++
++  ::FreeLibrary(shellDLL);
+   }
+ #endif
+ 
+diff --git a/toolkit/components/alerts/nsAlertsService.h b/toolkit/components/alerts/nsAlertsService.h
+index d2b2e1e6c0f2..3f23eaabfb7f 100644
+--- a/toolkit/components/alerts/nsAlertsService.h
++++ b/toolkit/components/alerts/nsAlertsService.h
+@@ -10,6 +10,13 @@
+ #include "nsIAlertsService.h"
+ #include "nsCOMPtr.h"
+ 
++#ifdef XP_WIN
++extern "C" {
++// This function is Windows Vista or later
++typedef HRESULT (__stdcall *SHQueryUserNotificationStatePtr)(QUERY_USER_NOTIFICATION_STATE *pquns);
++}
++#endif // defined(XP_WIN)
++
+ class nsAlertsService : public nsIAlertsService,
+                         public nsIAlertsDoNotDisturb,
+                         public nsIObserver {
+diff --git a/toolkit/xre/nsEmbedFunctions.cpp b/toolkit/xre/nsEmbedFunctions.cpp
+index 9eba9ee1bf4d..8cd7b4b2b471 100644
+--- a/toolkit/xre/nsEmbedFunctions.cpp
++++ b/toolkit/xre/nsEmbedFunctions.cpp
+@@ -137,6 +136,10 @@ using mozilla::startup::sChildProcessType;
+ 
+ static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
+ 
++#ifdef XP_WIN
++static const wchar_t kShellLibraryName[] =  L"shell32.dll";
++#endif
++
+ const char* XRE_GeckoProcessTypeToString(GeckoProcessType aProcessType) {
+   switch (aProcessType) {
+ #define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+@@ -296,10 +299,26 @@ XRE_SetRemoteExceptionHandler(const char* aPipe/*= 0*/)
+ 
+ #if defined(XP_WIN)
+ void SetTaskbarGroupId(const nsString& aId) {
+-  if (FAILED(SetCurrentProcessExplicitAppUserModelID(aId.get()))) {
+-    NS_WARNING(
+-        "SetCurrentProcessExplicitAppUserModelID failed for child process.");
+-  }
++    typedef HRESULT (WINAPI * SetCurrentProcessExplicitAppUserModelIDPtr)(PCWSTR AppID);
++
++    SetCurrentProcessExplicitAppUserModelIDPtr funcAppUserModelID = nullptr;
++
++    HMODULE hDLL = ::LoadLibraryW(kShellLibraryName);
++
++    funcAppUserModelID = (SetCurrentProcessExplicitAppUserModelIDPtr)
++                          GetProcAddress(hDLL, "SetCurrentProcessExplicitAppUserModelID");
++
++    if (!funcAppUserModelID) {
++        ::FreeLibrary(hDLL);
++        return;
++    }
++
++    if (FAILED(funcAppUserModelID(aId.get()))) {
++        NS_WARNING("SetCurrentProcessExplicitAppUserModelID failed for child process.");
++    }
++
++    if (hDLL)
++        ::FreeLibrary(hDLL);
+ }
+ #endif
+ 

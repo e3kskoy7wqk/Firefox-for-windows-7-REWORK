@@ -1,0 +1,82 @@
+diff --git a/browser/components/shell/WindowsDefaultBrowser.cpp b/browser/components/shell/WindowsDefaultBrowser.cpp
+index 5f5a1b39f743..416e00cbc67e 100644
+--- a/browser/components/shell/WindowsDefaultBrowser.cpp
++++ b/browser/components/shell/WindowsDefaultBrowser.cpp
+@@ -646,6 +646,11 @@ nsWindowsShellService::LaunchControlPanelDefaultsSelectionUI()
+ }
+ 
+ bool LaunchControlPanelDefaultPrograms() {
++  // This Default Programs feature is Win7+ only.
++  if (!mozilla::IsWin7OrLater()) {
++    return false;
++  }
++
+   // Build the path control.exe path safely
+   WCHAR controlEXEPath[MAX_PATH + 1] = {'\0'};
+   if (!GetSystemDirectoryW(controlEXEPath, MAX_PATH)) {
+diff --git a/xpcom/io/SpecialSystemDirectory.cpp b/xpcom/io/SpecialSystemDirectory.cpp
+index 196a9e533107..73fc4d9dcf87 100644
+--- a/xpcom/io/SpecialSystemDirectory.cpp
++++ b/xpcom/io/SpecialSystemDirectory.cpp
+@@ -19,6 +19,9 @@
+ #  include <guiddef.h>
+ #  include "mozilla/WinHeaderOnlyUtils.h"
+ #  include "nsIWindowsRegKey.h"
++#include "mozilla/WindowsVersion.h"
++
++using mozilla::IsWin7OrLater;
+ 
+ #elif defined(XP_UNIX)
+ 
+@@ -111,12 +114,18 @@ SHLoadLibraryFromKnownFolder(REFKNOWNFOLDERID aFolderId, DWORD aMode,
+ }
+ 
+ /*
+- * Return the default save-to location for the Windows Library passed in
+- * through aFolderId.
++ * Check to see if we're on Win7 and up, and if so, returns the default
++ * save-to location for the Windows Library passed in through aFolderId.
++ * Otherwise falls back on pre-win7 GetWindowsFolder.
+  */
+ static nsresult GetLibrarySaveToPath(int aFallbackFolderId,
+                                      REFKNOWNFOLDERID aFolderId,
+                                      nsIFile** aFile) {
++  // Skip off checking for library support if the os is Vista or lower.
++  if (!IsWin7OrLater()) {
++    return GetWindowsFolder(aFallbackFolderId, aFile);
++  }
++
+   RefPtr<IShellLibrary> shellLib;
+   RefPtr<IShellItem> savePath;
+   SHLoadLibraryFromKnownFolder(aFolderId, STGM_READ, IID_IShellLibrary,
+diff --git a/xpcom/io/nsLocalFileWin.cpp b/xpcom/io/nsLocalFileWin.cpp
+index 66e267807500..3a7e570f564a 100644
+--- a/xpcom/io/nsLocalFileWin.cpp
++++ b/xpcom/io/nsLocalFileWin.cpp
+@@ -7,6 +7,7 @@
+ #include "mozilla/UniquePtrExtensions.h"
+ #include "mozilla/Utf8.h"
+ #include "mozilla/WinHeaderOnlyUtils.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include "nsCOMPtr.h"
+ 
+@@ -1969,11 +1970,13 @@ nsLocalFile::CopySingleFile(nsIFile* aSourceFile, nsIFile* aDestParent,
+     // without COPY_FILE_NO_BUFFERING takes < 1ms. So we only use
+     // COPY_FILE_NO_BUFFERING when we have a remote drive.
+   DWORD dwCopyFlags = COPY_FILE_ALLOW_DECRYPTED_DESTINATION;
+-    bool path1Remote, path2Remote;
+-    if (!IsRemoteFilePath(filePath.get(), path1Remote) ||
+-        !IsRemoteFilePath(destPath.get(), path2Remote) || path1Remote ||
+-        path2Remote) {
+-      dwCopyFlags |= COPY_FILE_NO_BUFFERING;
++  if (IsVistaOrLater()) {
++      bool path1Remote, path2Remote;
++      if (!IsRemoteFilePath(filePath.get(), path1Remote) ||
++          !IsRemoteFilePath(destPath.get(), path2Remote) || path1Remote ||
++          path2Remote) {
++        dwCopyFlags |= COPY_FILE_NO_BUFFERING;
++    }
+   }
+ 
+     copyOK = ::CopyFileExW(filePath.get(), destPath.get(), nullptr, nullptr,

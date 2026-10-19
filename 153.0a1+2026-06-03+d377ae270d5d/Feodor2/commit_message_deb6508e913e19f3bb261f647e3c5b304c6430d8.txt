@@ -1,0 +1,1 @@
+Bug 1770098 - Disable Win32k Lockdown with incompatible mitigations r=handyman,Gankra    2022-06-16 22:05:00    deb6508e913e19f3bb261f647e3c5b304c6430d8

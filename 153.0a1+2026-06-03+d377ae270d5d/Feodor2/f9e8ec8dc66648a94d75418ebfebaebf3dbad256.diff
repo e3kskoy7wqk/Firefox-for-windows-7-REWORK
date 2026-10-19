@@ -1,0 +1,265 @@
+diff --git a/devtools/server/actors/animation-type-longhand.js b/devtools/server/actors/animation-type-longhand.js
+index fc60e8f..849a04d 100644
+--- a/devtools/server/actors/animation-type-longhand.js
++++ b/devtools/server/actors/animation-type-longhand.js
+@@ -239,7 +239,6 @@ exports.ANIMATION_TYPE_FOR_LONGHANDS = [
+       "-moz-context-properties",
+       "-moz-control-character-visibility",
+       "-moz-default-appearance",
+-      "-moz-theme",
+       "display",
+       "font-optical-sizing",
+       "inline-size",
+diff --git a/layout/style/GenerateCSSProperties.py b/layout/style/GenerateCSSProperties.py
+index 4b49760..99e5273 100644
+--- a/layout/style/GenerateCSSProperties.py
++++ b/layout/style/GenerateCSSProperties.py
+@@ -495,7 +495,6 @@ def gen_css_properties_js(output):
+         "-x-span",
+         "-x-text-scale",
+         "-moz-default-appearance",
+-        "-moz-theme",
+         "-moz-inert",
+         "-moz-script-level",  # parsed by UA sheets only
+         "-moz-math-variant",
+diff --git a/layout/style/ServoBindings.toml b/layout/style/ServoBindings.toml
+index dc71ab8..17b37d4 100644
+--- a/layout/style/ServoBindings.toml
++++ b/layout/style/ServoBindings.toml
+@@ -401,7 +401,6 @@ cbindgen-types = [
+     { gecko = "StyleGenericOffsetPath", servo = "crate::values::generics::motion::OffsetPath" },
+     { gecko = "StyleGenericOffsetPathFunction", servo = "crate::values::generics::motion::OffsetPathFunction" },
+     { gecko = "StyleComputedMozPrefFeatureValue", servo = "crate::queries::condition::ComputedMozPrefFeatureValue" },
+-    { gecko = "StyleMozTheme", servo = "crate::values::computed::ui::MozTheme" },
+     { gecko = "StyleOffsetPosition", servo = "crate::values::computed::motion::OffsetPosition" },
+     { gecko = "StyleOffsetRotate", servo = "crate::values::computed::motion::OffsetRotate" },
+     { gecko = "StylePathCommand", servo = "crate::values::specified::svg_path::PathCommand" },
+diff --git a/layout/style/nsStyleStruct.cpp b/layout/style/nsStyleStruct.cpp
+index 3e7d567..d68f2fa 100644
+--- a/layout/style/nsStyleStruct.cpp
++++ b/layout/style/nsStyleStruct.cpp
+@@ -3202,7 +3202,6 @@ LogicalSide nsStyleText::TextEmphasisSide(WritingMode aWM,
+ 
+ nsStyleUI::nsStyleUI()
+     : mInert(StyleInert::None),
+-      mMozTheme(StyleMozTheme::Auto),
+       mUserFocus(StyleUserFocus::Normal),
+       mPointerEvents(StylePointerEvents::Auto),
+       mCursor{{}, StyleCursorKind::Auto},
+@@ -3215,7 +3214,6 @@ nsStyleUI::nsStyleUI()
+ 
+ nsStyleUI::nsStyleUI(const nsStyleUI& aSource)
+     : mInert(aSource.mInert),
+-      mMozTheme(aSource.mMozTheme),
+       mUserFocus(aSource.mUserFocus),
+       mPointerEvents(aSource.mPointerEvents),
+       mCursor(aSource.mCursor),
+@@ -3275,7 +3273,6 @@ nsChangeHint nsStyleUI::CalcDifference(const nsStyleUI& aNewData) const {
+   if (mCaretColor != aNewData.mCaretColor ||
+       mAccentColor != aNewData.mAccentColor ||
+       mScrollbarColor != aNewData.mScrollbarColor ||
+-      mMozTheme != aNewData.mMozTheme ||
+       mColorScheme != aNewData.mColorScheme) {
+     hint |= nsChangeHint_RepaintFrame;
+   }
+diff --git a/layout/style/nsStyleStruct.h b/layout/style/nsStyleStruct.h
+index 09c9683..f558224 100644
+--- a/layout/style/nsStyleStruct.h
++++ b/layout/style/nsStyleStruct.h
+@@ -2144,7 +2144,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUI {
+   void TriggerImageLoads(mozilla::dom::Document&, const nsStyleUI*);
+ 
+   mozilla::StyleInert mInert;
+-  mozilla::StyleMozTheme mMozTheme;
+ 
+  private:
+   mozilla::StyleUserFocus mUserFocus;
+diff --git a/servo/components/style/properties/data.py b/servo/components/style/properties/data.py
+index b4bf7b7..1822625 100644
+--- a/servo/components/style/properties/data.py
++++ b/servo/components/style/properties/data.py
+@@ -601,7 +601,6 @@ class Longhand(Property):
+                 "JustifyItems",
+                 "LineBreak",
+                 "MasonryAutoFlow",
+-                "MozTheme",
+                 "BoolInteger",
+                 "text::MozControlCharacterVisibility",
+                 "MozScriptMinSize",
+diff --git a/servo/components/style/properties/longhands.toml b/servo/components/style/properties/longhands.toml
+index ffe29f0..be6f39e 100644
+--- a/servo/components/style/properties/longhands.toml
++++ b/servo/components/style/properties/longhands.toml
+@@ -1907,16 +1907,6 @@ spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-user-
+ enabled_in = "chrome"
+ affects = ""
+ 
+-[-moz-theme]
+-type = "MozTheme"
+-initial = "specified::MozTheme::Auto"
+-struct = "inherited_ui"
+-engine = "gecko"
+-enabled_in = "chrome"
+-animation_type = "discrete"
+-spec = "Internal"
+-affects = "paint"
+-
+ [scrollbar-gutter]
+ type = "ScrollbarGutter"
+ initial = "computed::ScrollbarGutter::AUTO"
+diff --git a/servo/components/style/values/computed/mod.rs b/servo/components/style/values/computed/mod.rs
+index 24dce49..ca0e788 100644
+--- a/servo/components/style/values/computed/mod.rs
++++ b/servo/components/style/values/computed/mod.rs
+@@ -125,7 +125,7 @@ pub use self::transform::{TransformOrigin, TransformStyle, Translate};
+ #[cfg(feature = "gecko")]
+ pub use self::ui::CursorImage;
+ pub use self::ui::{
+-    BoolInteger, Cursor, Inert, MozTheme, PointerEvents, ScrollbarColor, UserFocus, UserSelect,
++    BoolInteger, Cursor, Inert, PointerEvents, ScrollbarColor, UserFocus, UserSelect,
+ };
+ pub use super::specified::TextTransform;
+ pub use super::specified::ViewportVariant;
+diff --git a/servo/components/style/values/computed/ui.rs b/servo/components/style/values/computed/ui.rs
+index a16b179..4ec97f6 100644
+--- a/servo/components/style/values/computed/ui.rs
++++ b/servo/components/style/values/computed/ui.rs
+@@ -10,7 +10,7 @@ use crate::values::computed::Number;
+ use crate::values::generics::ui as generics;
+ 
+ pub use crate::values::specified::ui::{
+-    BoolInteger, CursorKind, Inert, MozTheme, PointerEvents, UserFocus, UserSelect,
++    BoolInteger, CursorKind, Inert, PointerEvents, UserFocus, UserSelect,
+ };
+ 
+ /// A computed value for the `cursor` property.
+diff --git a/servo/components/style/values/specified/mod.rs b/servo/components/style/values/specified/mod.rs
+index 9208efd..1c330dd 100644
+--- a/servo/components/style/values/specified/mod.rs
++++ b/servo/components/style/values/specified/mod.rs
+@@ -124,7 +124,7 @@ pub use self::transform::{TransformBox, TransformOrigin, TransformStyle, Transla
+ #[cfg(feature = "gecko")]
+ pub use self::ui::CursorImage;
+ pub use self::ui::{
+-    BoolInteger, Cursor, Inert, MozTheme, PointerEvents, ScrollbarColor, UserFocus, UserSelect,
++    BoolInteger, Cursor, Inert, PointerEvents, ScrollbarColor, UserFocus, UserSelect,
+ };
+ pub use super::generics::grid::GridTemplateComponent as GenericGridTemplateComponent;
+ 
+diff --git a/servo/components/style/values/specified/ui.rs b/servo/components/style/values/specified/ui.rs
+index df3273a..cdbcc53 100644
+--- a/servo/components/style/values/specified/ui.rs
++++ b/servo/components/style/values/specified/ui.rs
+@@ -234,31 +234,6 @@ pub enum CursorKind {
+     Auto,
+ }
+ 
+-/// The keywords allowed in the -moz-theme property.
+-#[derive(
+-    Clone,
+-    Copy,
+-    Debug,
+-    Eq,
+-    FromPrimitive,
+-    MallocSizeOf,
+-    Parse,
+-    PartialEq,
+-    SpecifiedValueInfo,
+-    ToComputedValue,
+-    ToCss,
+-    ToResolvedValue,
+-    ToShmem,
+-    ToTyped,
+-)]
+-#[repr(u8)]
+-pub enum MozTheme {
+-    /// Choose the default (maybe native) rendering.
+-    Auto,
+-    /// Choose the non-native rendering.
+-    NonNative,
+-}
+-
+ /// The pointer-events property
+ /// https://svgwg.org/svg2-draft/interact.html#PointerEventsProperty
+ #[allow(missing_docs)]
+diff --git a/servo/ports/geckolib/cbindgen.toml b/servo/ports/geckolib/cbindgen.toml
+index 2bce279..19e7659 100644
+--- a/servo/ports/geckolib/cbindgen.toml
++++ b/servo/ports/geckolib/cbindgen.toml
+@@ -157,7 +157,6 @@ include = [
+   "GenericFontFamily",
+   "FontFamily",
+   "FontFamilyNameSyntax",
+-  "MozTheme",
+   "OverflowWrap",
+   "OffsetPath",
+   "OffsetPathFunction",
+diff --git a/widget/nsNativeTheme.cpp b/widget/nsNativeTheme.cpp
+index bcdb76e..63d6b9f 100644
+--- a/widget/nsNativeTheme.cpp
++++ b/widget/nsNativeTheme.cpp
+@@ -389,6 +389,5 @@ bool nsNativeTheme::IsWidgetAlwaysNonNative(nsIFrame* aFrame,
+          aAppearance == StyleAppearance::ProgressBar ||
+          aAppearance == StyleAppearance::Meter ||
+          aAppearance == StyleAppearance::Range ||
+-         aAppearance == StyleAppearance::Listbox ||
+-         (aFrame && aFrame->StyleUI()->mMozTheme == StyleMozTheme::NonNative);
++         aAppearance == StyleAppearance::Listbox;
+ }
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index c74a02d..2afb190 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -63,20 +63,11 @@ nsNativeThemeWin::nsNativeThemeWin()
+   // reinitialized here.
+ }
+ 
+-bool nsNativeThemeWin::IsWidgetAlwaysNonNative(nsIFrame* aFrame,
+-                                               StyleAppearance aAppearance) {
+-  if (aAppearance == StyleAppearance::SpinnerUpbutton ||
+-      aAppearance == StyleAppearance::SpinnerDownbutton) {
+-    return aFrame &&
+-           aFrame->StyleUI()->mMozTheme == StyleMozTheme::NonNative;
+-  }
+-  return Theme::IsWidgetAlwaysNonNative(aFrame, aAppearance);
+-}
+-
+ auto nsNativeThemeWin::IsWidgetNonNative(nsIFrame* aFrame,
+                                          StyleAppearance aAppearance)
+     -> NonNative {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
++  if (IsWidgetScrollbarPart(aAppearance) ||
++      aAppearance == StyleAppearance::FocusOutline) {
+     return NonNative::Always;
+   }
+ 
+@@ -1181,7 +1172,7 @@ bool nsNativeThemeWin::GetWidgetOverflow(nsDeviceContext* aContext,
+ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+     nsPresContext* aPresContext, nsIFrame* aFrame,
+     StyleAppearance aAppearance) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
++  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+     return Theme::GetMinimumWidgetSize(aPresContext, aFrame, aAppearance);
+   }
+ 
+@@ -1275,7 +1266,7 @@ bool nsNativeThemeWin::ThemeSupportsWidget(nsPresContext* aPresContext,
+   // XXXdwh We can go even further and call the API to ask if support exists for
+   // specific widgets.
+ 
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
++  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+     return Theme::ThemeSupportsWidget(aPresContext, aFrame, aAppearance);
+   }
+ 
+diff --git a/widget/windows/nsNativeThemeWin.h b/widget/windows/nsNativeThemeWin.h
+index e9857e9..1f1cda7 100644
+--- a/widget/windows/nsNativeThemeWin.h
++++ b/widget/windows/nsNativeThemeWin.h
+@@ -34,7 +34,6 @@ class nsNativeThemeWin final : public Theme {
+   // to avoid subtle sizing changes. The non-native theme can basically draw at
+   // any size, so we prefer to have consistent sizing information.
+   enum class NonNative { No, Always, BecauseColorMismatch };
+-  static bool IsWidgetAlwaysNonNative(nsIFrame*, StyleAppearance);
+   NonNative IsWidgetNonNative(nsIFrame*, StyleAppearance);
+ 
+   // The nsITheme interface.

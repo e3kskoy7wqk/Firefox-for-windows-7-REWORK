@@ -1,0 +1,358 @@
+diff --git a/gfx/layers/d3d11/CompositorD3D11.cpp b/gfx/layers/d3d11/CompositorD3D11.cpp
+index ad0f1b56dbfc..02187835389c 100644
+--- a/gfx/layers/d3d11/CompositorD3D11.cpp
++++ b/gfx/layers/d3d11/CompositorD3D11.cpp
+@@ -944,6 +944,9 @@ void CompositorD3D11::EndFrame() {
+ 
+   if (oldSize == mSize) {
+     Present();
++    if (StaticPrefs::gfx_compositor_clearstate()) {
++      mContext->ClearState();
++    }
+   }
+ 
+   // Block until the previous frame's work has been completed.
+diff --git a/gfx/thebes/DeviceManagerDx.cpp b/gfx/thebes/DeviceManagerDx.cpp
+index f81dce7b95ed..de3dec9c9f0e 100644
+--- a/gfx/thebes/DeviceManagerDx.cpp
++++ b/gfx/thebes/DeviceManagerDx.cpp
+@@ -1415,6 +1415,19 @@ bool DeviceManagerDx::HasCrashyInitData() {
+   return (mDeviceStatus->adapter().VendorId == 0x8086 && !IsWin10OrLater());
+ }
+ 
++bool DeviceManagerDx::CheckRemotePresentSupport() {
++  MOZ_ASSERT(XRE_IsParentProcess());
++
++  RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapter();
++  if (!adapter) {
++    return false;
++  }
++  if (!D3D11Checks::DoesRemotePresentWork(adapter)) {
++    return false;
++  }
++  return true;
++}
++
+ bool DeviceManagerDx::IsWARP() {
+   MutexAutoLock lock(mDeviceLock);
+   return IsWARPLocked();
+diff --git a/gfx/thebes/DeviceManagerDx.h b/gfx/thebes/DeviceManagerDx.h
+index b2a93e155272..2889127c94f0 100644
+--- a/gfx/thebes/DeviceManagerDx.h
++++ b/gfx/thebes/DeviceManagerDx.h
+@@ -133,6 +133,10 @@ class DeviceManagerDx final {
+   // was successful.
+   bool MaybeResetAndReacquireDevices();
+ 
++  // Test whether we can acquire a DXGI 1.2-compatible adapter. This should
++  // only be called on startup before devices are initialized.
++  bool CheckRemotePresentSupport();
++
+   // Device reset helpers.
+   bool HasDeviceReset(DeviceResetReason* aOutReason = nullptr);
+ 
+diff --git a/gfx/thebes/d3dkmtQueryStatistics.h b/gfx/thebes/d3dkmtQueryStatistics.h
+index 58ce2cd155d8..d00b70696688 100644
+--- a/gfx/thebes/d3dkmtQueryStatistics.h
++++ b/gfx/thebes/d3dkmtQueryStatistics.h
+@@ -55,7 +55,20 @@ typedef struct _D3DKMTQS_ADAPTER_INFO {
+   ULONG64 Reserved[8];
+ } D3DKMTQS_ADAPTER_INFO;
+ 
+-typedef struct _D3DKMTQS_SEGMENT_INFO {
++typedef struct _D3DKMTQS_SEGMENT_INFO_WIN7 {
++  ULONG Filler[3];
++  struct {
++    ULONGLONG Filler;
++    ULONG Filler2[2];
++  } Filler_M;
++
++  ULONG Aperture;
++
++  ULONGLONG Filler3[5];
++  ULONG64 Filler4[8];
++} D3DKMTQS_SEGMENT_INFO_WIN7;
++
++typedef struct _D3DKMTQS_SEGMENT_INFO_WIN8 {
+   ULONGLONG Filler[3];
+   struct {
+     ULONGLONG Filler;
+@@ -66,7 +79,7 @@ typedef struct _D3DKMTQS_SEGMENT_INFO {
+ 
+   ULONGLONG Filler3[5];
+   ULONG64 Filler4[8];
+-} D3DKMTQS_SEGMENT_INFO;
++} D3DKMTQS_SEGMENT_INFO_WIN8;
+ 
+ typedef struct _D3DKMTQS_SYSTEM_MEMORY {
+   ULONGLONG BytesAllocated;
+@@ -86,7 +99,16 @@ typedef struct _D3DKMTQS_PROCESS_INFO {
+ } D3DKMTQS_PROCESS_INFO;
+ 
+ typedef struct _D3DKMTQS_PROCESS_SEGMENT_INFO {
+-  ULONGLONG BytesCommitted;
++  union {
++    struct {
++      ULONGLONG BytesCommitted;
++    } Win8;
++    struct {
++      ULONG BytesCommitted;
++      ULONG UnknownRandomness;
++    } Win7;
++  };
++
+   ULONGLONG Filler[2];
+   ULONG Filler2;
+   struct {
+@@ -118,7 +140,8 @@ typedef enum _D3DKMTQS_TYPE {
+ 
+ typedef union _D3DKMTQS_RESULT {
+   D3DKMTQS_ADAPTER_INFO AdapterInfo;
+-  D3DKMTQS_SEGMENT_INFO SegmentInfo;
++  D3DKMTQS_SEGMENT_INFO_WIN7 SegmentInfoWin7;
++  D3DKMTQS_SEGMENT_INFO_WIN8 SegmentInfoWin8;
+   D3DKMTQS_PROCESS_INFO ProcessInfo;
+   D3DKMTQS_PROCESS_SEGMENT_INFO ProcessSegmentInfo;
+   D3DKMTQS_PROCESS_NODE_INFO ProcessNodeInformation;
+diff --git a/gfx/thebes/gfxWindowsPlatform.cpp b/gfx/thebes/gfxWindowsPlatform.cpp
+index 105f398e885f..11d593a92975 100644
+--- a/gfx/thebes/gfxWindowsPlatform.cpp
++++ b/gfx/thebes/gfxWindowsPlatform.cpp
+@@ -191,15 +191,28 @@ class GPUAdapterReporter final : public nsIMemoryReporter {
+           queryStatistics.QuerySegment.SegmentId = i;
+ 
+           if (NT_SUCCESS(queryD3DKMTStatistics(&queryStatistics))) {
+-            bool aperture = queryStatistics.QueryResult.SegmentInfo.Aperture;
++            bool aperture;
++
++            // SegmentInformation has a different definition in Win7 than later
++            // versions
++            if (!IsWin8OrLater())
++              aperture = queryStatistics.QueryResult.SegmentInfoWin7.Aperture;
++            else
++              aperture = queryStatistics.QueryResult.SegmentInfoWin8.Aperture;
++
+             memset(&queryStatistics, 0, sizeof(D3DKMTQS));
+             queryStatistics.Type = D3DKMTQS_PROCESS_SEGMENT;
+             queryStatistics.AdapterLuid = adapterDesc.AdapterLuid;
+             queryStatistics.hProcess = ProcessHandle;
+             queryStatistics.QueryProcessSegment.SegmentId = i;
+             if (NT_SUCCESS(queryD3DKMTStatistics(&queryStatistics))) {
+-              ULONGLONG bytesCommitted =
+-                  queryStatistics.QueryResult.ProcessSegmentInfo.BytesCommitted;
++              ULONGLONG bytesCommitted;
++              if (!IsWin8OrLater())
++                bytesCommitted = queryStatistics.QueryResult.ProcessSegmentInfo
++                                     .Win7.BytesCommitted;
++              else
++                bytesCommitted = queryStatistics.QueryResult.ProcessSegmentInfo
++                                     .Win8.BytesCommitted;
+               if (aperture)
+                 sharedBytesUsed += bytesCommitted;
+               else
+@@ -375,6 +388,7 @@ void gfxWindowsPlatform::InitAcceleration() {
+   DeviceManagerDx::Init();
+ 
+   InitializeConfig();
++  InitGPUProcessSupport();
+   // Ensure devices initialization. SharedSurfaceANGLE and
+   // SharedSurfaceD3D11Interop use them. The devices are lazily initialized
+   // with WebRender to reduce memory usage.
+@@ -522,6 +536,7 @@ bool gfxWindowsPlatform::HandleDeviceReset() {
+   InitializeConfig();
+   // XXX Add InitWebRenderConfig() calling.
+   if (mInitializedDevices) {
++    InitGPUProcessSupport();
+     InitializeDevices();
+   }
+   UpdateANGLEConfig();
+@@ -1409,7 +1424,17 @@ bool gfxWindowsPlatform::IsOptimus() {
+   }
+   return knowIsOptimus;
+ }
+-
++/*
++static inline bool
++IsWARPStable()
++{
++  // It seems like nvdxgiwrap makes a mess of WARP. See bug 1154703.
++  if (!IsWin8OrLater() || GetModuleHandleA("nvdxgiwrap.dll")) {
++    return false;
++  }
++  return true;
++}
++*/
+ static void InitializeANGLEConfig() {
+   FeatureState& d3d11ANGLE = gfxConfig::GetFeature(Feature::D3D11_HW_ANGLE);
+ 
+@@ -1470,6 +1495,26 @@ void gfxWindowsPlatform::InitializeD3D11Config() {
+     d3d11.UserForceEnable("User force-enabled WARP");
+   }
+ 
++  if (!IsWin8OrLater() &&
++      !DeviceManagerDx::Get()->CheckRemotePresentSupport()) {
++    nsCOMPtr<nsIGfxInfo> gfxInfo;
++    gfxInfo = components::GfxInfo::Service();
++    nsAutoString adaptorId;
++    gfxInfo->GetAdapterDeviceID(adaptorId);
++    // Blocklist Intel HD Graphics 510/520/530 on Windows 7 without platform
++    // update due to the crashes in Bug 1351349.
++    if (adaptorId.EqualsLiteral("0x1912") ||
++        adaptorId.EqualsLiteral("0x1916") ||
++        adaptorId.EqualsLiteral("0x1902")) {
++#ifdef RELEASE_OR_BETA
++      d3d11.Disable(FeatureStatus::Blocklisted, "Blocklisted, see bug 1351349",
++                    "FEATURE_FAILURE_BUG_1351349"_ns);
++#else
++      Preferences::SetBool("gfx.compositor.clearstate", true);
++#endif
++    }
++  }
++
+   nsCString message;
+   nsCString failureId;
+   if (StaticPrefs::layers_d3d11_enable_blacklist_AtStartup() &&
+@@ -1691,6 +1736,35 @@ void gfxWindowsPlatform::InitializeD2D() {
+   }
+ }
+ 
++void gfxWindowsPlatform::InitGPUProcessSupport() {
++  FeatureState& gpuProc = gfxConfig::GetFeature(Feature::GPU_PROCESS);
++
++  if (!gpuProc.IsEnabled() ||
++      !gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
++    return;
++  }
++
++  if (!IsWin7SP1OrLater()) {
++    // On Windows 7 Pre-SP1, DXGI 1.2 is not available and remote presentation
++    // for D3D11 will not work. Rather than take a regression we revert back
++    // to in-process rendering.
++    gpuProc.Disable(FeatureStatus::Unavailable,
++                    "Windows 7 Pre-SP1 cannot use the GPU process",
++                    "FEATURE_FAILURE_OLD_WINDOWS"_ns);
++  } else if (!IsWin8OrLater()) {
++    // Windows 7 SP1 can have DXGI 1.2 only via the Platform Update, so we
++    // explicitly check for that here.
++    if (!DeviceManagerDx::Get()->CheckRemotePresentSupport()) {
++      gpuProc.Disable(FeatureStatus::Unavailable,
++                      "GPU Process requires the Windows 7 Platform Update",
++                      "FEATURE_FAILURE_PLATFORM_UPDATE"_ns);
++    } else {
++      // Clear anything cached by the above call since we don't need it.
++      DeviceManagerDx::Get()->ResetDevices();
++    }
++  }
++}
++
+ bool gfxWindowsPlatform::DwmCompositionEnabled() {
+   MOZ_RELEASE_ASSERT(mDwmCompositionStatus != DwmCompositionStatus::Unknown);
+ 
+@@ -1702,11 +1776,14 @@ class D3DVsyncSource final : public VsyncSource {
+   D3DVsyncSource()
+       : mPrevVsync(TimeStamp::Now()),
+         mVsyncEnabled(false),
+-        mWaitVBlankMonitor(NULL) {
++        mWaitVBlankMonitor(NULL),
++        mIsWindows8OrLater(false) {
+     mVsyncThread = new base::Thread("WindowsVsyncThread");
+     MOZ_RELEASE_ASSERT(mVsyncThread->Start(),
+                        "GFX: Could not start Windows vsync thread");
+     SetVsyncRate();
++
++    mIsWindows8OrLater = IsWin8OrLater();
+   }
+ 
+   void SetVsyncRate() {
+@@ -1811,20 +1888,22 @@ class D3DVsyncSource final : public VsyncSource {
+     int64_t usAdjust = (adjust * microseconds) / frequency.QuadPart;
+     vsync -= TimeDuration::FromMicroseconds((double)usAdjust);
+ 
+-    // On Windows 10 and on, DWMGetCompositionTimingInfo, mostly
+-    // reports the upcoming vsync time, which is in the future.
+-    // It can also sometimes report a vblank time in the past.
+-    // Since large parts of Gecko assume TimeStamps can't be in future,
+-    // use the previous vsync.
+-
+-    // Windows 10 and Intel HD vsync timestamps are messy and
+-    // all over the place once in a while. Most of the time,
+-    // it reports the upcoming vsync. Sometimes, that upcoming
+-    // vsync is in the past. Sometimes that upcoming vsync is before
+-    // the previously seen vsync.
+-    // In these error cases, normalize to Now();
+-    if (vsync >= now) {
+-      vsync = vsync - mVsyncRate;
++    if (IsWin10OrLater()) {
++      // On Windows 10 and on, DWMGetCompositionTimingInfo, mostly
++      // reports the upcoming vsync time, which is in the future.
++      // It can also sometimes report a vblank time in the past.
++      // Since large parts of Gecko assume TimeStamps can't be in future,
++      // use the previous vsync.
++
++      // Windows 10 and Intel HD vsync timestamps are messy and
++      // all over the place once in a while. Most of the time,
++      // it reports the upcoming vsync. Sometimes, that upcoming
++      // vsync is in the past. Sometimes that upcoming vsync is before
++      // the previously seen vsync.
++      // In these error cases, normalize to Now();
++      if (vsync >= now) {
++        vsync = vsync - mVsyncRate;
++      }
+     }
+ 
+     // On Windows 7 and 8, DwmFlush wakes up AFTER qpcVBlankTime
+@@ -1835,7 +1914,7 @@ class D3DVsyncSource final : public VsyncSource {
+ 
+     // Our vsync time is some time very far in the past, adjust to Now.
+     // 4 ms is arbitrary, so feel free to pick something else if this isn't
+-    // working. See the comment above.
++    // working. See the comment above within IsWin10OrLater().
+     if ((now - vsync).ToMilliseconds() > 4.0) {
+       vsync = now;
+     }
+@@ -1872,7 +1951,8 @@ class D3DVsyncSource final : public VsyncSource {
+       }
+ 
+       HRESULT hr = E_FAIL;
+-      if (!StaticPrefs::gfx_vsync_force_disable_waitforvblank()) {
++      if (mIsWindows8OrLater &&
++          !StaticPrefs::gfx_vsync_force_disable_waitforvblank()) {
+         UpdateVBlankOutput();
+         if (mWaitVBlankOutput) {
+           const TimeStamp vblank_begin_wait = TimeStamp::Now();
+@@ -1971,6 +2051,7 @@ class D3DVsyncSource final : public VsyncSource {
+ 
+   HMONITOR mWaitVBlankMonitor;
+   RefPtr<IDXGIOutput> mWaitVBlankOutput;
++  bool mIsWindows8OrLater;
+ };  // D3DVsyncSource
+ 
+ already_AddRefed<mozilla::gfx::VsyncSource>
+diff --git a/gfx/thebes/gfxWindowsPlatform.h b/gfx/thebes/gfxWindowsPlatform.h
+index 654181bfa1e6..738ca4fcd1ca 100644
+--- a/gfx/thebes/gfxWindowsPlatform.h
++++ b/gfx/thebes/gfxWindowsPlatform.h
+@@ -212,6 +212,7 @@ class gfxWindowsPlatform final : public gfxPlatform {
+   void InitializeDevices();
+   void InitializeD3D11();
+   bool InitDWriteSupport();
++  void InitGPUProcessSupport();
+ 
+   void InitializeConfig();
+   void InitializeD3D9Config();
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index d168f2ed1b47..98dcf824f3e7 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -6917,6 +6917,11 @@
+   value: true # Match naive behavior, but hopefully we can stop soon!
+   mirror: always
+ 
++- name: gfx.compositor.clearstate
++  type: RelaxedAtomicBool
++  value: false
++  mirror: always
++
+ # Enable reporting video-dynamic-range: high media capability when document is
+ # on an HDR-enabled desktop, this tells websites to serve HDR video and allows
+ # video overlaysk to use HDR transfer functions.  In future this will also

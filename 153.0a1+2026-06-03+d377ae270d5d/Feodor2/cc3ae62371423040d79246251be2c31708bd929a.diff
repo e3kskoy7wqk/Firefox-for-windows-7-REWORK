@@ -1,0 +1,111 @@
+diff --git a/toolkit/themes/shared/design-system/dist/semantic-categories.mjs b/toolkit/themes/shared/design-system/dist/semantic-categories.mjs
+index 15723e1..b8121bc 100644
+--- a/toolkit/themes/shared/design-system/dist/semantic-categories.mjs
++++ b/toolkit/themes/shared/design-system/dist/semantic-categories.mjs
+@@ -312,10 +312,11 @@ export const tokensTable = {
+     },
+     {
+       value: {
+-        light: "rgba(0, 0, 0, 0.05)",
+-        dark: "var(--color-black-alpha-30)",
++        light: "rgb(240, 240, 244)",
++        dark: "rgb(28, 27, 34)",
++        nativeTheme: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
+         prefersContrast: "Field",
+-        default: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
++        default: "light-dark(rgb(240, 240, 244), rgb(28, 27, 34))",
+       },
+       name: "--toolbar-field-background-color",
+     },
+@@ -3208,10 +3209,11 @@ export const variableLookupTable = {
+     prefersContrast: "var(--focus-outline-color)",
+   },
+   "toolbar-field-background-color": {
+-    light: "rgba(0, 0, 0, 0.05)",
+-    dark: "var(--color-black-alpha-30)",
++    light: "rgb(240, 240, 244)",
++    dark: "rgb(28, 27, 34)",
++    nativeTheme: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
+     prefersContrast: "Field",
+-    default: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
++    default: "light-dark(rgb(240, 240, 244), rgb(28, 27, 34))",
+   },
+   "toolbar-field-background-color-focus": {
+     light: "var(--color-white)",
+diff --git a/toolkit/themes/shared/design-system/dist/tokens-figma-theme.json b/toolkit/themes/shared/design-system/dist/tokens-figma-theme.json
+index 9fbb955..93316c4 100644
+--- a/toolkit/themes/shared/design-system/dist/tokens-figma-theme.json
++++ b/toolkit/themes/shared/design-system/dist/tokens-figma-theme.json
+@@ -665,8 +665,8 @@
+     "forcedColors": "{Theme$focus/outline/color}"
+   },
+   "toolbar/field/background/color": {
+-    "light": "rgba(0, 0, 0, 0.05)",
+-    "dark": "{Colors$color/black/alpha/30}",
++    "light": "rgb(240, 240, 244)",
++    "dark": "rgb(28, 27, 34)",
+     "forcedColors": "{HCM Theme$Field}"
+   },
+   "toolbar/field/background/color/focus": {
+diff --git a/toolkit/themes/shared/design-system/dist/tokens-shared.css b/toolkit/themes/shared/design-system/dist/tokens-shared.css
+index 3301bf0..eb37270 100644
+--- a/toolkit/themes/shared/design-system/dist/tokens-shared.css
++++ b/toolkit/themes/shared/design-system/dist/tokens-shared.css
+@@ -642,6 +642,7 @@
+ 
+       /** toolbar **/
+       --toolbar-background-color: light-dark(#f9f9fb, rgb(43, 42, 51));
++      --toolbar-field-background-color: light-dark(rgb(240, 240, 244), rgb(28, 27, 34));
+       --toolbar-field-background-color-focus: light-dark(var(--color-white), rgb(66, 65, 77));
+       --toolbar-field-text-color: light-dark(var(--color-gray-100), var(--color-gray-05));
+       --toolbar-field-text-color-focus: light-dark(var(--color-black), var(--color-gray-05));
+diff --git a/toolkit/themes/shared/design-system/dist/tokens-table.mjs b/toolkit/themes/shared/design-system/dist/tokens-table.mjs
+index 1b6dcd4..c647e6e 100644
+--- a/toolkit/themes/shared/design-system/dist/tokens-table.mjs
++++ b/toolkit/themes/shared/design-system/dist/tokens-table.mjs
+@@ -296,10 +296,11 @@ export const tokensTable = {
+     },
+     {
+       value: {
+-        light: "rgba(0, 0, 0, 0.05)",
+-        dark: "var(--color-black-alpha-30)",
++        light: "rgb(240, 240, 244)",
++        dark: "rgb(28, 27, 34)",
++        nativeTheme: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
+         prefersContrast: "Field",
+-        default: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
++        default: "light-dark(rgb(240, 240, 244), rgb(28, 27, 34))",
+       },
+       name: "--toolbar-field-background-color",
+     },
+@@ -3210,10 +3211,11 @@ export const variableLookupTable = {
+     prefersContrast: "var(--focus-outline-color)",
+   },
+   "toolbar-field-background-color": {
+-    light: "rgba(0, 0, 0, 0.05)",
+-    dark: "var(--color-black-alpha-30)",
++    light: "rgb(240, 240, 244)",
++    dark: "rgb(28, 27, 34)",
++    nativeTheme: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
+     prefersContrast: "Field",
+-    default: "light-dark(rgba(0, 0, 0, 0.05), var(--color-black-alpha-30))",
++    default: "light-dark(rgb(240, 240, 244), rgb(28, 27, 34))",
+   },
+   "toolbar-field-background-color-focus": {
+     light: "var(--color-white)",
+diff --git a/toolkit/themes/shared/design-system/src/tokens/components/toolbar.tokens.json b/toolkit/themes/shared/design-system/src/tokens/components/toolbar.tokens.json
+index 5bcdf72..0b748c8 100644
+--- a/toolkit/themes/shared/design-system/src/tokens/components/toolbar.tokens.json
++++ b/toolkit/themes/shared/design-system/src/tokens/components/toolbar.tokens.json
+@@ -25,8 +25,9 @@
+       "color": {
+         "@base": {
+           "value": {
+-            "light": "rgba(0, 0, 0, 0.05)",
+-            "dark": "{color.black.alpha.30}",
++            "light": "rgb(240, 240, 244)",
++            "dark": "rgb(28, 27, 34)",
++            "nativeTheme": "light-dark(rgba(0, 0, 0, 0.05), {color.black.alpha.30})",
+             "prefersContrast": "Field"
+           }
+         },

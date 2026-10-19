@@ -1,0 +1,67 @@
+diff --git a/security/sandbox/chromium/sandbox/win/src/job.cc b/security/sandbox/chromium/sandbox/win/src/job.cc
+index 2dc76c19df5ba..6e1cccd11abab 100644
+--- a/security/sandbox/chromium/sandbox/win/src/job.cc
++++ b/security/sandbox/chromium/sandbox/win/src/job.cc
+@@ -64,6 +64,9 @@ DWORD Job::Init(JobLevel security_level,
+           JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+       break;
+     }
++    case JobLevel::kNone: {
++      return ERROR_BAD_ARGUMENTS;
++    }
+   }
+ 
+   if (!::SetInformationJobObject(job_handle_.Get(),
+diff --git a/security/sandbox/chromium/sandbox/win/src/sandbox_policy_base.cc b/security/sandbox/chromium/sandbox/win/src/sandbox_policy_base.cc
+index 3d84e71dad022..232e279e7d236 100644
+--- a/security/sandbox/chromium/sandbox/win/src/sandbox_policy_base.cc
++++ b/security/sandbox/chromium/sandbox/win/src/sandbox_policy_base.cc
+@@ -381,6 +381,9 @@ TokenLevel ConfigBase::GetLockdownTokenLevel() const {
+ }
+ 
+ ResultCode ConfigBase::SetJobLevel(JobLevel job_level, uint32_t ui_exceptions) {
++  if (memory_limit_ && job_level == JobLevel::kNone) {
++    return SBOX_ERROR_BAD_PARAMS;
++  }
+   job_level_ = job_level;
+   ui_exceptions_ = ui_exceptions;
+   return SBOX_ALL_OK;
+@@ -503,6 +506,9 @@ ResultCode PolicyBase::InitJob() {
+   if (job_.IsValid())
+     return SBOX_ERROR_BAD_PARAMS;
+ 
++  if (config()->GetJobLevel() == JobLevel::kNone)
++    return SBOX_ALL_OK;
++
+   // Create the Windows job object.
+   DWORD result = job_.Init(config()->GetJobLevel(), config()->ui_exceptions(),
+                            config()->memory_limit());
+diff --git a/security/sandbox/chromium/sandbox/win/src/security_level.h b/security/sandbox/chromium/sandbox/win/src/security_level.h
+index 60e42e97d6f48..a028062b178ec 100644
+--- a/security/sandbox/chromium/sandbox/win/src/security_level.h
++++ b/security/sandbox/chromium/sandbox/win/src/security_level.h
+@@ -95,6 +95,9 @@ enum TokenLevel {
+ //  JobLevel        |General                            |Quota               |
+ //                  |restrictions                       |restrictions        |
+ // -----------------|---------------------------------- |--------------------|
++// kNone            | No job is assigned to the         | None               |
++//                  | sandboxed process.                |                    |
++// -----------------|---------------------------------- |--------------------|
+ // kUnprotected     | None                              | *Kill on Job close.|
+ // -----------------|---------------------------------- |--------------------|
+ // kInteractive     | *Forbid system-wide changes using |                    |
+@@ -120,7 +123,13 @@ enum TokenLevel {
+ // In the context of the above table, 'user handles' refers to the handles of
+ // windows, bitmaps, menus, etc. Files, treads and registry handles are kernel
+ // handles and are not affected by the job level settings.
+-enum class JobLevel { kLockdown = 0, kLimitedUser, kInteractive, kUnprotected };
++enum class JobLevel {
++  kLockdown = 0,
++  kLimitedUser,
++  kInteractive,
++  kUnprotected,
++  kNone
++};
+ 
+ // These flags correspond to various process-level mitigations (eg. ASLR and
+ // DEP). Most are implemented via UpdateProcThreadAttribute() plus flags for

@@ -1,0 +1,1 @@
+Bug 1882464 - Remove automatic fallback to XUL r=nalexander    2025-08-20    830f42a594085d38f44f7b979b887ea4273f5ff0

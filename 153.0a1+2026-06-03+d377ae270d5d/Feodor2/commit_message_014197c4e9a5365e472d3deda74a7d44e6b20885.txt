@@ -1,0 +1,1 @@
+Bug 1356263 - Remove nsLocaleService, nsILocaleService and ns*Locale APIs. r=m_kato    2017-08-03 17:33:51    014197c4e9a5365e472d3deda74a7d44e6b20885

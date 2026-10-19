@@ -1,0 +1,1 @@
+Bug 1334862 - Remove Windows XP support from HAL. r=jimm    2017-01-29 14:43:44    aad2a3564472964495ba77f17577bde7e63d9b79

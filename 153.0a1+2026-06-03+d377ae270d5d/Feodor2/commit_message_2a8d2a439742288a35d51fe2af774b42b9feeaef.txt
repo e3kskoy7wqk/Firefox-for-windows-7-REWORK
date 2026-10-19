@@ -1,0 +1,2 @@
+Bug 1839240 - Removed hardcoded uitour permissions and added a migration script to reset defaults. r=pbz,Mardak    2023-07-27 01:57:44    2a8d2a439742288a35d51fe2af774b42b9feeaef
+Bug 1845540 - Remove -moz-windows-default-theme and -moz-mac-graphite-theme. r=dao,pip-reviewers,mhowell    2023-07-27 02:22:26    d29139e526adac95455c13b9dc522ef387684e3f

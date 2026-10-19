@@ -1,0 +1,1 @@
+Bug 1971145 - Remove dark_theme and experiments from default-theme manifest. r=dao,desktop-theme-reviewers,extension-reviewers,robwu    2025-06-20 02:26:08    27edfee181162348f298b13e2b12522c1c4e8cc5

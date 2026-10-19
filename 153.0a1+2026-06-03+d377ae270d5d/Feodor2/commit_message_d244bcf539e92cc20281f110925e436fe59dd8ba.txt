@@ -1,0 +1,1 @@
+Bug 1967569 - Use the non-native theme on windows. r=desktop-theme-reviewers,win-reviewers,dao,handyman    2025-05-29 16:02:08    d244bcf539e92cc20281f110925e436fe59dd8ba

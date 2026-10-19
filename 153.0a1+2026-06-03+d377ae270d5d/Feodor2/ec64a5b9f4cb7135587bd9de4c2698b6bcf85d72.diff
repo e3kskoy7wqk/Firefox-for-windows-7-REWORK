@@ -1,0 +1,48 @@
+diff --git a/xpcom/build/XPCOMInit.cpp b/xpcom/build/XPCOMInit.cpp
+index ae2d2da59c17..52033fadab9d 100644
+--- a/xpcom/build/XPCOMInit.cpp
++++ b/xpcom/build/XPCOMInit.cpp
+@@ -111,6 +111,7 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
+ #include "jsapi.h"
+ #include "js/Initialization.h"
+ #include "XPCSelfHostedShmem.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include "gfxPlatform.h"
+ 
+diff --git a/xpcom/threads/nsThreadUtils.cpp b/xpcom/threads/nsThreadUtils.cpp
+index 4fc645e9945b..e885eb6b9168 100644
+--- a/xpcom/threads/nsThreadUtils.cpp
++++ b/xpcom/threads/nsThreadUtils.cpp
+@@ -20,17 +20,22 @@
+ 
+ #ifdef XP_WIN
+ #  include <windows.h>
++#include "mozilla/WindowsVersion.h"
++using mozilla::IsVistaOrLater;
+ #elif defined(XP_MACOSX)
+ #  include <sys/resource.h>
+ #elif defined(XP_LINUX) && !defined(ANDROID)
+ #  include <sys/syscall.h>
+ // <linux/ioprio.h> has no glibc wrapper and is absent from some sysroots, so
+ // define the constants directly from the stable kernel ABI.
+ #  define IOPRIO_WHO_THREAD 1
+ #  define IOPRIO_CLASS_BE 2
+ #  define IOPRIO_PRIO_VALUE(class, data) (((class) << 13) | (data))
+ #endif
+ 
++#include <pratom.h>
++#include <prthread.h>
++
+ #if defined(ANDROID)
+ #  include <sys/prctl.h>
+ #endif
+@@ -411,7 +416,7 @@ nsThreadPoolNaming::GetNextThreadName(const nsACString& aPoolName)
+ // nsAutoLowPriorityIO
+ nsAutoLowPriorityIO::nsAutoLowPriorityIO() {
+ #if defined(XP_WIN)
+-  lowIOPrioritySet =
++  lowIOPrioritySet =IsVistaOrLater() &&
+       SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+ #elif defined(XP_MACOSX)
+   oldPriority = getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD);

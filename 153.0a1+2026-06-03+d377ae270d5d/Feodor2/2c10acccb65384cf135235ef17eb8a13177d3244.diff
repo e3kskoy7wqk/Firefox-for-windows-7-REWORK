@@ -1,0 +1,3753 @@
+diff --git a/browser/app/winlauncher/freestanding/DllBlocklist.cpp b/browser/app/winlauncher/freestanding/DllBlocklist.cpp
+index 3ef076d867d0..482ea7c3c677 100644
+--- a/browser/app/winlauncher/freestanding/DllBlocklist.cpp
++++ b/browser/app/winlauncher/freestanding/DllBlocklist.cpp
+@@ -161,6 +161,27 @@ static BlockAction CheckBlockInfo(const DllBlockInfo* aInfo,
+                                   uint64_t& aVersion) {
+   aVersion = DllBlockInfo::ALL_VERSIONS;
+ 
++  if (aInfo->mFlags & (DllBlockInfoFlags::BLOCK_WIN8_AND_OLDER |
++                       DllBlockInfoFlags::BLOCK_WIN7_AND_OLDER)) {
++    RTL_OSVERSIONINFOW osv = {sizeof(osv)};
++    NTSTATUS ntStatus = ::RtlGetVersion(&osv);
++    if (!NT_SUCCESS(ntStatus)) {
++      return BlockAction::Error;
++    }
++
++    if ((aInfo->mFlags & DllBlockInfoFlags::BLOCK_WIN8_AND_OLDER) &&
++        (osv.dwMajorVersion > 6 ||
++         (osv.dwMajorVersion == 6 && osv.dwMinorVersion > 2))) {
++      return BlockAction::Allow;
++    }
++
++    if ((aInfo->mFlags & DllBlockInfoFlags::BLOCK_WIN7_AND_OLDER) &&
++        (osv.dwMajorVersion > 6 ||
++         (osv.dwMajorVersion == 6 && osv.dwMinorVersion > 1))) {
++      return BlockAction::Allow;
++    }
++  }
++
+   if ((aInfo->mFlags & DllBlockInfoFlags::CHILD_PROCESSES_ONLY) &&
+       !(gBlocklistInitFlags & eDllBlocklistInitFlagIsChildProcess)) {
+     return BlockAction::Allow;
+diff --git a/browser/app/winlauncher/test/TestCrossProcessWin.cpp b/browser/app/winlauncher/test/TestCrossProcessWin.cpp
+index f24070c69819..1e240a81a81c 100644
+--- a/browser/app/winlauncher/test/TestCrossProcessWin.cpp
++++ b/browser/app/winlauncher/test/TestCrossProcessWin.cpp
+@@ -50,7 +50,8 @@ using namespace mozilla::freestanding;
+ // clang-format off
+ const DllBlockInfo kDllBlocklistShort[] = {
+   // The entries do not have to be sorted.
+-  DLL_BLOCKLIST_ENTRY("X Y Z_Test", MAKE_VERSION(1, 2, 65535, 65535))
++  DLL_BLOCKLIST_ENTRY("X Y Z_Test", MAKE_VERSION(1, 2, 65535, 65535),
++                      DllBlockInfoFlags::BLOCK_WIN8_AND_OLDER)
+   DLL_BLOCKLIST_ENTRY("\u30E9\u30FC\u30E1\u30F3_Test")
+   DLL_BLOCKLIST_ENTRY("Avmvirtualsource_Test.ax", MAKE_VERSION(1, 0, 0, 3),
+                       DllBlockInfoFlags::BROWSER_PROCESS_ONLY)
+diff --git a/browser/components/shell/WindowsDefaultBrowser.cpp b/browser/components/shell/WindowsDefaultBrowser.cpp
+index 77f61b7fa6e0..42368a005575 100644
+--- a/browser/components/shell/WindowsDefaultBrowser.cpp
++++ b/browser/components/shell/WindowsDefaultBrowser.cpp
+@@ -170,7 +170,7 @@ bool LaunchModernSettingsDialogDefaultApps() {
+     return LaunchMsSettingsProtocol();
+   }
+ 
+-  if (!mozilla::IsWindows10BuildOrLater(14965) && !IsWindowsLogonConnected() &&
++  if (!mozilla::IsWindowsBuildOrLater(14965) && !IsWindowsLogonConnected() &&
+       SettingsAppBelievesConnected()) {
+     // Use the classic Control Panel to work around a bug of older
+     // builds of Windows 10.
+diff --git a/browser/components/shell/nsIWindowsShellService.idl b/browser/components/shell/nsIWindowsShellService.idl
+index aae7ba134a1a..0f59357be57b 100644
+--- a/browser/components/shell/nsIWindowsShellService.idl
++++ b/browser/components/shell/nsIWindowsShellService.idl
+@@ -237,8 +237,8 @@ interface nsIWindowsShellService : nsIShellService
+    * shortcut refers to the current executable, if the paths differ due
+    * to e.g. symlinks. This should be rare.
+    *
+-   * This will definitely fail on an OS before Windows 10 build 1809
+-   * (October 2018 Update).
++   * This is fully supported on Windows 7, 8, and 11. On Windows 10, it will
++   * definitely fail on a version prior to build 1809 (October 2018 Update).
+    *
+    * NOTE: Can only run on the main thread, but the actual work occurs on a
+    * background thread.
+diff --git a/browser/components/shell/nsWindowsShellService.cpp b/browser/components/shell/nsWindowsShellService.cpp
+index a865f744d26e..ed83b49bb11d 100644
+--- a/browser/components/shell/nsWindowsShellService.cpp
++++ b/browser/components/shell/nsWindowsShellService.cpp
+@@ -41,6 +41,7 @@
+ #include "nsIXULAppInfo.h"
+ #include "nsLocalFile.h"
+ #include "nsNativeAppSupportWin.h"
++#include "nsWindowsHelpers.h"
+ #include "nsNetUtil.h"
+ #include "nsProxyRelease.h"
+ #include "nsServiceManagerUtils.h"
+@@ -59,6 +60,8 @@
+ #include <knownfolders.h>
+ #include <mbstring.h>
+ #include <objbase.h>
++#include <shlobj.h>
++#define PIN_TO_TASKBAR_SHELL_VERB 5386
+ #include <propkey.h>
+ #include <uiautomation.h>
+ #include <propvarutil.h>
+@@ -115,6 +118,7 @@ using namespace ABI::Windows::UI::StartScreen;
+     if (MOZ_UNLIKELY(FAILED(hres))) return ret
+ #endif
+ 
++using mozilla::IsWin8OrLater;
+ using namespace mozilla;
+ using mozilla::intl::Localization;
+ 
+@@ -573,6 +577,20 @@ nsresult nsWindowsShellService::InvokeHTTPOpenAsVerb() {
+   return NS_OK;
+ }
+ 
++nsresult nsWindowsShellService::LaunchHTTPHandlerPane() {
++  OPENASINFO info;
++  info.pcszFile = L"http";
++  info.pcszClass = nullptr;
++  info.oaifInFlags =
++      OAIF_FORCE_REGISTRATION | OAIF_URL_PROTOCOL | OAIF_REGISTER_EXT;
++
++  HRESULT hr = SHOpenWithDialog(nullptr, &info);
++  if (SUCCEEDED(hr) || (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED))) {
++    return NS_OK;
++  }
++  return NS_ERROR_FAILURE;
++}
++
+ NS_IMETHODIMP
+ nsWindowsShellService::SetDefaultBrowser(bool aClaimAllTypes,
+                                          bool aForAllUsers) {
+@@ -593,17 +611,30 @@ nsWindowsShellService::SetDefaultBrowser(bool aClaimAllTypes,
+     rv = LaunchHelper(appHelperPath);
+   }
+ 
+-  if (NS_SUCCEEDED(rv)) {
+-    rv = LaunchModernSettingsDialogDefaultApps();
++  if (NS_SUCCEEDED(rv) && IsWin8OrLater()) {
++    if (IsWin10OrLater()) {
++      rv = LaunchModernSettingsDialogDefaultApps();
++    } else if (aClaimAllTypes) {
++      rv = LaunchControlPanelDefaultsSelectionUI();
++    } else {
++      // Windows 10 blocks attempts to load the
++      // HTTP Handler association dialog.
++      rv = LaunchHTTPHandlerPane();
++    }
+     if (NS_SUCCEEDED(rv)) {
+-      if (Preferences::GetBool("browser.shell.focusSetDefaultBrowserButton",
++      if (IsWin10OrLater() &&
++          Preferences::GetBool("browser.shell.focusSetDefaultBrowserButton",
+                                false)) {
+         FocusSetDefaultBrowserButton();
+       }
+     } else if (aClaimAllTypes) {
+       // The above call should never really fail, but just in case
+       // fall back to showing the HTTP association screen only.
+-      rv = InvokeHTTPOpenAsVerb();
++      if (IsWin10OrLater()) {
++        rv = InvokeHTTPOpenAsVerb();
++      } else {
++        rv = LaunchHTTPHandlerPane();
++      }
+     } else {
+       // The above call should never really fail, but just in case
+       // fall back to showing control panel for all defaults
+@@ -1625,6 +1656,133 @@ NS_IMETHODIMP nsWindowsShellService::HasPinnableShortcut(
+   return NS_OK;
+ }
+ 
++static nsresult PinCurrentAppToTaskbarWin7(bool aCheckOnly,
++                                           const nsAString& aShortcutPath) {
++  nsModuleHandle shellInst(LoadLibraryW(L"shell32.dll"));
++
++  RefPtr<IShellWindows> shellWindows;
++  HRESULT hr =
++      ::CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_LOCAL_SERVER,
++                         IID_IShellWindows, getter_AddRefs(shellWindows));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  // 1. Find the shell view for the desktop.
++  _variant_t loc(int(CSIDL_DESKTOP));
++  _variant_t empty;
++  long hwnd;
++  RefPtr<IDispatch> dispDesktop;
++  hr = shellWindows->FindWindowSW(&loc, &empty, SWC_DESKTOP, &hwnd,
++                                  SWFO_NEEDDISPATCH,
++                                  getter_AddRefs(dispDesktop));
++  if (FAILED(hr) || hr == S_FALSE) return NS_ERROR_FAILURE;
++
++  RefPtr<IServiceProvider> servProv;
++  hr = dispDesktop->QueryInterface(IID_IServiceProvider,
++                                   getter_AddRefs(servProv));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  RefPtr<IShellBrowser> browser;
++  hr = servProv->QueryService(SID_STopLevelBrowser, IID_IShellBrowser,
++                              getter_AddRefs(browser));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  RefPtr<IShellView> activeShellView;
++  hr = browser->QueryActiveShellView(getter_AddRefs(activeShellView));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  // 2. Get the automation object for the desktop.
++  RefPtr<IDispatch> dispView;
++  hr = activeShellView->GetItemObject(SVGIO_BACKGROUND, IID_IDispatch,
++                                      getter_AddRefs(dispView));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  RefPtr<IShellFolderViewDual> folderView;
++  hr = dispView->QueryInterface(IID_IShellFolderViewDual,
++                                getter_AddRefs(folderView));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  // 3. Get the interface to IShellDispatch
++  RefPtr<IDispatch> dispShell;
++  hr = folderView->get_Application(getter_AddRefs(dispShell));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  RefPtr<IShellDispatch2> shellDisp;
++  hr =
++      dispShell->QueryInterface(IID_IShellDispatch2, getter_AddRefs(shellDisp));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  wchar_t shortcutDir[MAX_PATH + 1];
++  wcscpy_s(shortcutDir, MAX_PATH + 1, PromiseFlatString(aShortcutPath).get());
++  if (!PathRemoveFileSpecW(shortcutDir)) return NS_ERROR_FAILURE;
++
++  VARIANT dir;
++  dir.vt = VT_BSTR;
++  BStrPtr bstrShortcutDir = BStrPtr(SysAllocString(shortcutDir));
++  if (bstrShortcutDir.get() == NULL) return NS_ERROR_FAILURE;
++  dir.bstrVal = bstrShortcutDir.get();
++
++  RefPtr<Folder> folder;
++  hr = shellDisp->NameSpace(dir, getter_AddRefs(folder));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  wchar_t linkName[MAX_PATH + 1];
++  wcscpy_s(linkName, MAX_PATH + 1, PromiseFlatString(aShortcutPath).get());
++  PathStripPathW(linkName);
++  BStrPtr bstrLinkName = BStrPtr(SysAllocString(linkName));
++  if (bstrLinkName.get() == NULL) return NS_ERROR_FAILURE;
++
++  RefPtr<FolderItem> folderItem;
++  hr = folder->ParseName(bstrLinkName.get(), getter_AddRefs(folderItem));
++  if (FAILED(hr) || !folderItem) return NS_ERROR_FAILURE;
++
++  RefPtr<FolderItemVerbs> verbs;
++  hr = folderItem->Verbs(getter_AddRefs(verbs));
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  long count;
++  hr = verbs->get_Count(&count);
++  if (FAILED(hr)) return NS_ERROR_FAILURE;
++
++  WCHAR verbName[100];
++  if (!LoadStringW(shellInst.get(), PIN_TO_TASKBAR_SHELL_VERB, verbName,
++                   ARRAYSIZE(verbName))) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++  VARIANT v;
++  v.vt = VT_I4;
++  BStrPtr name;
++  for (long i = 0; i < count; ++i) {
++    RefPtr<FolderItemVerb> fiVerb;
++    v.lVal = i;
++    hr = verbs->Item(v, getter_AddRefs(fiVerb));
++    if (FAILED(hr)) {
++      continue;
++    }
++
++    BSTR tmpName;
++    hr = fiVerb->get_Name(&tmpName);
++    if (FAILED(hr)) {
++      continue;
++    }
++    name = BStrPtr(tmpName);
++    if (!wcscmp((WCHAR*)name.get(), verbName)) {
++      if (aCheckOnly) {
++        // we've done as much as we can without actually
++        // changing anything
++        return NS_OK;
++      }
++
++      hr = fiVerb->DoIt();
++      if (SUCCEEDED(hr)) {
++        return NS_OK;
++      }
++    }
++  }
++
++  // if we didn't return in the block above, something failed
++  return NS_ERROR_FAILURE;
++}
++
+ static bool IsCurrentAppPinnedToTaskbarSync(const nsAString& aumid) {
+   // Use new Windows pinning APIs to determine whether or not we're pinned.
+   // If these fail we can safely fall back to the old method for regular
+@@ -1862,6 +2020,7 @@ static nsresult PinShortcutToTaskbarImpl(bool aCheckOnly,
+     return NS_ERROR_FILE_NOT_FOUND;
+   }
+ 
++  if (IsWin10OrLater()) {
+   auto pinWithWin11TaskbarAPIResults =
+       PinCurrentAppToTaskbarWin11(aCheckOnly, aAppUserModelId, aFireAndForget);
+   switch (pinWithWin11TaskbarAPIResults.result) {
+@@ -1885,8 +2044,11 @@ static nsresult PinShortcutToTaskbarImpl(bool aCheckOnly,
+       break;
+   }
+ 
+-  return PinCurrentAppToTaskbarWin10(aCheckOnly, aAppUserModelId,
+-                                     aShortcutPath);
++    return PinCurrentAppToTaskbarWin10(aCheckOnly, aAppUserModelId,
++                                       aShortcutPath);
++  } else {
++    return PinCurrentAppToTaskbarWin7(aCheckOnly, aShortcutPath);
++  }
+ }
+ 
+ /* This function pins a shortcut to the taskbar based on its location. While
+@@ -1910,7 +2072,7 @@ nsWindowsShellService::PinShortcutToTaskbar(
+   }
+ 
+   // First available on 1809
+-  if (!IsWin10Sep2018UpdateOrLater()) {
++  if (IsWin10OrLater() && !IsWin10Sep2018UpdateOrLater()) {
+     return NS_ERROR_NOT_AVAILABLE;
+   }
+ 
+diff --git a/browser/components/shell/nsWindowsShellService.h b/browser/components/shell/nsWindowsShellService.h
+index 60d786b87784..da7fb32c9c10 100644
+--- a/browser/components/shell/nsWindowsShellService.h
++++ b/browser/components/shell/nsWindowsShellService.h
+@@ -29,6 +29,7 @@ class nsWindowsShellService : public nsToolkitShellService,
+   nsresult LaunchControlPanelDefaultsSelectionUI();
+   nsresult LaunchControlPanelDefaultPrograms();
+   nsresult InvokeHTTPOpenAsVerb();
++  nsresult LaunchHTTPHandlerPane();
+ };
+ 
+ #endif  // nswindowsshellservice_h_
+diff --git a/dom/media/MediaManager.cpp b/dom/media/MediaManager.cpp
+index cc38a8f75072..228f05d7bed3 100644
+--- a/dom/media/MediaManager.cpp
++++ b/dom/media/MediaManager.cpp
+@@ -73,7 +73,12 @@
+ #endif
+ 
+ #if defined(XP_WIN)
++#  include <iphlpapi.h>
+ #  include <objbase.h>
++#  include <tchar.h>
++#  include <winsock2.h>
++
++#  include "mozilla/WindowsVersion.h"
+ #endif
+ 
+ // A specialization of nsMainThreadPtrHolder for
+@@ -2627,6 +2632,27 @@ media::Parent<media::NonE10s>* MediaManager::GetNonE10sParent() {
+   return mNonE10sParent;
+ }
+ 
++/* static */
++void MediaManager::StartupInit() {
++#ifdef WIN32
++  if (!IsWin8OrLater()) {
++    // Bug 1107702 - Older Windows fail in GetAdaptersInfo (and others) if the
++    // first(?) call occurs after the process size is over 2GB (kb/2588507).
++    // Attempt to 'prime' the pump by making a call at startup.
++    unsigned long out_buf_len = sizeof(IP_ADAPTER_INFO);
++    PIP_ADAPTER_INFO pAdapterInfo = (IP_ADAPTER_INFO*)moz_xmalloc(out_buf_len);
++    if (GetAdaptersInfo(pAdapterInfo, &out_buf_len) == ERROR_BUFFER_OVERFLOW) {
++      free(pAdapterInfo);
++      pAdapterInfo = (IP_ADAPTER_INFO*)moz_xmalloc(out_buf_len);
++      GetAdaptersInfo(pAdapterInfo, &out_buf_len);
++    }
++    if (pAdapterInfo) {
++      free(pAdapterInfo);
++    }
++  }
++#endif
++}
++
+ /* static */
+ void MediaManager::Dispatch(already_AddRefed<Runnable> task) {
+   MOZ_ASSERT(NS_IsMainThread());
+diff --git a/dom/media/MediaManager.h b/dom/media/MediaManager.h
+index 3dac2943b391..6aa379f8f7c1 100644
+--- a/dom/media/MediaManager.h
++++ b/dom/media/MediaManager.h
+@@ -210,6 +210,7 @@ class MediaManager final : public nsIMediaManagerService,
+   // to MainThread from MediaManager thread.
+   static MediaManager* Get();
+   static MediaManager* GetIfExists();
++  static void StartupInit();
+   static void Dispatch(already_AddRefed<Runnable> task);
+ 
+   /**
+diff --git a/dom/media/ipc/MFCDMChild.cpp b/dom/media/ipc/MFCDMChild.cpp
+index 7fcc22d49210..038fa418a225 100644
+--- a/dom/media/ipc/MFCDMChild.cpp
++++ b/dom/media/ipc/MFCDMChild.cpp
+@@ -8,6 +8,7 @@
+ #include "mozilla/EMEUtils.h"
+ #include "mozilla/KeySystemConfig.h"
+ #include "mozilla/RefPtr.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/StaticString.h"
+ #include "mozilla/WMFCDMProxyCallback.h"
+ #include "nsString.h"
+@@ -91,6 +92,13 @@ void MFCDMChild::EnsureRemote() {
+     return;
+   }
+ 
++  if (!IsWin10OrLater()) {
++    LOG("only support MF CDM on Windows 10+");
++    mState = NS_ERROR_NOT_AVAILABLE;
++    mRemotePromise = RemotePromise::CreateAndReject(mState, __func__);
++    return;
++  }
++
+   mRemotePromise = mRemotePromiseHolder.Ensure(__func__);
+ 
+   RefPtr<MFCDMChild> self = this;
+diff --git a/dom/media/ipc/MFMediaEngineChild.cpp b/dom/media/ipc/MFMediaEngineChild.cpp
+index 56b056540d88..8f46bb22264f 100644
+--- a/dom/media/ipc/MFMediaEngineChild.cpp
++++ b/dom/media/ipc/MFMediaEngineChild.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "MFMediaEngineUtils.h"
+ #include "RemoteMediaManagerChild.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/SyncRunnable.h"
+ 
+ #ifdef MOZ_WMF_CDM
+@@ -54,6 +55,12 @@ RefPtr<GenericNonExclusivePromise> MFMediaEngineChild::Init(
+                                                        __func__);
+   }
+ 
++  if (!IsWin10OrLater()) {
++    CLOG("Only support MF media engine playback on Windows 10+");
++    return GenericNonExclusivePromise::CreateAndReject(NS_ERROR_FAILURE,
++                                                       __func__);
++  }
++
+   CLOG("Init, hasAudio=%d, hasVideo=%d, encrypted=%d", aInfo.HasAudio(),
+        aInfo.HasVideo(), aInfo.IsEncrypted());
+ 
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index 3d348c1edd8d..c3434ceafe6b 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -37,6 +37,7 @@
+ 
+ #ifdef XP_WIN
+ #  include "WMFDecoderModule.h"
++#  include "mozilla/WindowsVersion.h"
+ #  ifdef MOZ_WMF_MEDIA_ENGINE
+ #    include "MFMediaEngineDecoderModule.h"
+ #  endif
+@@ -88,7 +89,9 @@ class PDMInitializer final {
+  private:
+   static void InitGpuPDMs() {
+ #ifdef XP_WIN
+-    WMFDecoderModule::Init();
++    if (!IsWin7AndPre2000Compatible()) {
++      WMFDecoderModule::Init();
++    }
+     if (StaticPrefs::media_ffvpx_hw_enabled()) {
+       FFVPXRuntimeLinker::Init();
+     }
+@@ -97,7 +100,9 @@ class PDMInitializer final {
+ 
+   static void InitRddPDMs() {
+ #ifdef XP_WIN
+-    WMFDecoderModule::Init();
++    if (!IsWin7AndPre2000Compatible()) {
++      WMFDecoderModule::Init();
++    }
+ #endif
+ #ifdef MOZ_APPLEMEDIA
+     AppleDecoderModule::Init();
+@@ -113,11 +118,12 @@ class PDMInitializer final {
+   static void InitUtilityPDMs() {
+     const ipc::SandboxingKind kind = GetCurrentSandboxingKind();
+ #ifdef XP_WIN
+-    if (kind == ipc::SandboxingKind::UTILITY_AUDIO_DECODING_WMF) {
++    if (!IsWin7AndPre2000Compatible() &&
++        kind == ipc::SandboxingKind::UTILITY_AUDIO_DECODING_WMF) {
+       WMFDecoderModule::Init();
+     }
+ #  ifdef MOZ_WMF_MEDIA_ENGINE
+-    if (StaticPrefs::media_wmf_media_engine_enabled() &&
++    if (IsWin10OrLater() && StaticPrefs::media_wmf_media_engine_enabled() &&
+         kind == ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM) {
+       MFMediaEngineDecoderModule::Init();
+     }
+@@ -143,12 +149,14 @@ class PDMInitializer final {
+     if (StaticPrefs::media_allow_audio_non_utility()) {
+ #endif  // !defined(MOZ_WIDGET_ANDROID)
+ #ifdef XP_WIN
++      if (!IsWin7AndPre2000Compatible()) {
+ #  ifdef MOZ_WMF
+-      if (!StaticPrefs::media_rdd_process_enabled() ||
+-          !StaticPrefs::media_rdd_wmf_enabled()) {
+-        WMFDecoderModule::Init();
+-      }
++        if (!StaticPrefs::media_rdd_process_enabled() ||
++            !StaticPrefs::media_rdd_wmf_enabled()) {
++          WMFDecoderModule::Init();
++        }
+ #  endif
++      }
+ #endif
+ #ifdef MOZ_APPLEMEDIA
+       AppleDecoderModule::Init();
+@@ -169,7 +177,9 @@ class PDMInitializer final {
+ 
+   static void InitDefaultPDMs() {
+ #ifdef XP_WIN
+-    WMFDecoderModule::Init();
++    if (!IsWin7AndPre2000Compatible()) {
++      WMFDecoderModule::Init();
++    }
+ #endif
+ #ifdef MOZ_APPLEMEDIA
+     AppleDecoderModule::Init();
+@@ -526,7 +536,7 @@ void PDMFactory::CreateGpuPDMs() {
+   if (StaticPrefs::media_ffvpx_hw_enabled()) {
+     StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
+   }
+-  if (StaticPrefs::media_wmf_enabled()) {
++  if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
+     StartupPDM(WMFDecoderModule::Create());
+   }
+ #endif
+@@ -628,7 +638,7 @@ void PDMFactory::CreateUtilityPDMs() {
+   }
+ #ifdef MOZ_WMF_MEDIA_ENGINE
+   if (aKind == ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM) {
+-    if (StaticPrefs::media_wmf_media_engine_enabled()) {
++    if (IsWin10OrLater() && StaticPrefs::media_wmf_media_engine_enabled()) {
+       StartupPDM(MFMediaEngineDecoderModule::Create());
+     }
+   }
+@@ -674,7 +684,7 @@ void PDMFactory::CreateContentPDMs() {
+   if (StaticPrefs::media_allow_audio_non_utility()) {
+ #endif  // !defined(MOZ_WIDGET_ANDROID)
+ #ifdef XP_WIN
+-    if (StaticPrefs::media_wmf_enabled()) {
++    if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
+ #  ifdef MOZ_WMF
+       if (!StaticPrefs::media_rdd_process_enabled() ||
+           !StaticPrefs::media_rdd_wmf_enabled()) {
+@@ -733,7 +743,7 @@ void PDMFactory::CreateContentPDMs() {
+ 
+ void PDMFactory::CreateDefaultPDMs() {
+ #ifdef XP_WIN
+-  if (StaticPrefs::media_wmf_enabled()) {
++  if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
+     if (!StartupPDM(WMFDecoderModule::Create())) {
+       mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
+     }
+diff --git a/dom/media/platforms/wmf/MFMediaEngineDecoderModule.cpp b/dom/media/platforms/wmf/MFMediaEngineDecoderModule.cpp
+index d2c450111ae6..add6f9b935af 100644
+--- a/dom/media/platforms/wmf/MFMediaEngineDecoderModule.cpp
++++ b/dom/media/platforms/wmf/MFMediaEngineDecoderModule.cpp
+@@ -150,7 +150,7 @@ static bool CreateMFTDecoderOnMTA(const WMFStreamType& aType) {
+     case WMFStreamType::VP8:
+     case WMFStreamType::VP9: {
+       static const uint32_t VPX_USABLE_BUILD = 16287;
+-      if (IsWindows10BuildOrLater(VPX_USABLE_BUILD)) {
++      if (IsWindowsBuildOrLater(VPX_USABLE_BUILD)) {
+         result = SUCCEEDED(decoder->Create(CLSID_CMSVPXDecMFT));
+       }
+       break;
+diff --git a/dom/media/platforms/wmf/WMFDecoderModule.cpp b/dom/media/platforms/wmf/WMFDecoderModule.cpp
+index d5c9d6746623..af6d0ef3d11c 100644
+--- a/dom/media/platforms/wmf/WMFDecoderModule.cpp
++++ b/dom/media/platforms/wmf/WMFDecoderModule.cpp
+@@ -209,7 +209,7 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
+     }
+     case WMFStreamType::VP8:
+       static const uint32_t VP8_USABLE_BUILD = 16287;
+-      if (!IsWindows10BuildOrLater(VP8_USABLE_BUILD)) {
++      if (!IsWindowsBuildOrLater(VP8_USABLE_BUILD)) {
+         WmfDecoderModuleMarkerAndLog("CreateMFTDecoder, VP8 Failure",
+                                      "VP8 MFT requires Windows build %" PRId32
+                                      " or later",
+diff --git a/dom/media/platforms/wmf/WMFMediaDataDecoder.cpp b/dom/media/platforms/wmf/WMFMediaDataDecoder.cpp
+index 29323359da87..e7b7eee6df17 100644
+--- a/dom/media/platforms/wmf/WMFMediaDataDecoder.cpp
++++ b/dom/media/platforms/wmf/WMFMediaDataDecoder.cpp
+@@ -10,6 +10,7 @@
+ #include "mozilla/ProfilerMarkers.h"
+ #include "mozilla/SyncRunnable.h"
+ #include "mozilla/TaskQueue.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsTArray.h"
+ 
+ #define LOG(...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+@@ -122,6 +123,12 @@ bool WMFMediaDataDecoder::ShouldGuardAgaintIncorrectFirstSample(
+     return false;
+   }
+ 
++  // By observation so far this issue only happens on Windows 10 so we don't
++  // need to enable this on other versions.
++  if (!IsWin10OrLater()) {
++    return false;
++  }
++
+   // This is not the first output sample so we don't need to guard it.
+   if (mOutputsCount != 0) {
+     return false;
+diff --git a/dom/media/platforms/wmf/WMFUtils.cpp b/dom/media/platforms/wmf/WMFUtils.cpp
+index f067998eeb90..3eb9c4158a3b 100644
+--- a/dom/media/platforms/wmf/WMFUtils.cpp
++++ b/dom/media/platforms/wmf/WMFUtils.cpp
+@@ -19,6 +19,7 @@
+ #include "mozilla/CheckedInt.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/mscom/EnsureMTA.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsTArray.h"
+ #include "nsThreadUtils.h"
+ #include "nsWindowsHelpers.h"
+@@ -489,6 +490,16 @@ LoadDLLs() {
+ 
+ HRESULT
+ MediaFoundationInitializer::MFStartup() {
++  if (IsWin7AndPre2000Compatible()) {
++    /*
++     * Specific exclude the usage of WMF on Win 7 with compatibility mode
++     * prior to Win 2000 as we may crash while trying to startup WMF.
++     * Using GetVersionEx API which takes compatibility mode into account.
++     * See Bug 1279171.
++     */
++    return E_FAIL;
++  }
++
+   HRESULT hr = LoadDLLs();
+   if (FAILED(hr)) {
+     return hr;
+diff --git a/dom/media/platforms/wmf/WMFVideoMFTManager.cpp b/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
+index 6c94f7ab4680..f85ede8100df 100644
+--- a/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
++++ b/dom/media/platforms/wmf/WMFVideoMFTManager.cpp
+@@ -28,6 +28,7 @@
+ #include "mozilla/StaticPrefs_gfx.h"
+ #include "mozilla/StaticPrefs_media.h"
+ #include "mozilla/SyncRunnable.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/gfx/DeviceManagerDx.h"
+ #include "mozilla/gfx/gfxVars.h"
+ #include "mozilla/glean/DomMediaPlatformsWmfMetrics.h"
+@@ -49,6 +50,35 @@ using mozilla::media::TimeUnit;
+ 
+ namespace mozilla {
+ 
++static bool IsWin7H264Decoder4KCapable() {
++  WCHAR systemPath[MAX_PATH + 1];
++  if (!ConstructSystem32Path(L"msmpeg2vdec.dll", systemPath, MAX_PATH + 1)) {
++    // Cannot build path -> Assume it's the old DLL or it's missing.
++    return false;
++  }
++
++  DWORD zero;
++  DWORD infoSize = GetFileVersionInfoSizeW(systemPath, &zero);
++  if (infoSize == 0) {
++    // Can't get file info -> Assume it's the old DLL or it's missing.
++    return false;
++  }
++  auto infoData = MakeUnique<unsigned char[]>(infoSize);
++  VS_FIXEDFILEINFO* vInfo;
++  UINT vInfoLen;
++  if (GetFileVersionInfoW(systemPath, 0, infoSize, infoData.get()) &&
++      VerQueryValueW(infoData.get(), L"\\", (LPVOID*)&vInfo, &vInfoLen)) {
++    uint64_t version = uint64_t(vInfo->dwFileVersionMS) << 32 |
++                       uint64_t(vInfo->dwFileVersionLS);
++    // 12.0.9200.16426 & later allow for >1920x1088 resolutions.
++    const uint64_t minimum =
++        (uint64_t(12) << 48) | (uint64_t(9200) << 16) | uint64_t(16426);
++    return version >= minimum;
++  }
++  // Can't get file version -> Assume it's the old DLL.
++  return false;
++}
++
+ LayersBackend GetCompositorBackendType(
+     layers::KnowsCompositor* aKnowsCompositor) {
+   if (aKnowsCompositor) {
+@@ -166,6 +196,10 @@ bool WMFVideoMFTManager::InitializeDXVA() {
+         StaticPrefs::GetPrefName_media_wmf_dxva_d3d11_enabled());
+     d3d11 = false;
+   }
++  if (!IsWin8OrLater()) {
++    mDXVAFailureReason.AssignLiteral("D3D11: Requires Windows 8 or later");
++    d3d11 = false;
++  }
+ 
+   if (d3d11) {
+     mDXVAFailureReason.AppendLiteral("D3D11: ");
+@@ -203,7 +237,10 @@ MediaResult WMFVideoMFTManager::ValidateVideoInfo() {
+         // have this limitation, but it still might have maximum resolution
+         // limitation.
+         // https://msdn.microsoft.com/en-us/library/windows/desktop/dd797815(v=vs.85).aspx
+-        static const int32_t MAX_H264_PIXEL_COUNT = 4096 * 2304;
++        const bool Is4KCapable =
++            IsWin8OrLater() || IsWin7H264Decoder4KCapable();
++        static const int32_t MAX_H264_PIXEL_COUNT =
++            Is4KCapable ? 4096 * 2304 : 1920 * 1088;
+         const CheckedInt32 pixelCount =
+             CheckedInt32(mVideoInfo.mImage.width) * mVideoInfo.mImage.height;
+ 
+@@ -282,7 +319,8 @@ MediaResult WMFVideoMFTManager::InitInternal() {
+     attr->GetUINT32(MF_SA_D3D_AWARE, &aware);
+     attr->SetUINT32(CODECAPI_AVDecNumWorkerThreads,
+                     WMFDecoderModule::GetNumDecoderThreads());
+-    bool lowLatency = StaticPrefs::media_wmf_low_latency_enabled();
++    bool lowLatency =
++        (StaticPrefs::media_wmf_low_latency_enabled() || IsWin10OrLater());
+     if (mLowLatency || lowLatency) {
+       HRESULT hr = attr->SetUINT32(CODECAPI_AVLowLatencyMode, TRUE);
+       if (SUCCEEDED(hr)) {
+diff --git a/hal/windows/WindowsScreenConfiguration.cpp b/hal/windows/WindowsScreenConfiguration.cpp
+index d7f17d73bfcf..2944788628fe 100644
+--- a/hal/windows/WindowsScreenConfiguration.cpp
++++ b/hal/windows/WindowsScreenConfiguration.cpp
+@@ -3,6 +3,7 @@
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "Hal.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/widget/ScreenManager.h"
+ #include "nsIWindowsUIUtils.h"
+ #include "WinUtils.h"
+@@ -18,6 +19,12 @@ static decltype(SetDisplayAutoRotationPreferences)*
+ RefPtr<GenericNonExclusivePromise> LockScreenOrientation(
+     const hal::ScreenOrientation& aOrientation) {
+   AR_STATE state;
++  // SetDisplayAutoRotationPreferences requires Win8, tablet mode and device
++  // support.
++  if (!IsWin8OrLater()) {
++    return GenericNonExclusivePromise::CreateAndReject(
++        NS_ERROR_DOM_NOT_SUPPORTED_ERR, __func__);
++  }
+   if (!widget::WinUtils::GetAutoRotationState(&state)) {
+     return GenericNonExclusivePromise::CreateAndReject(
+         NS_ERROR_DOM_NOT_SUPPORTED_ERR, __func__);
+diff --git a/intl/locale/windows/OSPreferences_win.cpp b/intl/locale/windows/OSPreferences_win.cpp
+index 86220c983d55..841386946fa3 100644
+--- a/intl/locale/windows/OSPreferences_win.cpp
++++ b/intl/locale/windows/OSPreferences_win.cpp
+@@ -6,6 +6,7 @@
+ #include "OSPreferences.h"
+ #include "mozilla/intl/Locale.h"
+ #include "mozilla/intl/LocaleService.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsReadableUtils.h"
+ 
+ #include <windows.h>
+@@ -26,42 +27,44 @@ OSPreferences::OSPreferences() {}
+ bool OSPreferences::ReadSystemLocales(nsTArray<nsCString>& aLocaleList) {
+   MOZ_ASSERT(aLocaleList.IsEmpty());
+ 
+-  // Try to get language list from GlobalizationPreferences; if this fails,
+-  // we'll fall back to GetUserPreferredUILanguages.
+-  // Per MSDN, these APIs are not available prior to Win8.
+-  ComPtr<IGlobalizationPreferencesStatics> globalizationPrefs;
+-  ComPtr<IVectorView<HSTRING>> languages;
+-  uint32_t count;
+-  if (SUCCEEDED(RoGetActivationFactory(
+-          HStringReference(
+-              RuntimeClass_Windows_System_UserProfile_GlobalizationPreferences)
+-              .Get(),
+-          IID_PPV_ARGS(&globalizationPrefs))) &&
+-      SUCCEEDED(globalizationPrefs->get_Languages(&languages)) &&
+-      SUCCEEDED(languages->get_Size(&count))) {
+-    for (uint32_t i = 0; i < count; ++i) {
+-      HString lang;
+-      if (SUCCEEDED(languages->GetAt(i, lang.GetAddressOf()))) {
+-        unsigned int length;
+-        const wchar_t* text = lang.GetRawBuffer(&length);
+-        NS_LossyConvertUTF16toASCII loc(text, length);
+-        if (CanonicalizeLanguageTag(loc)) {
+-          if (!loc.Contains('-')) {
+-            // DirectWrite font-name code doesn't like to be given a bare
+-            // language code with no region subtag, but the
+-            // GlobalizationPreferences API may give us one (e.g. "ja").
+-            // So if there's no hyphen in the string at this point, we use
+-            // AddLikelySubtags to get a suitable region code to
+-            // go with it.
+-            Locale locale;
+-            auto result = LocaleParser::TryParse(loc, locale);
+-            if (result.isOk() && locale.AddLikelySubtags().isOk() &&
+-                locale.Region().Present()) {
+-              loc.Append('-');
+-              loc.Append(locale.Region().Span());
++  if (IsWin8OrLater()) {
++    // Try to get language list from GlobalizationPreferences; if this fails,
++    // we'll fall back to GetUserPreferredUILanguages.
++    // Per MSDN, these APIs are not available prior to Win8.
++    ComPtr<IGlobalizationPreferencesStatics> globalizationPrefs;
++    ComPtr<IVectorView<HSTRING>> languages;
++    uint32_t count;
++    if (SUCCEEDED(RoGetActivationFactory(
++            HStringReference(
++                RuntimeClass_Windows_System_UserProfile_GlobalizationPreferences)
++                .Get(),
++            IID_PPV_ARGS(&globalizationPrefs))) &&
++        SUCCEEDED(globalizationPrefs->get_Languages(&languages)) &&
++        SUCCEEDED(languages->get_Size(&count))) {
++      for (uint32_t i = 0; i < count; ++i) {
++        HString lang;
++        if (SUCCEEDED(languages->GetAt(i, lang.GetAddressOf()))) {
++          unsigned int length;
++          const wchar_t* text = lang.GetRawBuffer(&length);
++          NS_LossyConvertUTF16toASCII loc(text, length);
++          if (CanonicalizeLanguageTag(loc)) {
++            if (!loc.Contains('-')) {
++              // DirectWrite font-name code doesn't like to be given a bare
++              // language code with no region subtag, but the
++              // GlobalizationPreferences API may give us one (e.g. "ja").
++              // So if there's no hyphen in the string at this point, we use
++              // AddLikelySubtags to get a suitable region code to
++              // go with it.
++              Locale locale;
++              auto result = LocaleParser::TryParse(loc, locale);
++              if (result.isOk() && locale.AddLikelySubtags().isOk() &&
++                  locale.Region().Present()) {
++                loc.Append('-');
++                loc.Append(locale.Region().Span());
++              }
+             }
++            aLocaleList.AppendElement(loc);
+           }
+-          aLocaleList.AppendElement(loc);
+         }
+       }
+     }
+diff --git a/ipc/glue/SharedMemoryPlatform_windows.cpp b/ipc/glue/SharedMemoryPlatform_windows.cpp
+index 3eb3c9da5802..ed62ffe60ee6 100644
+--- a/ipc/glue/SharedMemoryPlatform_windows.cpp
++++ b/ipc/glue/SharedMemoryPlatform_windows.cpp
+@@ -10,6 +10,9 @@
+ #include <windows.h>
+ 
+ #include "nsDebug.h"
++#include "mozilla/RandomNum.h"
++#include "mozilla/WindowsVersion.h"
++#include "nsString.h"
+ #ifdef MOZ_MEMORY
+ #  include "mozmemory_stall.h"
+ #endif
+@@ -131,6 +134,7 @@ static Maybe<PlatformHandle> CreateImpl(size_t aSize, bool aFreezable) {
+   SECURITY_ATTRIBUTES sa, *psa = nullptr;
+   SECURITY_DESCRIPTOR sd;
+   ACL dacl;
++  nsAutoStringN<sizeof("MozSharedMem_") + 16 * 4> name;
+ 
+   if (aFreezable) {
+     psa = &sa;
+@@ -144,10 +148,24 @@ static Maybe<PlatformHandle> CreateImpl(size_t aSize, bool aFreezable) {
+         NS_WARN_IF(!::SetSecurityDescriptorDacl(&sd, TRUE, &dacl, FALSE))) {
+       return Nothing();
+     }
++
++    // Older versions of Windows will silently ignore the security
++    // attributes unless the object has a name.
++    if (!mozilla::IsWin8Point1OrLater()) {
++      name.AssignLiteral("MozSharedMem_");
++      for (size_t i = 0; i < 4; ++i) {
++        mozilla::Maybe<uint64_t> randomNum = mozilla::RandomUint64();
++        if (NS_WARN_IF(randomNum.isNothing())) {
++          return Nothing();
++        }
++        name.AppendPrintf("%016llx", *randomNum);
++      }
++    }
+   }
+ 
+-  auto handle = MozCreateFileMappingW(psa, PAGE_READWRITE, 0,
+-                                      static_cast<DWORD>(aSize), nullptr);
++  auto handle = MozCreateFileMappingW(
++      psa, PAGE_READWRITE, 0, static_cast<DWORD>(aSize),
++      name.IsEmpty() ? nullptr : name.get());
+   if (!handle) {
+     return Nothing();
+   } else {
+diff --git a/ipc/mscom/ProcessRuntime.cpp b/ipc/mscom/ProcessRuntime.cpp
+index 44373b211e12..f63e31474786 100644
+--- a/ipc/mscom/ProcessRuntime.cpp
++++ b/ipc/mscom/ProcessRuntime.cpp
+@@ -13,6 +13,7 @@
+ #include "mozilla/mscom/COMWrappers.h"
+ #include "mozilla/mscom/ProcessRuntimeShared.h"
+ #include "mozilla/RefPtr.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/WindowsProcessMitigations.h"
+ 
+ #if defined(MOZILLA_INTERNAL_API)
+@@ -383,7 +384,9 @@
+ 
+   // If we are the browser process, grant access to all non restricted app
+   // containers.
+-  if (aProcessCategory == ProcessCategory::GeckoBrowserParent) {
++  const bool appContainersSupported = IsWin8OrLater();
++  if (aProcessCategory == ProcessCategory::GeckoBrowserParent &&
++      appContainersSupported) {
+     wellKnownSidSize = sizeof(wellKnownSid);
+     if (!::CreateWellKnownSid(WinBuiltinAnyPackageSid, nullptr, &wellKnownSid,
+                               &wellKnownSidSize)) {
+@@ -402,6 +405,7 @@
+   auto* appContainerInfo =
+       reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(appContainerInfoBuf);
+   bool haveAppContainerSid =
++      appContainersSupported &&
+       ::GetTokenInformation(processToken, TokenAppContainerSid,
+                             appContainerInfo, sizeof(appContainerInfoBuf),
+                             &len) &&
+diff --git a/ipc/mscom/Utils.cpp b/ipc/mscom/Utils.cpp
+index 164c31cb0bdb..d4ffe0e0af76 100644
+--- a/ipc/mscom/Utils.cpp
++++ b/ipc/mscom/Utils.cpp
+@@ -11,8 +11,10 @@
+ #include "mozilla/DebugOnly.h"
+ #include "mozilla/mscom/Utils.h"
+ #include "mozilla/RefPtr.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include <objidl.h>
++#include <shlwapi.h>
+ #include <winnt.h>
+ 
+ #include <utility>
+@@ -184,21 +186,61 @@ long CreateStream(const uint8_t* aInitBuf, const uint32_t aInitBufSize,
+   HRESULT hr;
+   RefPtr<IStream> stream;
+ 
+-  // If aInitBuf is null then initSize must be 0.
+-  UINT initSize = aInitBuf ? aInitBufSize : 0;
+-  stream = already_AddRefed<IStream>(::SHCreateMemStream(aInitBuf, initSize));
+-  if (!stream) {
+-    return E_OUTOFMEMORY;
+-  }
++  if (IsWin8OrLater()) {
++    // SHCreateMemStream is not safe for us to use until Windows 8. On older
++    // versions of Windows it is not thread-safe and it creates IStreams that do
++    // not support the full IStream API.
++
++    // If aInitBuf is null then initSize must be 0.
++    UINT initSize = aInitBuf ? aInitBufSize : 0;
++    stream = already_AddRefed<IStream>(::SHCreateMemStream(aInitBuf, initSize));
++    if (!stream) {
++      return E_OUTOFMEMORY;
++    }
+ 
+-  if (!aInitBuf) {
+-    // Now we'll set the required size
+-    ULARGE_INTEGER newSize;
+-    newSize.QuadPart = aInitBufSize;
+-    hr = stream->SetSize(newSize);
++    if (!aInitBuf) {
++      // Now we'll set the required size
++      ULARGE_INTEGER newSize;
++      newSize.QuadPart = aInitBufSize;
++      hr = stream->SetSize(newSize);
++      if (FAILED(hr)) {
++        return hr;
++      }
++    }
++  } else {
++    HGLOBAL hglobal = ::GlobalAlloc(GMEM_MOVEABLE, aInitBufSize);
++    if (!hglobal) {
++      return HRESULT_FROM_WIN32(::GetLastError());
++    }
++
++    // stream takes ownership of hglobal if this call is successful
++    hr = ::CreateStreamOnHGlobal(hglobal, TRUE, getter_AddRefs(stream));
+     if (FAILED(hr)) {
++      ::GlobalFree(hglobal);
+       return hr;
+     }
++
++    // The default stream size is derived from ::GlobalSize(hglobal), which due
++    // to rounding may be larger than aInitBufSize. We forcibly set the correct
++    // stream size here.
++    ULARGE_INTEGER streamSize;
++    streamSize.QuadPart = aInitBufSize;
++    hr = stream->SetSize(streamSize);
++    if (FAILED(hr)) {
++      return hr;
++    }
++
++    if (aInitBuf) {
++      ULONG bytesWritten;
++      hr = stream->Write(aInitBuf, aInitBufSize, &bytesWritten);
++      if (FAILED(hr)) {
++        return hr;
++      }
++
++      if (bytesWritten != aInitBufSize) {
++        return E_UNEXPECTED;
++      }
++    }
+   }
+ 
+   // Ensure that the stream is rewound
+diff --git a/layout/build/nsLayoutStatics.cpp b/layout/build/nsLayoutStatics.cpp
+index 0fa2353fee3a..eb381eef4be6 100644
+--- a/layout/build/nsLayoutStatics.cpp
++++ b/layout/build/nsLayoutStatics.cpp
+@@ -68,6 +68,7 @@
+ #include "CubebUtils.h"
+ #include "DecoderDoctorLogger.h"
+ #include "MediaDecoder.h"
++#include "MediaManager.h"
+ #include "RLBoxWOFF2Types.h"
+ #include "RestoreTabContentObserver.h"
+ #include "ThirdPartyUtil.h"
+@@ -206,6 +207,7 @@ nsresult nsLayoutStatics::Initialize() {
+   }
+ 
+   DecoderDoctorLogger::Init();
++  MediaManager::StartupInit();
+ 
+ #ifdef XP_WIN
+   if (XRE_IsParentProcess()) {
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 44406fa11397..933714947a29 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -18318,6 +18318,17 @@
+   value: false
+   mirror: once
+ 
++# On Windows 8.1, if the following preference is 2, we will attempt to detect
++# whether the Family Safety TLS interception feature has been enabled.
++# If so, we will behave as if the enterprise roots feature has been enabled
++# (i.e. import and trust third party root certificates from the OS).
++# With any other value of the pref or on any other platform, this does nothing.
++# This preference takes precedence over "security.enterprise_roots.enabled".
++- name: security.family_safety.mode
++  type: RelaxedAtomicUint32
++  value: 2
++  mirror: always
++
+ # Whether or not to import and trust third party root certificates from the OS.
+ - name: security.enterprise_roots.enabled
+   type: RelaxedAtomicBool
+@@ -20491,6 +20502,19 @@
+   value: 1
+   mirror: always
+ 
++# Whether to apply a workaround intended to prevent Windows from treating
++# non-foreground-marked fullscreen windows as fullscreen on Windows 7 and
++# earlier. (See bug 1732517.)
++#
++# Valid values:
++#  * -1: the workaround is never used.
++#  *  1: the workaround is always used.
++#  *  0: the workaround is used if we think it should be. (Default.)
++- name: widget.windows.fullscreen_marking_workaround
++  type: RelaxedAtomicInt32
++  value: 0
++  mirror: always
++
+ # The number of messages of each type to keep for display in
+ # about:windows-messages
+ - name: widget.windows.messages_to_log
+diff --git a/mozglue/baseprofiler/core/shared-libraries-win32.cc b/mozglue/baseprofiler/core/shared-libraries-win32.cc
+index 886eafc37893..fb2587402f7b 100644
+--- a/mozglue/baseprofiler/core/shared-libraries-win32.cc
++++ b/mozglue/baseprofiler/core/shared-libraries-win32.cc
+@@ -10,6 +10,7 @@
+ #include "mozilla/NativeNt.h"
+ #include "mozilla/WindowsEnumProcessModules.h"
+ #include "mozilla/WindowsProcessMitigations.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include <cctype>
+ #include <string>
+@@ -59,6 +60,29 @@ bool LowerCaseEqualsLiteral(char aModuleChar, char aDetouredChar) {
+ }
+ 
+ static bool IsModuleUnsafeToLoad(const std::string& aModuleName) {
++#if defined(_M_AMD64) || defined(_M_IX86)
++  // Hackaround for Bug 1607574.  Nvidia's shim driver nvd3d9wrap[x].dll detours
++  // LoadLibraryExW and it causes AV when the following conditions are met.
++  //   1. LoadLibraryExW was called for "detoured.dll"
++  //   2. nvinit[x].dll was unloaded
++  //   3. OS version is older than 6.2
++#  if defined(_M_AMD64)
++  LPCWSTR kNvidiaShimDriver = L"nvd3d9wrapx.dll";
++  LPCWSTR kNvidiaInitDriver = L"nvinitx.dll";
++#  elif defined(_M_IX86)
++  LPCWSTR kNvidiaShimDriver = L"nvd3d9wrap.dll";
++  LPCWSTR kNvidiaInitDriver = L"nvinit.dll";
++#  endif
++  constexpr std::string_view detoured_dll = "detoured.dll";
++  if (std::equal(aModuleName.cbegin(), aModuleName.cend(),
++                 detoured_dll.cbegin(), detoured_dll.cend(),
++                 LowerCaseEqualsLiteral) &&
++      !mozilla::IsWin8OrLater() && ::GetModuleHandleW(kNvidiaShimDriver) &&
++      !::GetModuleHandleW(kNvidiaInitDriver)) {
++    return true;
++  }
++#endif  // defined(_M_AMD64) || defined(_M_IX86)
++
+   // Hackaround for Bug 1723868.  There is no safe way to prevent the module
+   // Microsoft's VP9 Video Decoder from being unloaded because mfplat.dll may
+   // have posted more than one task to unload the module in the work queue
+diff --git a/mozglue/misc/PreXULSkeletonUI.cpp b/mozglue/misc/PreXULSkeletonUI.cpp
+index 21352837749b..63bd098cc518 100644
+--- a/mozglue/misc/PreXULSkeletonUI.cpp
++++ b/mozglue/misc/PreXULSkeletonUI.cpp
+@@ -32,6 +32,7 @@
+ #include "mozilla/UniquePtr.h"
+ #include "mozilla/UniquePtrExtensions.h"
+ #include "mozilla/WindowsDpiAwareness.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/WindowsProcessMitigations.h"
+ 
+ namespace mozilla {
+@@ -1818,6 +1819,10 @@ static Result<Ok, PreXULSkeletonUIError> CreateAndStorePreXULSkeletonUIImpl(
+ 
+   const TimeStamp skeletonStart = TimeStamp::Now();
+ 
++  if (!IsWin10OrLater()) {
++    return Err(PreXULSkeletonUIError::Ineligible);
++  }
++
+   HKEY regKey = MOZ_TRY(OpenPreXULSkeletonUIRegKey());
+   AutoCloseRegKey closeKey(regKey);
+ 
+diff --git a/mozglue/misc/PreXULSkeletonUI.h b/mozglue/misc/PreXULSkeletonUI.h
+index 1e3daaaa3ef4..d804b2cea80e 100644
+--- a/mozglue/misc/PreXULSkeletonUI.h
++++ b/mozglue/misc/PreXULSkeletonUI.h
+@@ -77,6 +77,7 @@ struct ThemeColors {
+ 
+ enum class PreXULSkeletonUIError : uint32_t {
+   None,
++  Ineligible,
+   Disabled,
+   EnabledKeyDoesNotExist,
+   OOM,
+diff --git a/mozglue/misc/WindowsDpiInitialization.cpp b/mozglue/misc/WindowsDpiInitialization.cpp
+index 972d577651c3..2e957b583012 100644
+--- a/mozglue/misc/WindowsDpiInitialization.cpp
++++ b/mozglue/misc/WindowsDpiInitialization.cpp
+@@ -49,7 +49,7 @@ WindowsDpiInitializationResult WindowsDpiInitialization() {
+     }
+ 
+     return WindowsDpiInitializationResult::Success;
+-  } else {
++  } else if (IsWin8Point1OrLater()) {
+     DynamicallyLinkedFunctionPtr<SetProcessDpiAwarenessType>
+         setProcessDpiAwareness(L"Shcore.dll", "SetProcessDpiAwareness");
+     if (!setProcessDpiAwareness) {
+@@ -60,6 +60,12 @@ WindowsDpiInitializationResult WindowsDpiInitialization() {
+       return WindowsDpiInitializationResult::SetProcessDpiAwarenessFailed;
+     }
+ 
++    return WindowsDpiInitializationResult::Success;
++  } else {
++    if (!SetProcessDPIAware()) {
++      return WindowsDpiInitializationResult::SetProcessDPIAwareFailed;
++    }
++
+     return WindowsDpiInitializationResult::Success;
+   }
+ }
+diff --git a/mozglue/misc/WindowsDpiInitialization.h b/mozglue/misc/WindowsDpiInitialization.h
+index 5a6dfc8591a1..a5346e3f5ebe 100644
+--- a/mozglue/misc/WindowsDpiInitialization.h
++++ b/mozglue/misc/WindowsDpiInitialization.h
+@@ -16,6 +16,7 @@ enum class WindowsDpiInitializationResult : uint32_t {
+   SetProcessDpiAwarenessContextFailed,
+   FindSetProcessDpiAwarenessFailed,
+   SetProcessDpiAwarenessFailed,
++  SetProcessDPIAwareFailed,
+ };
+ 
+ // Get a string representation of any WindowsDpiInitializationResult value
+@@ -33,6 +34,8 @@ inline const char* WindowsDpiInitializationResultString(
+       return "Failed to find SetProcessDpiAwareness";
+     case WindowsDpiInitializationResult::SetProcessDpiAwarenessFailed:
+       return "SetProcessDpiAwareness failed";
++    case WindowsDpiInitializationResult::SetProcessDPIAwareFailed:
++      return "SetProcessDPIAware failed";
+     default:
+       return "Unknown result";
+   }
+diff --git a/security/manager/ssl/nsNSSComponent.cpp b/security/manager/ssl/nsNSSComponent.cpp
+index 2903a8146b26..47de2b3acd43 100644
+--- a/security/manager/ssl/nsNSSComponent.cpp
++++ b/security/manager/ssl/nsNSSComponent.cpp
+@@ -54,6 +54,7 @@
+ #include "nsIWindowWatcher.h"
+ #include "nsIXULRuntime.h"
+ #include "nsLiteralString.h"
++#include "nsNSSCertificateDB.h"
+ #include "nsNSSHelper.h"
+ #include "nsNSSIOLayer.h"
+ #include "nsNetCID.h"
+@@ -79,6 +80,16 @@
+ #  include <sys/vfs.h>
+ #endif
+ 
++#ifdef XP_WIN
++#  include "mozilla/WindowsVersion.h"
++
++#  include "windows.h"  // this needs to be before the following includes
++#  include "lmcons.h"
++#  include "sddl.h"
++#  include "wincrypt.h"
++#  include "nsIWindowsRegKey.h"
++#endif
++
+ using namespace mozilla;
+ using namespace mozilla::psm;
+ 
+@@ -288,6 +299,245 @@ nsNSSComponent::~nsNSSComponent() {
+   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::dtor finished\n"));
+ }
+ 
++#ifdef XP_WIN
++static bool GetUserSid(nsAString& sidString) {
++  // UNLEN is the maximum user name length (see Lmcons.h). +1 for the null
++  // terminator.
++  WCHAR lpAccountName[UNLEN + 1];
++  DWORD lcAccountName = sizeof(lpAccountName) / sizeof(lpAccountName[0]);
++  BOOL success = GetUserName(lpAccountName, &lcAccountName);
++  if (!success) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("GetUserName failed"));
++    return false;
++  }
++  char sid_buffer[SECURITY_MAX_SID_SIZE];
++  SID* sid = BitwiseCast<SID*, char*>(sid_buffer);
++  DWORD cbSid = std::size(sid_buffer);
++  SID_NAME_USE eUse;
++  // There doesn't appear to be a defined maximum length for the domain name
++  // here. To deal with this, we start with a reasonable buffer length and
++  // see if that works. If it fails and the error indicates insufficient length,
++  // we use the indicated required length and try again.
++  DWORD cchReferencedDomainName = 128;
++  auto ReferencedDomainName(MakeUnique<WCHAR[]>(cchReferencedDomainName));
++  success = LookupAccountName(nullptr, lpAccountName, sid, &cbSid,
++                              ReferencedDomainName.get(),
++                              &cchReferencedDomainName, &eUse);
++  if (!success && GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("LookupAccountName failed"));
++    return false;
++  }
++  if (!success) {
++    ReferencedDomainName = MakeUnique<WCHAR[]>(cchReferencedDomainName);
++    success = LookupAccountName(nullptr, lpAccountName, sid, &cbSid,
++                                ReferencedDomainName.get(),
++                                &cchReferencedDomainName, &eUse);
++  }
++  if (!success) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("LookupAccountName failed"));
++    return false;
++  }
++  LPTSTR StringSid;
++  success = ConvertSidToStringSid(sid, &StringSid);
++  if (!success) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("ConvertSidToStringSid failed"));
++    return false;
++  }
++  sidString.Assign(StringSid);
++  LocalFree(StringSid);
++  return true;
++}
++
++// This is a specialized helper function to read the value of a registry key
++// that might not be present. If it is present, returns (via the output
++// parameter) its value. Otherwise, returns the given default value.
++// This function handles one level of nesting. That is, if the desired value
++// is actually in a direct child of the given registry key (where the child
++// and/or the value being sought may not actually be present), this function
++// will handle that. In the normal case, though, optionalChildName will be
++// null.
++static nsresult ReadRegKeyValueWithDefault(nsCOMPtr<nsIWindowsRegKey> regKey,
++                                           uint32_t flags,
++                                           const wchar_t* optionalChildName,
++                                           const wchar_t* valueName,
++                                           uint32_t defaultValue,
++                                           uint32_t& valueOut) {
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("ReadRegKeyValueWithDefault"));
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++          ("attempting to read '%S%s%S' with default '%u'",
++           optionalChildName ? optionalChildName : L"",
++           optionalChildName ? "\\" : "", valueName, defaultValue));
++  if (optionalChildName) {
++    nsDependentString childNameString(optionalChildName);
++    bool hasChild;
++    nsresult rv = regKey->HasChild(childNameString, &hasChild);
++    if (NS_FAILED(rv)) {
++      MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++              ("failed to determine if child key is present"));
++      return rv;
++    }
++    if (!hasChild) {
++      valueOut = defaultValue;
++      return NS_OK;
++    }
++    nsCOMPtr<nsIWindowsRegKey> childRegKey;
++    rv = regKey->OpenChild(childNameString, flags, getter_AddRefs(childRegKey));
++    if (NS_FAILED(rv)) {
++      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't open child key"));
++      return rv;
++    }
++    return ReadRegKeyValueWithDefault(childRegKey, flags, nullptr, valueName,
++                                      defaultValue, valueOut);
++  }
++  nsDependentString valueNameString(valueName);
++  bool hasValue;
++  nsresult rv = regKey->HasValue(valueNameString, &hasValue);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("failed to determine if value is present"));
++    return rv;
++  }
++  if (!hasValue) {
++    valueOut = defaultValue;
++    return NS_OK;
++  }
++  rv = regKey->ReadIntValue(valueNameString, &valueOut);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("failed to read value"));
++    return rv;
++  }
++  return NS_OK;
++}
++
++static nsresult AccountHasFamilySafetyEnabled(bool& enabled) {
++  enabled = false;
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("AccountHasFamilySafetyEnabled?"));
++  nsCOMPtr<nsIWindowsRegKey> parentalControlsKey(
++      do_CreateInstance("@mozilla.org/windows-registry-key;1"));
++  if (!parentalControlsKey) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't create nsIWindowsRegKey"));
++    return NS_ERROR_FAILURE;
++  }
++  uint32_t flags = nsIWindowsRegKey::ACCESS_READ | nsIWindowsRegKey::WOW64_64;
++  constexpr auto familySafetyPath =
++      u"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Parental Controls"_ns;
++  nsresult rv = parentalControlsKey->Open(
++      nsIWindowsRegKey::ROOT_KEY_LOCAL_MACHINE, familySafetyPath, flags);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't open parentalControlsKey"));
++    return rv;
++  }
++  constexpr auto usersString = u"Users"_ns;
++  bool hasUsers;
++  rv = parentalControlsKey->HasChild(usersString, &hasUsers);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("HasChild(Users) failed"));
++    return rv;
++  }
++  if (!hasUsers) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("Users subkey not present - Parental Controls not enabled"));
++    return NS_OK;
++  }
++  nsCOMPtr<nsIWindowsRegKey> usersKey;
++  rv = parentalControlsKey->OpenChild(usersString, flags,
++                                      getter_AddRefs(usersKey));
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("failed to open Users subkey"));
++    return rv;
++  }
++  nsAutoString sid;
++  if (!GetUserSid(sid)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't get sid"));
++    return NS_ERROR_FAILURE;
++  }
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++          ("our sid is '%S'", static_cast<const wchar_t*>(sid.get())));
++  bool hasSid;
++  rv = usersKey->HasChild(sid, &hasSid);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("HasChild(sid) failed"));
++    return rv;
++  }
++  if (!hasSid) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("sid not present in Family Safety Users"));
++    return NS_OK;
++  }
++  nsCOMPtr<nsIWindowsRegKey> sidKey;
++  rv = usersKey->OpenChild(sid, flags, getter_AddRefs(sidKey));
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't open sid key"));
++    return rv;
++  }
++  // There are three keys we're interested in: "Parental Controls On",
++  // "Logging Required", and "Web\\Filter On". These keys will have value 0
++  // or 1, indicating a particular feature is disabled or enabled,
++  // respectively. So, if "Parental Controls On" is not 1, Family Safety is
++  // disabled and we don't care about anything else. If both "Logging
++  // Required" and "Web\\Filter On" are 0, the proxy will not be running,
++  // so for our purposes we can consider Family Safety disabled in that
++  // case.
++  // By default, "Logging Required" is 1 and "Web\\Filter On" is 0,
++  // reflecting the initial settings when Family Safety is enabled for an
++  // account for the first time, However, these sub-keys are not created
++  // unless they are switched away from the default value.
++  uint32_t parentalControlsOn;
++  rv = sidKey->ReadIntValue(u"Parental Controls On"_ns, &parentalControlsOn);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("couldn't read Parental Controls On"));
++    return rv;
++  }
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++          ("Parental Controls On: %u", parentalControlsOn));
++  if (parentalControlsOn != 1) {
++    return NS_OK;
++  }
++  uint32_t loggingRequired;
++  rv = ReadRegKeyValueWithDefault(sidKey, flags, nullptr, L"Logging Required",
++                                  1, loggingRequired);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("failed to read value of Logging Required"));
++    return rv;
++  }
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++          ("Logging Required: %u", loggingRequired));
++  uint32_t webFilterOn;
++  rv = ReadRegKeyValueWithDefault(sidKey, flags, L"Web", L"Filter On", 0,
++                                  webFilterOn);
++  if (NS_FAILED(rv)) {
++    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
++            ("failed to read value of Web\\Filter On"));
++    return rv;
++  }
++  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Web\\Filter On: %u", webFilterOn));
++  enabled = loggingRequired == 1 || webFilterOn == 1;
++  return NS_OK;
++}
++#endif  // XP_WIN
++
++bool nsNSSComponent::ShouldEnableEnterpriseRootsForFamilySafety(
++    uint32_t familySafetyMode) {
++#ifdef XP_WIN
++  if (!(IsWin8Point1OrLater() && !IsWin10OrLater())) {
++    return false;
++  }
++  if (familySafetyMode != 2) {
++    return false;
++  }
++  bool familySafetyEnabled;
++  nsresult rv = AccountHasFamilySafetyEnabled(familySafetyEnabled);
++  if (NS_FAILED(rv)) {
++    return false;
++  }
++  return familySafetyEnabled;
++#else
++  return false;
++#endif  // XP_WIN
++}
++
+ void nsNSSComponent::UnloadEnterpriseRoots() {
+   MOZ_ASSERT(NS_IsMainThread());
+   if (!NS_IsMainThread()) {
+@@ -330,6 +580,12 @@ void nsNSSComponent::MaybeImportEnterpriseRoots() {
+     return;
+   }
+   bool importEnterpriseRoots = StaticPrefs::security_enterprise_roots_enabled();
++  uint32_t familySafetyMode = StaticPrefs::security_family_safety_mode();
++  // If we've been configured to detect the Family Safety TLS interception
++  // feature, see if it's enabled. If so, we want to import enterprise roots.
++  if (ShouldEnableEnterpriseRootsForFamilySafety(familySafetyMode)) {
++    importEnterpriseRoots = true;
++  }
+   if (importEnterpriseRoots) {
+     RefPtr task = MakeRefPtr<BackgroundImportEnterpriseCertsTask>(this);
+     (void)task->Dispatch();
+@@ -454,10 +710,12 @@ nsNSSComponent::AddEnterpriseIntermediate(
+ class LoadLoadableCertsTask final : public Runnable {
+  public:
+   LoadLoadableCertsTask(nsNSSComponent* nssComponent,
+-                        bool importEnterpriseRoots, nsAutoCString&& greBinDir)
++                        bool importEnterpriseRoots, uint32_t familySafetyMode,
++                        nsAutoCString&& greBinDir)
+       : Runnable("LoadLoadableCertsTask"),
+         mNSSComponent(nssComponent),
+         mImportEnterpriseRoots(importEnterpriseRoots),
++        mFamilySafetyMode(familySafetyMode),
+         mGreBinDir(std::move(greBinDir)) {
+     MOZ_ASSERT(nssComponent);
+   }
+@@ -469,6 +727,7 @@ class LoadLoadableCertsTask final : public Runnable {
+   nsresult LoadLoadableRoots();
+   RefPtr<nsNSSComponent> mNSSComponent;
+   bool mImportEnterpriseRoots;
++  uint32_t mFamilySafetyMode;
+   nsAutoCString mGreBinDir;
+ };
+ 
+@@ -495,6 +754,12 @@ LoadLoadableCertsTask::Run() {
+     }
+   }
+ 
++  // If we've been configured to detect the Family Safety TLS interception
++  // feature, see if it's enabled. If so, we want to import enterprise roots.
++  if (mNSSComponent->ShouldEnableEnterpriseRootsForFamilySafety(
++          mFamilySafetyMode)) {
++    mImportEnterpriseRoots = true;
++  }
+   if (mImportEnterpriseRoots) {
+     mNSSComponent->ImportEnterpriseRoots();
+     mNSSComponent->UpdateCertVerifierWithEnterpriseRoots();
+@@ -1578,6 +1843,7 @@ nsresult nsNSSComponent::InitializeNSS() {
+ 
+     bool importEnterpriseRoots =
+         StaticPrefs::security_enterprise_roots_enabled();
++    uint32_t familySafetyMode = StaticPrefs::security_family_safety_mode();
+ 
+     nsAutoCString greBinDir;
+     rv = GetDirectoryPath(NS_GRE_BIN_DIR, greBinDir);
+@@ -1586,7 +1852,7 @@ nsresult nsNSSComponent::InitializeNSS() {
+     }
+ 
+     RefPtr<LoadLoadableCertsTask> loadLoadableCertsTask(
+-        new LoadLoadableCertsTask(this, importEnterpriseRoots,
++        new LoadLoadableCertsTask(this, importEnterpriseRoots, familySafetyMode,
+                                   std::move(greBinDir)));
+     rv = mNSSTaskQueue->Dispatch(loadLoadableCertsTask.forget());
+     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+@@ -1707,7 +1973,8 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
+       Preferences::GetCString("security.test.built_in_root_hash",
+                               mTestBuiltInRootHash);
+ #endif  // DEBUG
+-    } else if (prefName.Equals("security.enterprise_roots.enabled")) {
++    } else if (prefName.Equals("security.enterprise_roots.enabled") ||
++               prefName.Equals("security.family_safety.mode")) {
+       UnloadEnterpriseRoots();
+       MaybeImportEnterpriseRoots();
+     } else if (prefName.Equals("security.osclientcerts.autoload")) {
+diff --git a/security/manager/ssl/nsNSSComponent.h b/security/manager/ssl/nsNSSComponent.h
+index e713b7921129..979f0c2883c6 100644
+--- a/security/manager/ssl/nsNSSComponent.h
++++ b/security/manager/ssl/nsNSSComponent.h
+@@ -137,6 +137,8 @@ class nsNSSComponent final : public nsINSSComponent,
+   nsresult CommonGetEnterpriseCerts(
+       nsTArray<nsTArray<uint8_t>>& enterpriseCerts, bool getRoots);
+ 
++  bool ShouldEnableEnterpriseRootsForFamilySafety(uint32_t familySafetyMode);
++
+   // mLoadableCertsLoadedMonitor protects mLoadableCertsLoaded.
+   mozilla::Monitor mLoadableCertsLoadedMonitor;
+   bool mLoadableCertsLoaded MOZ_GUARDED_BY(mLoadableCertsLoadedMonitor);
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+index d4965e049076..60223ba86a8f 100644
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -99,6 +99,12 @@ static StaticAutoPtr<nsTHashtable<nsCStringHashKey>> sLaunchErrors;
+ // PolicyBase::AddRuleInternal.
+ static sandbox::ResultCode AddWin32kLockdownConfig(
+     sandbox::TargetConfig* aConfig) {
++  // On Windows 7, where Win32k lockdown is not supported, the Chromium
++  // sandbox does something weird that breaks COM instantiation.
++  if (!IsWin8OrLater()) {
++    return sandbox::SBOX_ALL_OK;
++  }
++
+   sandbox::MitigationFlags flags = aConfig->GetProcessMitigations();
+   MOZ_ASSERT(flags,
+              "Mitigations should be set before AddWin32kLockdownConfig.");
+@@ -2170,6 +2176,55 @@ static sandbox::ResultCode AddCigToConfig(
+   return result;
+ }
+ 
++// Checks whether we can use a job object as part of the sandbox.
++static bool CanUseJob() {
++  // Windows 8 and later allows nested jobs, no need for further checks.
++  if (IsWin8OrLater()) {
++    return true;
++  }
++
++  BOOL inJob = true;
++  // If we can't determine if we are in a job then assume we can use one.
++  if (!::IsProcessInJob(::GetCurrentProcess(), nullptr, &inJob)) {
++    return true;
++  }
++
++  // If there is no job then we are fine to use one.
++  if (!inJob) {
++    return true;
++  }
++
++  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info = {};
++  // If we can't get the job object flags then again assume we can use a job.
++  if (!::QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation,
++                                   &job_info, sizeof(job_info), nullptr)) {
++    return true;
++  }
++
++  // If we can break away from the current job then we are free to set our own.
++  if (job_info.BasicLimitInformation.LimitFlags &
++      JOB_OBJECT_LIMIT_BREAKAWAY_OK) {
++    return true;
++  }
++
++  // Chromium added a command line flag to allow no job to be used, which was
++  // originally supposed to only be used for remote sessions. If you use runas
++  // to start Firefox then this also uses a separate job and we would fail to
++  // start on Windows 7. An unknown number of people use (or used to use) runas
++  // with Firefox for some security benefits (see bug 1228880). This is now a
++  // counterproductive technique, but allowing both the remote and local case
++  // for now and adding telemetry to see if we can restrict this to just remote.
++  nsAutoString localRemote(::GetSystemMetrics(SM_REMOTESESSION) ? u"remote"
++                                                                : u"local");
++//Telemetry::ScalarSet(Telemetry::ScalarID::SANDBOX_NO_JOB, localRemote, true);
++
++  // Allow running without the job object in this case. This slightly reduces
++  // the ability of the sandbox to protect its children from spawning new
++  // processes or preventing them from shutting down Windows or accessing the
++  // clipboard.
++  return false;
++}
++
+ // Returns the most strict dynamic code mitigation flag that is compatible with
+ // system libraries MSAudDecMFT.dll and msmpeg2vdec.dll. This depends on the
+ // Windows version and the architecture. See bug 1783223 comment 27.
+@@ -2219,6 +2274,17 @@ static auto GetProcessUserSidString() {
+   return userSidString;
+ }
+ 
++static sandbox::ResultCode SetJobLevel(sandbox::TargetConfig* aPolicy,
++                                       sandbox::JobLevel aJobLevel,
++                                       uint32_t aUiExceptions) {
++  static bool sCanUseJob = CanUseJob();
++  if (sCanUseJob) {
++    return aPolicy->SetJobLevel(aJobLevel, aUiExceptions);
++  }
++
++  return aPolicy->SetJobLevel(sandbox::JobLevel::kNone, 0);
++}
++
+ // Process fails to start in LPAC with ASan build
+ #if !defined(MOZ_ASAN)
+ static void HexEncode(const Span<const uint8_t>& aBytes, nsACString& aEncoded) {
+@@ -2535,7 +2601,7 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
+ #else
+   DWORD uiExceptions = 0;
+ #endif
+-  sandbox::ResultCode result = config->SetJobLevel(jobLevel, uiExceptions);
++  sandbox::ResultCode result = SetJobLevel(config, jobLevel, uiExceptions);
+   MOZ_RELEASE_ASSERT(sandbox::SBOX_ALL_OK == result,
+                      "Setting job level failed, have you set memory limit when "
+                      "jobLevel == JOB_NONE?");
+@@ -2806,7 +2872,7 @@ void SandboxBroker::SetSecurityLevelForGPUProcess(int32_t aSandboxLevel) {
+ 
+   auto* config = mPolicy->GetConfig();
+ 
+-  SANDBOX_SUCCEED_OR_CRASH(config->SetJobLevel(jobLevel, uiExceptions));
++  SANDBOX_SUCCEED_OR_CRASH(SetJobLevel(config, jobLevel, uiExceptions));
+   SANDBOX_SUCCEED_OR_CRASH(
+       config->SetTokenLevel(initialTokenLevel, lockdownTokenLevel));
+   SANDBOX_SUCCEED_OR_CRASH(config->SetIntegrityLevel(initialIntegrityLevel));
+@@ -2875,7 +2941,7 @@ bool SandboxBroker::SetSecurityLevelForRDDProcess() {
+   auto* config = mPolicy->GetConfig();
+ 
+   auto result =
+-      config->SetJobLevel(sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
++      SetJobLevel(config, sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
+   SANDBOX_ENSURE_SUCCESS(
+       result,
+       "SetJobLevel should never fail with these arguments, what happened?");
+@@ -2947,7 +3013,7 @@ bool SandboxBroker::SetSecurityLevelForSocketProcess() {
+   auto* config = mPolicy->GetConfig();
+ 
+   auto result =
+-      config->SetJobLevel(sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
++      SetJobLevel(config, sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
+   SANDBOX_ENSURE_SUCCESS(
+       result,
+       "SetJobLevel should never fail with these arguments, what happened?");
+@@ -3206,7 +3272,7 @@ bool BuildUtilitySandbox(sandbox::TargetConfig* config,
+                          const UtilitySandboxProps& us) {
+   LogUtilitySandboxProps(us);
+ 
+-  auto result = config->SetJobLevel(us.mJobLevel, 0 /* ui_exceptions */);
++  auto result = SetJobLevel(config, us.mJobLevel, 0 /* ui_exceptions */);
+   SANDBOX_ENSURE_SUCCESS(
+       result,
+       "SetJobLevel should never fail with these arguments, what happened?");
+@@ -3334,7 +3400,7 @@ bool SandboxBroker::SetSecurityLevelForGMPlugin(
+   auto* config = mPolicy->GetConfig();
+ 
+   auto result =
+-      config->SetJobLevel(sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
++      SetJobLevel(config, sandbox::JobLevel::kLockdown, 0 /* ui_exceptions */);
+   SANDBOX_ENSURE_SUCCESS(
+       result,
+       "SetJobLevel should never fail with these arguments, what happened?");
+@@ -3381,7 +3447,9 @@ bool SandboxBroker::SetSecurityLevelForGMPlugin(
+   // The sandbox doesn't provide Output Protection Manager API brokering
+   // anymore, so we can't use this for the Fake plugin that is used to partially
+   // test it. This brokering was only used in the tests anyway.
+-  if (StaticPrefs::security_sandbox_gmp_win32k_disable() &&
++  // Chromium only implements win32k disable for PPAPI on Win10 or later,
++  // believed to be due to the interceptions required for OPM.
++  if (StaticPrefs::security_sandbox_gmp_win32k_disable() && IsWin10OrLater() &&
+       aGMPSandboxKind != Widevine && aGMPSandboxKind != Clearkey &&
+       aGMPSandboxKind != Fake) {
+     result = AddWin32kLockdownConfig(config);
+diff --git a/toolkit/components/parentalcontrols/nsParentalControlsServiceWin.cpp b/toolkit/components/parentalcontrols/nsParentalControlsServiceWin.cpp
+index 118b630a5bfa..4388389cef46 100644
+--- a/toolkit/components/parentalcontrols/nsParentalControlsServiceWin.cpp
++++ b/toolkit/components/parentalcontrols/nsParentalControlsServiceWin.cpp
+@@ -16,6 +16,7 @@
+ #include "nsWindowsHelpers.h"
+ #include "nsIWindowsRegKey.h"
+ #include "mozilla/UniquePtr.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include <sddl.h>
+ 
+@@ -61,33 +62,63 @@ nsParentalControlsService::nsParentalControlsService()
+     : mEnabled(false), mProvider(0), mPC(nullptr) {
+   // On at least some builds of Windows 10, the old parental controls API no
+   // longer exists, so we have to pull the info we need out of the registry.
+-  nsAutoString regKeyName;
+-  regKeyName.AppendLiteral(
+-      "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Parental Controls\\"
+-      "Users\\");
+-  regKeyName.Append(GetUserSid());
+-  regKeyName.AppendLiteral("\\Web");
+-
+-  nsresult rv;
+-  nsCOMPtr<nsIWindowsRegKey> regKey =
+-      do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv);
+-  if (NS_FAILED(rv)) {
+-    return;
+-  }
++  if (IsWin10OrLater()) {
++    nsAutoString regKeyName;
++    regKeyName.AppendLiteral(
++        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Parental Controls\\"
++        "Users\\");
++    regKeyName.Append(GetUserSid());
++    regKeyName.AppendLiteral("\\Web");
++
++    nsresult rv;
++    nsCOMPtr<nsIWindowsRegKey> regKey =
++        do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv);
++    if (NS_FAILED(rv)) {
++      return;
++    }
++
++    rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_LOCAL_MACHINE, regKeyName,
++                      nsIWindowsRegKey::ACCESS_READ);
++    if (NS_FAILED(rv)) {
++      return;
++    }
++
++    uint32_t filterOn = 0;
++    rv = regKey->ReadIntValue(u"Filter On"_ns, &filterOn);
++    if (NS_FAILED(rv)) {
++      return;
++    }
+ 
+-  rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_LOCAL_MACHINE, regKeyName,
+-                    nsIWindowsRegKey::ACCESS_READ);
+-  if (NS_FAILED(rv)) {
++    mEnabled = filterOn != 0;
+     return;
+   }
+ 
+-  uint32_t filterOn = 0;
+-  rv = regKey->ReadIntValue(u"Filter On"_ns, &filterOn);
+-  if (NS_FAILED(rv)) {
++  HRESULT hr;
++  CoInitialize(nullptr);
++  hr = CoCreateInstance(__uuidof(WindowsParentalControls), nullptr,
++                        CLSCTX_INPROC, IID_PPV_ARGS(&mPC));
++  if (FAILED(hr)) return;
++
++  RefPtr<IWPCSettings> wpcs;
++  if (FAILED(mPC->GetUserSettings(nullptr, getter_AddRefs(wpcs)))) {
++    // Not available on this os or not enabled for this user account or we're
++    // running as admin
++    mPC->Release();
++    mPC = nullptr;
+     return;
+   }
+ 
+-  mEnabled = filterOn != 0;
++  DWORD settings = 0;
++  wpcs->GetRestrictions(&settings);
++
++  // If we can't determine specifically whether Web Filtering is on/off (i.e.
++  // we're on Windows < 8), then assume it's on unless no restrictions are set.
++  bool enable = IsWin8OrLater() ? settings & WPCFLAG_WEB_FILTERED
++                                : settings != WPCFLAG_NO_RESTRICTION;
++
++  if (enable) {
++    mEnabled = true;
++  }
+ }
+ 
+ nsParentalControlsService::~nsParentalControlsService() {
+diff --git a/toolkit/components/telemetry/Scalars.yaml b/toolkit/components/telemetry/Scalars.yaml
+index 87be2dfa5b56..7100bf6052ba 100644
+--- a/toolkit/components/telemetry/Scalars.yaml
++++ b/toolkit/components/telemetry/Scalars.yaml
+@@ -2264,6 +2264,25 @@ downloads:
+     record_in_processes:
+       - 'main'
+ 
++sandbox:
++  no_job:
++    bug_numbers:
++      - 1392570
++    description: >
++      Indicates that we can't use a job object for sandboxed child processes.
++      Keyed by whether we are in a remote session or not from ::GetSystemMetrics(SM_REMOTESESSION).
++    expires: "62"
++    kind: boolean
++    keyed: true
++    notification_emails:
++      - bowen@mozilla.com
++    release_channel_collection: opt-out
++    products:
++      - 'firefox'
++      - 'fennec'
++    record_in_processes:
++      - main
++
+ findbar:
+   shown:
+     bug_numbers:
+diff --git a/toolkit/crashreporter/nsExceptionHandler.cpp b/toolkit/crashreporter/nsExceptionHandler.cpp
+index 4a7ca08c2447..7fb9169f2ff5 100644
+--- a/toolkit/crashreporter/nsExceptionHandler.cpp
++++ b/toolkit/crashreporter/nsExceptionHandler.cpp
+@@ -59,6 +59,7 @@
+ 
+ #  include "nsWindowsDllInterceptor.h"
+ #  include "mozilla/WindowsDllBlocklist.h"
++#  include "mozilla/WindowsVersion.h"
+ #  include "psapi.h"  // For PERFORMANCE_INFORMATION and K32GetPerformanceInfo()
+ #elif defined(XP_MACOSX)
+ #  include "breakpad-client/mac/crash_generation/client_info.h"
+@@ -1766,14 +1767,20 @@ static MINIDUMP_TYPE GetMinidumpType() {
+       MiniDumpWithHandleData);
+ 
+ #  ifdef NIGHTLY_BUILD
+-  minidump_type = static_cast<MINIDUMP_TYPE>(
+-      minidump_type |
+-      // This is Nightly only because this doubles the size of minidumps based
+-      // on the experimental data.
+-      MiniDumpWithProcessThreadData |
+-      // This allows us to examine heap objects referenced from stack objects
+-      // at the cost of further doubling the size of minidumps.
+-      MiniDumpWithIndirectlyReferencedMemory);
++  // This is Nightly only because this doubles the size of minidumps based
++  // on the experimental data.
++  minidump_type =
++      static_cast<MINIDUMP_TYPE>(minidump_type | MiniDumpWithProcessThreadData);
++
++  // dbghelp.dll on Win7 can't handle overlapping memory regions so we only
++  // enable this feature on Win8 or later.
++  if (IsWin8OrLater()) {
++    minidump_type = static_cast<MINIDUMP_TYPE>(
++        minidump_type |
++        // This allows us to examine heap objects referenced from stack objects
++        // at the cost of further doubling the size of minidumps.
++        MiniDumpWithIndirectlyReferencedMemory);
++  }
+ #  endif
+ 
+   const char* e = PR_GetEnv("MOZ_CRASHREPORTER_FULLDUMP");
+diff --git a/toolkit/system/windowsPackageManager/nsWindowsPackageManager.cpp b/toolkit/system/windowsPackageManager/nsWindowsPackageManager.cpp
+index e384aeacfc1d..9d2c09d8fbff 100644
+--- a/toolkit/system/windowsPackageManager/nsWindowsPackageManager.cpp
++++ b/toolkit/system/windowsPackageManager/nsWindowsPackageManager.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "nsWindowsPackageManager.h"
+ #include "mozilla/dom/Promise.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/WinHeaderOnlyUtils.h"
+ #ifndef __MINGW32__
+@@ -48,6 +49,11 @@ nsWindowsPackageManager::FindUserInstalledPackages(
+ #ifdef __MINGW32__
+   return NS_ERROR_NOT_IMPLEMENTED;
+ #else
++  // The classes we're using are only available beginning with Windows 10
++  if (!mozilla::IsWin10OrLater()) {
++    return NS_ERROR_NOT_IMPLEMENTED;
++  }
++
+   ComPtr<IInspectable> pmInspectable;
+   ComPtr<Deployment::IPackageManager> pm;
+   HRESULT hr = RoActivateInstance(
+@@ -110,6 +116,11 @@ nsWindowsPackageManager::GetInstalledDate(uint64_t* ts) {
+ #ifdef __MINGW32__
+   return NS_ERROR_NOT_IMPLEMENTED;
+ #else
++  // The classes we're using are only available beginning with Windows 10
++  if (!mozilla::IsWin10OrLater()) {
++    return NS_ERROR_NOT_IMPLEMENTED;
++  }
++
+   ComPtr<ApplicationModel::IPackageStatics> pkgStatics;
+   HRESULT hr = RoGetActivationFactory(
+       HStringReference(RuntimeClass_Windows_ApplicationModel_Package).Get(),
+@@ -196,8 +207,9 @@ nsWindowsPackageManager::CampaignId(JSContext* aCx, dom::Promise** aPromise) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ #else
+ 
+-  // This is only relevant for MSIX packaged builds.
+-  if (!mozilla::HasPackageIdentity()) {
++  // The classes we're using are only available beginning with Windows 10,
++  // and this is only relevant for MSIX packaged builds.
++  if (!mozilla::IsWin10OrLater() || !mozilla::HasPackageIdentity()) {
+     return NS_ERROR_NOT_IMPLEMENTED;
+   }
+ 
+diff --git a/toolkit/xre/dllservices/mozglue/Authenticode.cpp b/toolkit/xre/dllservices/mozglue/Authenticode.cpp
+index f658a02adef3..89580786d29c 100644
+--- a/toolkit/xre/dllservices/mozglue/Authenticode.cpp
++++ b/toolkit/xre/dllservices/mozglue/Authenticode.cpp
+@@ -8,6 +8,7 @@
+ #include "mozilla/DynamicallyLinkedFunctionPtr.h"
+ #include "mozilla/ScopeExit.h"
+ #include "mozilla/UniquePtr.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsWindowsHelpers.h"
+ 
+ #include <windows.h>
+@@ -286,22 +287,36 @@ bool SignedBinary::VerifySignature(const wchar_t* aFilePath) {
+   // First, we open a catalog admin context.
+   HCATADMIN rawCatAdmin;
+ 
+-  static const mozilla::StaticDynamicallyLinkedFunctionPtr<
+-      decltype(&::CryptCATAdminAcquireContext2)>
+-      pCryptCATAdminAcquireContext2(L"wintrust.dll",
+-                                    "CryptCATAdminAcquireContext2");
+-  if (!pCryptCATAdminAcquireContext2) {
+-    return false;
+-  }
++  // Windows 7 also exports the CryptCATAdminAcquireContext2 API, but it does
++  // *not* sign its binaries with SHA-256, so we use the old API in that case.
++  if (mozilla::IsWin8OrLater()) {
++    static const mozilla::StaticDynamicallyLinkedFunctionPtr<
++        decltype(&::CryptCATAdminAcquireContext2)>
++        pCryptCATAdminAcquireContext2(L"wintrust.dll",
++                                      "CryptCATAdminAcquireContext2");
++    if (!pCryptCATAdminAcquireContext2) {
++      return false;
++    }
+ 
+-  CERT_STRONG_SIGN_PARA policy = {sizeof(policy)};
+-  policy.dwInfoChoice = CERT_STRONG_SIGN_OID_INFO_CHOICE;
+-  policy.pszOID = const_cast<char*>(
+-      szOID_CERT_STRONG_SIGN_OS_CURRENT);  // -Wwritable-strings
++    CERT_STRONG_SIGN_PARA policy = {sizeof(policy)};
++    policy.dwInfoChoice = CERT_STRONG_SIGN_OID_INFO_CHOICE;
++    policy.pszOID = const_cast<char*>(
++        szOID_CERT_STRONG_SIGN_OS_CURRENT);  // -Wwritable-strings
+ 
+-  if (!pCryptCATAdminAcquireContext2(&rawCatAdmin, nullptr,
+-                                     BCRYPT_SHA256_ALGORITHM, &policy, 0)) {
+-    return false;
++    if (!pCryptCATAdminAcquireContext2(&rawCatAdmin, nullptr,
++                                       BCRYPT_SHA256_ALGORITHM, &policy, 0)) {
++      return false;
++    }
++  } else {
++    static const mozilla::StaticDynamicallyLinkedFunctionPtr<
++        decltype(&::CryptCATAdminAcquireContext)>
++        pCryptCATAdminAcquireContext(L"wintrust.dll",
++                                     "CryptCATAdminAcquireContext");
++
++    if (!pCryptCATAdminAcquireContext ||
++        !pCryptCATAdminAcquireContext(&rawCatAdmin, nullptr, 0)) {
++      return false;
++    }
+   }
+ 
+   CATAdminContextUniquePtr catAdmin(rawCatAdmin);
+@@ -445,7 +460,9 @@ bool SignedBinary::VerifySignature(const wchar_t* aFilePath) {
+   wtCatInfo.pcwszMemberTag = strHashBuf.get();
+   wtCatInfo.pcwszMemberFilePath = aFilePath;
+   wtCatInfo.hMemberFile = rawFile;
+-  wtCatInfo.hCatAdmin = rawCatAdmin;
++  if (mozilla::IsWin8OrLater()) {
++    wtCatInfo.hCatAdmin = rawCatAdmin;
++  }
+ 
+   WINTRUST_DATA trustData = {sizeof(trustData)};
+   trustData.dwUnionChoice = WTD_CHOICE_CATALOG;
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
+index 6086f03548c1..404de129f32d 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
++++ b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
+@@ -65,6 +65,47 @@ typedef NTSTATUS(NTAPI* LdrLoadDll_func)(PWCHAR filePath, PULONG flags,
+                                          PHANDLE handle);
+ static WindowsDllInterceptor::FuncHookType<LdrLoadDll_func> stub_LdrLoadDll;
+ 
++#ifdef _M_AMD64
++typedef decltype(RtlInstallFunctionTableCallback)*
++    RtlInstallFunctionTableCallback_func;
++static WindowsDllInterceptor::FuncHookType<RtlInstallFunctionTableCallback_func>
++    stub_RtlInstallFunctionTableCallback;
++
++extern uint8_t* sMsMpegJitCodeRegionStart;
++extern size_t sMsMpegJitCodeRegionSize;
++
++BOOLEAN WINAPI patched_RtlInstallFunctionTableCallback(
++    DWORD64 TableIdentifier, DWORD64 BaseAddress, DWORD Length,
++    PGET_RUNTIME_FUNCTION_CALLBACK Callback, PVOID Context,
++    PCWSTR OutOfProcessCallbackDll) {
++  // msmpeg2vdec.dll sets up a function table callback for their JIT code that
++  // just terminates the process, because their JIT doesn't have unwind info.
++  // If we see this callback being registered, record the region address, so
++  // that StackWalk.cpp can avoid unwinding addresses in this region.
++  //
++  // To keep things simple I'm not tracking unloads of msmpeg2vdec.dll.
++  // Worst case the stack walker will needlessly avoid a few pages of memory.
++
++  // Tricky: GetModuleHandleExW adds a ref by default; GetModuleHandleW doesn't.
++  HMODULE callbackModule = nullptr;
++  DWORD moduleFlags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                      GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
++
++  // These GetModuleHandle calls enter a critical section on Win7.
++  AutoSuppressStackWalking suppress;
++
++  if (GetModuleHandleExW(moduleFlags, (LPWSTR)Callback, &callbackModule) &&
++      GetModuleHandleW(L"msmpeg2vdec.dll") == callbackModule) {
++    sMsMpegJitCodeRegionStart = (uint8_t*)BaseAddress;
++    sMsMpegJitCodeRegionSize = Length;
++  }
++
++  return stub_RtlInstallFunctionTableCallback(TableIdentifier, BaseAddress,
++                                              Length, Callback, Context,
++                                              OutOfProcessCallbackDll);
++}
++#endif
++
+ template <class T>
+ struct RVAMap {
+   RVAMap(HANDLE map, DWORD offset) {
+@@ -299,6 +340,16 @@ static bool ShouldBlockBasedOnBlockInfo(const DllBlockInfo& info,
+         "Ignoring the REDIRECT_TO_NOOP_ENTRYPOINT flag\n");
+   }
+ 
++  if ((info.mFlags & DllBlockInfoFlags::BLOCK_WIN8_AND_OLDER) &&
++      IsWin8Point1OrLater()) {
++    return false;
++  }
++
++  if ((info.mFlags & DllBlockInfoFlags::BLOCK_WIN7_AND_OLDER) &&
++      IsWin8OrLater()) {
++    return false;
++  }
++
+   if ((info.mFlags & DllBlockInfoFlags::CHILD_PROCESSES_ONLY) &&
+       !(sInitFlags & eDllBlocklistInitFlagIsChildProcess)) {
+     return false;
+@@ -582,6 +633,16 @@ MFBT_API void DllBlocklist_Initialize(uint32_t aInitFlags) {
+ 
+   glue::ModuleLoadFrame::StaticInit(&gMozglueLoaderObserver, &gWinLauncher);
+ 
++#ifdef _M_AMD64
++  if (!IsWin8OrLater()) {
++    Kernel32Intercept.Init(L"kernel32.dll");
++    // The crash that this hook works around is only seen on Win7.
++    stub_RtlInstallFunctionTableCallback.Set(
++        Kernel32Intercept, "RtlInstallFunctionTableCallback",
++        &patched_RtlInstallFunctionTableCallback);
++  }
++#endif
++
+   // Bug 1361410: WRusr.dll will overwrite our hook and cause a crash.
+   // Workaround: If we detect WRusr.dll, don't hook.
+   if (!GetModuleHandleW(L"WRusr.dll")) {
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistDefs.in b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistDefs.in
+index d9f779c6071e..bf7594ed57d7 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistDefs.in
++++ b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistDefs.in
+@@ -196,6 +196,10 @@ ALL_PROCESSES += [
+     DllBlocklistEntry("nahimic2osd.dll", (2, 5, 19, 0xffff)),
+     DllBlocklistEntry("nahimicmsidevprops.dll", UNVERSIONED),
+ 
++    # Bug 1268470 - crashes with Kaspersky Lab on Windows 8
++    DllBlocklistEntry("klsihk64.dll", (14, 0, 456, 0xffff),
++                      BLOCK_WIN8_AND_OLDER),
++
+     # Bug 1579758, crashes with OpenSC nightly version 0.19.0.448 and lower
+     DllBlocklistEntry("onepin-opensc-pkcs11.dll", (0, 19, 0, 448)),
+ 
+@@ -234,6 +238,10 @@ ALL_PROCESSES += [
+     # Old version of COMODO Firewall, bug 1407712 and bug 1624336
+     DllBlocklistEntry("guard64.dll", (8, 4, 0, 65535)),
+ 
++    # Old version of Panda Security, bug 1637984 and bug 1705125
++    DllBlocklistEntry("PavLspHook64.dll", (9, 2, 2, 1), BLOCK_WIN7_AND_OLDER),
++    DllBlocklistEntry("PavSHook64.dll", (9, 2, 2, 1), BLOCK_WIN7_AND_OLDER),
++
+     # Webroot SecureAnywhere causes crashes, bug 1700281
+     DllBlocklistEntry("WRDll.x64.dll", (1, 1, 0, 227)),
+     DllBlocklistEntry("WRDll.x86.dll", (1, 1, 0, 227)),
+@@ -260,6 +268,9 @@ ALL_PROCESSES += [
+     DllBlocklistEntry("magicdsfilterQuest3s.dll", ALL_VERSIONS),
+     DllBlocklistEntry("magicdsfilterQuest2.dll", ALL_VERSIONS),
+     DllBlocklistEntry("magicdsfilterQuestPro.dll", ALL_VERSIONS),
++
++    # ESET security (bug 1833793)
++    DllBlocklistEntry("eoppbrowser.dll", (1, 0, 88, 0), BLOCK_WIN7_AND_OLDER),
+ ]
+ 
+ # Shell extensions that result in crashes when the file-dialog is opened. (These
+@@ -460,6 +471,9 @@ UTILITY_PROCESSES += [
+ 
+     # Bug 2007362
+     DllBlocklistEntry("windhawk.dll", (1, 6, 1, 0)),
++
++    # Messes with user32 and breaks Utility on Win7 x86
++    DllBlocklistEntry("aswhook.dll", ALL_VERSIONS, BLOCK_WIN7_AND_OLDER),
+ ]
+ 
+ UTILITY_PROCESSES_TESTS += [
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistInfo.h b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistInfo.h
+index e66d64540433..b2f6d3fc7623 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistInfo.h
++++ b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklistInfo.h
+@@ -18,15 +18,17 @@ namespace mozilla {
+ // Note that these are a subset of CHILD_PROCESSES_ONLY.
+ enum DllBlockInfoFlags : uint32_t {
+   FLAGS_DEFAULT = 0,
+-  USE_TIMESTAMP = 1 << 0,
+-  CHILD_PROCESSES_ONLY = 1 << 1,
+-  BROWSER_PROCESS_ONLY = 1 << 2,
+-  REDIRECT_TO_NOOP_ENTRYPOINT = 1 << 3,
+-  UTILITY_PROCESSES_ONLY = 1 << 4,
+-  SOCKET_PROCESSES_ONLY = 1 << 5,
+-  GPU_PROCESSES_ONLY = 1 << 6,
+-  GMPLUGIN_PROCESSES_ONLY = 1 << 7,
+-  RDD_PROCESSES_ONLY = 1 << 8,
++  BLOCK_WIN7_AND_OLDER = 1 << 0,
++  BLOCK_WIN8_AND_OLDER = 1 << 1,
++  USE_TIMESTAMP = 1 << 2,
++  CHILD_PROCESSES_ONLY = 1 << 3,
++  BROWSER_PROCESS_ONLY = 1 << 4,
++  REDIRECT_TO_NOOP_ENTRYPOINT = 1 << 5,
++  UTILITY_PROCESSES_ONLY = 1 << 6,
++  SOCKET_PROCESSES_ONLY = 1 << 7,
++  GPU_PROCESSES_ONLY = 1 << 8,
++  GMPLUGIN_PROCESSES_ONLY = 1 << 9,
++  RDD_PROCESSES_ONLY = 1 << 10,
+ };
+ 
+ constexpr DllBlockInfoFlags operator|(const DllBlockInfoFlags a,
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
+index 84a58c161760..3b7b3dc83c74 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
++++ b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
+@@ -7,6 +7,7 @@
+ #include "nsWindowsDllInterceptor.h"
+ #include "mozilla/DebugOnly.h"
+ #include "mozilla/NativeNt.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/StackWalk_windows.h"
+ #include "mozilla/WindowsDiagnostics.h"
+ 
+@@ -74,8 +75,11 @@ void WindowsStackWalkInitialization() {
+   // case the stack walk suppressions are already added there directly.
+   NtDllIntercept.Init("ntdll.dll");
+   stub_LdrUnloadDll.Set(NtDllIntercept, "LdrUnloadDll", &patched_LdrUnloadDll);
+-  stub_LdrResolveDelayLoadedAPI.Set(NtDllIntercept, "LdrResolveDelayLoadedAPI",
+-                                    &patched_LdrResolveDelayLoadedAPI);
++  if (IsWin8OrLater()) {  // LdrResolveDelayLoadedAPI was introduced in Win8
++    stub_LdrResolveDelayLoadedAPI.Set(NtDllIntercept,
++                                      "LdrResolveDelayLoadedAPI",
++                                      &patched_LdrResolveDelayLoadedAPI);
++  }
+ }
+ 
+ [[clang::optnone]] void UnoptimizedLookup() {
+diff --git a/toolkit/xre/dllservices/mozglue/gen_dll_blocklist_defs.py b/toolkit/xre/dllservices/mozglue/gen_dll_blocklist_defs.py
+index 5cd226bb4c73..9c04f8cd89fd 100644
+--- a/toolkit/xre/dllservices/mozglue/gen_dll_blocklist_defs.py
++++ b/toolkit/xre/dllservices/mozglue/gen_dll_blocklist_defs.py
+@@ -50,6 +50,8 @@ DLL_BLOCKLIST_DEFINITIONS_BEGIN_NAMED(gBlockedInprocDlls)
+ 
+ # These flag names should match the ones defined in WindowsDllBlocklistInfo.h
+ FLAGS_DEFAULT = "FLAGS_DEFAULT"
++BLOCK_WIN8_AND_OLDER = "BLOCK_WIN8_AND_OLDER"
++BLOCK_WIN7_AND_OLDER = "BLOCK_WIN7_AND_OLDER"
+ USE_TIMESTAMP = "USE_TIMESTAMP"
+ CHILD_PROCESSES_ONLY = "CHILD_PROCESSES_ONLY"
+ BROWSER_PROCESS_ONLY = "BROWSER_PROCESS_ONLY"
+@@ -60,6 +62,12 @@ GPU_PROCESSES_ONLY = "GPU_PROCESSES_ONLY"
+ GPU_PROCESSES_ONLY = "GPU_PROCESSES_ONLY"
+ GMPLUGIN_PROCESSES_ONLY = "GMPLUGIN_PROCESSES_ONLY"
+ RDD_PROCESSES_ONLY = "RDD_PROCESSES_ONLY"
++
++# Only these flags are available in the input script
++INPUT_ONLY_FLAGS = {
++    BLOCK_WIN8_AND_OLDER,
++    BLOCK_WIN7_AND_OLDER,
++}
+ 
+ 
+ def FILTER_ALLOW_ALL(entry):
+@@ -733,6 +741,9 @@ def gen_blocklists(first_fd, defs_filename):
+         # For each defname, add a special list for test-only entries
+         exec_env[derive_test_key(defname)] = []
+ 
++    # Import flags into exec_env
++    exec_env.update({flag: flag for flag in INPUT_ONLY_FLAGS})
++
+     # Now execute the input script with exec_env providing the globals
+     exec_script_file(defs_filename, exec_env)
+ 
+diff --git a/toolkit/xre/dllservices/mozglue/nsWindowsDllInterceptor.h b/toolkit/xre/dllservices/mozglue/nsWindowsDllInterceptor.h
+index 19f9d9d6f479..834c79bdf5e6 100644
+--- a/toolkit/xre/dllservices/mozglue/nsWindowsDllInterceptor.h
++++ b/toolkit/xre/dllservices/mozglue/nsWindowsDllInterceptor.h
+@@ -478,9 +478,34 @@ class WindowsDllInterceptor final
+       // injected DLLs do the same and interfere with our stuff.
+       bool needs10BytePatch = (mModule == ::GetModuleHandleW(L"ntdll.dll"));
+ 
++      bool isWin8Or81 = IsWin8OrLater() && (!IsWin10OrLater());
++      bool isWin8 = IsWin8OrLater() && (!IsWin8Point1OrLater());
++
++      bool isKernel32Dll = (mModule == ::GetModuleHandleW(L"kernel32.dll"));
++
++      bool isDuplicateHandle = (reinterpret_cast<void*>(aProc) ==
++                                reinterpret_cast<void*>(&::DuplicateHandle));
++
++      // CloseHandle on Windows 8/8.1 only accomodates 10-byte patches.
++      needs10BytePatch |= isWin8Or81 && isKernel32Dll &&
++                          (reinterpret_cast<void*>(aProc) ==
++                           reinterpret_cast<void*>(&CloseHandle));
++
++      // CreateFileA and DuplicateHandle on Windows 8 require 10-byte patches.
++      needs10BytePatch |= isWin8 && isKernel32Dll &&
++                          ((reinterpret_cast<void*>(aProc) ==
++                            reinterpret_cast<void*>(&::CreateFileA)) ||
++                           isDuplicateHandle);
++
+       if (needs10BytePatch) {
+         flags |= DetourFlags::eEnable10BytePatch;
+       }
++
++      if (isWin8 && isDuplicateHandle) {
++        // Because we can't detour Win8's KERNELBASE!DuplicateHandle,
++        // we detour kernel32!DuplicateHandle (See bug 1659398).
++        flags |= DetourFlags::eDontResolveRedirection;
++      }
+ #endif  // defined(_M_X64)
+ 
+       mDetourPatcher.Init(flags);
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 34dc5cf75ab3..4b0ee27544fa 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -121,7 +121,6 @@
+ #  include "mozilla/WindowsMsctfInitialization.h"
+ #  include "mozilla/WindowsOleAut32Initialization.h"
+ #  include "mozilla/WindowsProcessMitigations.h"
+-#  include "mozilla/WindowsVersion.h"
+ #  include "mozilla/WinHeaderOnlyUtils.h"
+ #  include "mozilla/mscom/ProcessRuntime.h"
+ #  include "mozilla/mscom/ProfilerMarkers.h"
+diff --git a/tools/lint/mscom-init.yml b/tools/lint/mscom-init.yml
+index 12d2f3ee0df6..cd4ed9ab0dd2 100644
+--- a/tools/lint/mscom-init.yml
++++ b/tools/lint/mscom-init.yml
+@@ -41,6 +41,7 @@ forbid-mscom-init:
+         - toolkit/crashreporter/google-breakpad/src/common/windows/pdb_source_line_writer.cc
+         - toolkit/mozapps/defaultagent/proxy/main.cpp
+         - uriloader/exthandler/win/nsOSHelperAppService.cpp
++        - widget/windows/InkCollector.cpp
+         - widget/windows/TaskbarPreview.cpp
+         - widget/windows/WinTaskbar.cpp
+         - widget/windows/nsAppShell.cpp
+diff --git a/uriloader/exthandler/win/nsOSHelperAppService.cpp b/uriloader/exthandler/win/nsOSHelperAppService.cpp
+index eae284745ddd..eef293ed6a5b 100644
+--- a/uriloader/exthandler/win/nsOSHelperAppService.cpp
++++ b/uriloader/exthandler/win/nsOSHelperAppService.cpp
+@@ -14,6 +14,7 @@
+ #include "nsLocalFile.h"
+ #include "nsIWindowsRegKey.h"
+ #include "nsXULAppAPI.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ // shellapi.h is needed to build with WIN32_LEAN_AND_MEAN
+ #include <shellapi.h>
+@@ -115,21 +116,23 @@ NS_IMETHODIMP nsOSHelperAppService::GetApplicationDescription(
+ 
+   NS_ConvertASCIItoUTF16 buf(aScheme);
+ 
+-  wchar_t result[1024];
+-  DWORD resultSize = 1024;
+-  HRESULT hr = AssocQueryString(0x1000 /* ASSOCF_IS_PROTOCOL */,
+-                                ASSOCSTR_FRIENDLYAPPNAME, buf.get(), NULL,
+-                                result, &resultSize);
+-  if (SUCCEEDED(hr)) {
+-    _retval = result;
+-    return NS_OK;
++  if (mozilla::IsWin8OrLater()) {
++    wchar_t result[1024];
++    DWORD resultSize = 1024;
++    HRESULT hr = AssocQueryString(0x1000 /* ASSOCF_IS_PROTOCOL */,
++                                  ASSOCSTR_FRIENDLYAPPNAME, buf.get(), NULL,
++                                  result, &resultSize);
++    if (SUCCEEDED(hr)) {
++      _retval = result;
++      return NS_OK;
++    }
+   }
+ 
+   NS_ENSURE_TRUE(mAppAssoc, NS_ERROR_NOT_AVAILABLE);
+   wchar_t* pResult = nullptr;
+   // We are responsible for freeing returned strings.
+-  hr = mAppAssoc->QueryCurrentDefault(buf.get(), AT_URLPROTOCOL, AL_EFFECTIVE,
+-                                      &pResult);
++  HRESULT hr = mAppAssoc->QueryCurrentDefault(buf.get(), AT_URLPROTOCOL,
++                                              AL_EFFECTIVE, &pResult);
+   if (SUCCEEDED(hr)) {
+     nsCOMPtr<nsIFile> app;
+     nsAutoString appInfo(pResult);
+diff --git a/widget/tests/gtest/TestWinWindowOcclusionTracker.cpp b/widget/tests/gtest/TestWinWindowOcclusionTracker.cpp
+index cce6c00e1d08..56bd8a115fb4 100644
+--- a/widget/tests/gtest/TestWinWindowOcclusionTracker.cpp
++++ b/widget/tests/gtest/TestWinWindowOcclusionTracker.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "MockWinWidget.h"
+ #include "mozilla/widget/WinWindowOcclusionTracker.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ using namespace mozilla;
+ using namespace mozilla::widget;
+@@ -151,6 +152,10 @@ TEST_F(WinWindowOcclusionTrackerTest, PopupWindow) {
+ }
+ 
+ TEST_F(WinWindowOcclusionTrackerTest, CloakedWindow) {
++  // Cloaking is only supported in Windows 8 and above.
++  if (!IsWin8OrLater()) {
++    return;
++  }
+   HWND hwnd = CreateNativeWindow(/* aStyle = */ 0, /* aExStyle = */ 0);
+   LayoutDeviceIntRect winRect;
+   BOOL cloak = TRUE;
+diff --git a/widget/windows/IMMHandler.cpp b/widget/windows/IMMHandler.cpp
+index 1b0fe45418ee..aa1909b1384e 100644
+--- a/widget/windows/IMMHandler.cpp
++++ b/widget/windows/IMMHandler.cpp
+@@ -15,6 +15,7 @@
+ #include "mozilla/MiscEvents.h"
+ #include "mozilla/TextEvents.h"
+ #include "mozilla/ToString.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #ifndef IME_PROP_ACCEPT_WIDE_VKEY
+ #  define IME_PROP_ACCEPT_WIDE_VKEY 0x20
+@@ -218,7 +219,8 @@ bool IMMHandler::IsActiveIMEInBlockList() {
+   // ATOK 2008 and ATOK 2009 crash when user just opens their open state.
+   // ATOK 2010 isn't installable newly on Win 7 or later, but we have a lot of
+   // crash reports.
+-  if ((IsATOK2006Active() || IsATOK2007Active() || IsATOK2008Active() ||
++  if (IsWin8OrLater() &&
++      (IsATOK2006Active() || IsATOK2007Active() || IsATOK2008Active() ||
+        IsATOK2009Active() || IsATOK2010Active())) {
+     return true;
+   }
+diff --git a/widget/windows/InkCollector.cpp b/widget/windows/InkCollector.cpp
+new file mode 100644
+index 000000000000..2fcd2ea77d87
+--- /dev/null
++++ b/widget/windows/InkCollector.cpp
+@@ -0,0 +1,247 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
++ * vim: set ts=2 sw=2 et tw=78:
++ * This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
++ */
++
++#include "InkCollector.h"
++#include "nsDebug.h"
++#include "nsISupportsUtils.h"
++
++// Msinkaut_i.c and Msinkaut.h should both be included
++// https://msdn.microsoft.com/en-us/library/windows/desktop/ms695519.aspx
++#include <msinkaut_i.c>
++
++mozilla::StaticAutoPtr<InkCollector> InkCollector::sInkCollector;
++
++InkCollector::~InkCollector() {
++  Shutdown();
++  MOZ_ASSERT(!mCookie && !mEnabled && !mComInitialized && !mMarshaller &&
++             !mInkCollector && !mConnectionPoint && !mInkCollectorEvent);
++}
++
++void InkCollector::Initialize() {
++  // Possibly, we can use mConnectionPoint for checking,
++  // But if errors exist (perhaps COM object is unavailable),
++  // Initialize() will be called more times.
++  static bool sInkCollectorCreated = false;
++  if (sInkCollectorCreated) {
++    return;
++  }
++  sInkCollectorCreated = true;
++
++  // COM could get uninitialized due to previous initialization.
++  mComInitialized = SUCCEEDED(::CoInitialize(nullptr));
++
++  // Set up instance of InkCollectorEvent.
++  mInkCollectorEvent = new InkCollectorEvent();
++
++  // Set up a free threaded marshaler.
++  if (FAILED(::CoCreateFreeThreadedMarshaler(mInkCollectorEvent,
++                                             getter_AddRefs(mMarshaller)))) {
++    return;
++  }
++
++  // Create the ink collector.
++  if (FAILED(::CoCreateInstance(CLSID_InkCollector, NULL, CLSCTX_INPROC_SERVER,
++                                IID_IInkCollector,
++                                getter_AddRefs(mInkCollector)))) {
++    return;
++  }
++
++  // Set up connection between sink and InkCollector.
++  RefPtr<IConnectionPointContainer> connPointContainer;
++
++  // Get the connection point container.
++  if (SUCCEEDED(mInkCollector->QueryInterface(
++          IID_IConnectionPointContainer, getter_AddRefs(connPointContainer)))) {
++    // Find the connection point for Ink Collector events.
++    if (SUCCEEDED(connPointContainer->FindConnectionPoint(
++            __uuidof(_IInkCollectorEvents),
++            getter_AddRefs(mConnectionPoint)))) {
++      // Hook up sink to connection point.
++      if (SUCCEEDED(mConnectionPoint->Advise(mInkCollectorEvent, &mCookie))) {
++        OnInitialize();
++      }
++    }
++  }
++}
++
++void InkCollector::Shutdown() {
++  Enable(false);
++  if (mConnectionPoint) {
++    // Remove the connection of the sink to the Ink Collector.
++    mConnectionPoint->Unadvise(mCookie);
++    mCookie = 0;
++    mConnectionPoint = nullptr;
++  }
++  mInkCollector = nullptr;
++  mMarshaller = nullptr;
++  mInkCollectorEvent = nullptr;
++
++  // Let uninitialization get handled in a place where it got inited.
++  if (mComInitialized) {
++    CoUninitialize();
++    mComInitialized = false;
++  }
++}
++
++void InkCollector::OnInitialize() {
++  // Suppress all events to do not allow performance decreasing.
++  // https://msdn.microsoft.com/en-us/library/ms820347.aspx
++  mInkCollector->SetEventInterest(InkCollectorEventInterest::ICEI_AllEvents,
++                                  VARIANT_FALSE);
++
++  // Sets a value that indicates whether an object or control has interest in a
++  // specified event.
++  mInkCollector->SetEventInterest(
++      InkCollectorEventInterest::ICEI_CursorOutOfRange, VARIANT_TRUE);
++
++  // If the MousePointer property is set to IMP_Custom and the MouseIcon
++  // property is NULL, Then the ink collector no longer handles mouse cursor
++  // settings.
++  // https://msdn.microsoft.com/en-us/library/windows/desktop/ms700686.aspx
++  mInkCollector->put_MouseIcon(nullptr);
++  mInkCollector->put_MousePointer(InkMousePointer::IMP_Custom);
++
++  // This mode allows an ink collector to collect ink from any tablet attached
++  // to the Tablet PC. The Boolean value that indicates whether to use the mouse
++  // as an input device. If TRUE, the mouse is used for input.
++  // https://msdn.microsoft.com/en-us/library/ms820346.aspx
++  mInkCollector->SetAllTabletsMode(VARIANT_FALSE);
++
++  // Sets the value that specifies whether ink is rendered as it is drawn.
++  // VARIANT_TRUE to render ink as it is drawn on the display.
++  // VARIANT_FALSE to not have the ink appear on the display as strokes are
++  // made.
++  // https://msdn.microsoft.com/en-us/library/windows/desktop/dd314598.aspx
++  mInkCollector->put_DynamicRendering(VARIANT_FALSE);
++
++  // Set AutoRedraw to false to prevent repainting the ink when the window is
++  // invalidated.
++  mInkCollector->put_AutoRedraw(VARIANT_FALSE);
++}
++
++// Sets a value that specifies whether the InkCollector object collects pen
++// input. This property must be set to FALSE before setting or calling specific
++// properties and methods of the object.
++// https://msdn.microsoft.com/en-us/library/windows/desktop/ms701721.aspx
++void InkCollector::Enable(bool aNewState) {
++  if (aNewState != mEnabled) {
++    if (mInkCollector) {
++      if (SUCCEEDED(mInkCollector->put_Enabled(aNewState ? VARIANT_TRUE
++                                                         : VARIANT_FALSE))) {
++        mEnabled = aNewState;
++      } else {
++        NS_WARNING("InkCollector did not change status successfully");
++      }
++    } else {
++      NS_WARNING("InkCollector should be exist");
++    }
++  }
++}
++
++HWND InkCollector::GetTarget() { return mTargetWindow; }
++
++void InkCollector::SetTarget(HWND aTargetWindow) {
++  NS_ASSERTION(aTargetWindow, "aTargetWindow should be exist");
++  if (aTargetWindow && (aTargetWindow != mTargetWindow)) {
++    Initialize();
++    if (mInkCollector) {
++      Enable(false);
++      if (SUCCEEDED(mInkCollector->put_hWnd((LONG_PTR)aTargetWindow))) {
++        mTargetWindow = aTargetWindow;
++      } else {
++        NS_WARNING("InkCollector did not change window property successfully");
++      }
++      Enable(true);
++    }
++  }
++}
++
++void InkCollector::ClearTarget() {
++  if (mTargetWindow && mInkCollector) {
++    Enable(false);
++    if (SUCCEEDED(mInkCollector->put_hWnd(0))) {
++      mTargetWindow = 0;
++    } else {
++      NS_WARNING("InkCollector did not clear window property successfully");
++    }
++  }
++}
++
++uint16_t InkCollector::GetPointerId() { return mPointerId; }
++
++void InkCollector::SetPointerId(uint16_t aPointerId) {
++  mPointerId = aPointerId;
++}
++
++void InkCollector::ClearPointerId() { mPointerId = 0; }
++
++// The display and the digitizer have quite different properties.
++// The display has CursorMustTouch, the mouse pointer alway touches the display
++// surface. The digitizer lists Integrated and HardProximity. When the stylus is
++// in the proximity of the tablet its movements are also detected. An external
++// tablet will only list HardProximity.
++bool InkCollectorEvent::IsHardProximityTablet(IInkTablet* aTablet) const {
++  if (aTablet) {
++    TabletHardwareCapabilities caps;
++    if (SUCCEEDED(aTablet->get_HardwareCapabilities(&caps))) {
++      return (TabletHardwareCapabilities::THWC_HardProximity & caps);
++    }
++  }
++  return false;
++}
++
++HRESULT __stdcall InkCollectorEvent::QueryInterface(REFIID aRiid,
++                                                    void** aObject) {
++  // Validate the input
++  if (!aObject) {
++    return E_POINTER;
++  }
++  HRESULT result = E_NOINTERFACE;
++  // This object supports IUnknown/IDispatch/IInkCollectorEvents
++  if ((IID_IUnknown == aRiid) || (IID_IDispatch == aRiid) ||
++      (DIID__IInkCollectorEvents == aRiid)) {
++    *aObject = this;
++    // AddRef should be called when we give info about interface
++    NS_ADDREF_THIS();
++    result = S_OK;
++  }
++  return result;
++}
++
++HRESULT InkCollectorEvent::Invoke(DISPID aDispIdMember, REFIID /*aRiid*/,
++                                  LCID /*aId*/, WORD /*wFlags*/,
++                                  DISPPARAMS* aDispParams,
++                                  VARIANT* /*aVarResult*/,
++                                  EXCEPINFO* /*aExcepInfo*/,
++                                  UINT* /*aArgErr*/) {
++  switch (aDispIdMember) {
++    case DISPID_ICECursorOutOfRange: {
++      if (aDispParams && aDispParams->cArgs) {
++        CursorOutOfRange(
++            static_cast<IInkCursor*>(aDispParams->rgvarg[0].pdispVal));
++      }
++      break;
++    }
++  }
++  return S_OK;
++}
++
++void InkCollectorEvent::CursorOutOfRange(IInkCursor* aCursor) const {
++  IInkTablet* curTablet = nullptr;
++  if (FAILED(aCursor->get_Tablet(&curTablet))) {
++    return;
++  }
++  // All events should be suppressed except
++  // from tablets with hard proximity.
++  if (!IsHardProximityTablet(curTablet)) {
++    return;
++  }
++  // Notify current target window.
++  if (HWND targetWindow = InkCollector::sInkCollector->GetTarget()) {
++    ::SendMessage(targetWindow, MOZ_WM_PEN_LEAVES_HOVER_OF_DIGITIZER, 0, 0);
++  }
++}
+diff --git a/widget/windows/InkCollector.h b/widget/windows/InkCollector.h
+new file mode 100644
+index 000000000000..803eeb48410f
+--- /dev/null
++++ b/widget/windows/InkCollector.h
+@@ -0,0 +1,102 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
++ * vim: set ts=2 sw=2 et tw=78:
++ * This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
++ */
++
++#ifndef InkCollector_h__
++#define InkCollector_h__
++
++#include <objbase.h>
++#include <msinkaut.h>
++#include "mozilla/StaticPtr.h"
++
++#define MOZ_WM_PEN_LEAVES_HOVER_OF_DIGITIZER WM_USER + 0x83
++
++class InkCollectorEvent final : public _IInkCollectorEvents {
++ public:
++  // IUnknown
++  HRESULT __stdcall QueryInterface(REFIID aRiid, void** aObject);
++  virtual ULONG STDMETHODCALLTYPE AddRef() { return ++mRefCount; }
++  virtual ULONG STDMETHODCALLTYPE Release() {
++    MOZ_ASSERT(mRefCount);
++    if (!--mRefCount) {
++      delete this;
++      return 0;
++    }
++    return mRefCount;
++  }
++
++ protected:
++  // IDispatch
++  STDMETHOD(GetTypeInfoCount)(UINT* aInfo) { return E_NOTIMPL; }
++  STDMETHOD(GetTypeInfo)(UINT aInfo, LCID aId, ITypeInfo** aTInfo) {
++    return E_NOTIMPL;
++  }
++  STDMETHOD(GetIDsOfNames)
++  (REFIID aRiid, LPOLESTR* aStrNames, UINT aNames, LCID aId, DISPID* aDispId) {
++    return E_NOTIMPL;
++  }
++  STDMETHOD(Invoke)
++  (DISPID aDispIdMember, REFIID aRiid, LCID aId, WORD wFlags,
++   DISPPARAMS* aDispParams, VARIANT* aVarResult, EXCEPINFO* aExcepInfo,
++   UINT* aArgErr);
++
++  // InkCollectorEvent
++  void CursorOutOfRange(IInkCursor* aCursor) const;
++  bool IsHardProximityTablet(IInkTablet* aTablet) const;
++
++ private:
++  uint32_t mRefCount = 0;
++
++  ~InkCollectorEvent() = default;
++};
++
++class InkCollector {
++ public:
++  ~InkCollector();
++  void Shutdown();
++
++  HWND GetTarget();
++  void SetTarget(HWND aTargetWindow);
++  void ClearTarget();
++
++  uint16_t GetPointerId();  // 0 shows that there is no existing pen.
++  void SetPointerId(uint16_t aPointerId);
++  void ClearPointerId();
++
++  static mozilla::StaticAutoPtr<InkCollector> sInkCollector;
++
++ protected:
++  void Initialize();
++  void OnInitialize();
++  void Enable(bool aNewState);
++
++ private:
++  RefPtr<IUnknown> mMarshaller;
++  RefPtr<IInkCollector> mInkCollector;
++  RefPtr<IConnectionPoint> mConnectionPoint;
++  RefPtr<InkCollectorEvent> mInkCollectorEvent;
++
++  HWND mTargetWindow = 0;
++  DWORD mCookie = 0;
++  bool mComInitialized = false;
++  bool mEnabled = false;
++
++  // This value holds the previous pointerId of the pen, and is used by the
++  // nsWindow when processing a MOZ_WM_PEN_LEAVES_HOVER_OF_DIGITIZER which
++  // indicates that a pen leaves the digitizer.
++
++  // TODO: If we move our implementation to window pointer input messages, then
++  // we no longer need this value, since the pointerId can be retrieved from the
++  // window message, please refer to
++  // https://msdn.microsoft.com/en-us/library/windows/desktop/hh454916(v=vs.85).aspx
++
++  // NOTE: The pointerId of a pen shouldn't be 0 on a Windows platform, since 0
++  // is reserved of the mouse, please refer to
++  // https://msdn.microsoft.com/en-us/library/windows/desktop/ms703320(v=vs.85).aspx
++  uint16_t mPointerId = 0;
++};
++
++#endif  // InkCollector_h__
+diff --git a/widget/windows/JumpListBuilder.cpp b/widget/windows/JumpListBuilder.cpp
+index d99617f7e536..c3e55417fd98 100644
+--- a/widget/windows/JumpListBuilder.cpp
++++ b/widget/windows/JumpListBuilder.cpp
+@@ -602,6 +602,9 @@ void JumpListBuilder::DoPopulateJumpList(
+     return;
+   }
+ 
++  // Initializes the COM library on the current thread.
++  CoInitialize(nullptr);
++
+   if (aTaskDescriptions.Length()) {
+     RefPtr<IObjectCollection> taskCollection;
+     hr = CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr,
+diff --git a/widget/windows/TSFTextStore.cpp b/widget/windows/TSFTextStore.cpp
+index 6a3eb25e5e8a..cb0aeb147d8a 100644
+--- a/widget/windows/TSFTextStore.cpp
++++ b/widget/windows/TSFTextStore.cpp
+@@ -772,7 +772,7 @@ STDMETHODIMP TSFTextStore::QueryInsert(LONG acpTestStart, LONG acpTestEnd,
+ 
+   // XXX need to adjust to cluster boundary
+   // Assume we are given good offsets for now
+-  if (mComposition.isNothing() &&
++  if (IsWin8OrLater() && mComposition.isNothing() &&
+       ((StaticPrefs::
+             intl_tsf_hack_ms_traditional_chinese_query_insert_result() &&
+         TSFStaticSink::IsMSChangJieOrMSQuickActive()) ||
+@@ -2355,7 +2355,8 @@ bool TSFTextStore::MaybeHackNoErrorLayoutBugs(LONG& aACPStart, LONG& aACPEnd) {
+       }
+       [[fallthrough]];
+     case TextInputProcessorID::MicrosoftChangJie:
+-      if (!StaticPrefs::
++      if (!IsWin8OrLater() ||
++          !StaticPrefs::
+               intl_tsf_hack_ms_traditional_chinese_do_not_return_no_layout_error()) {
+         return false;
+       }
+@@ -2372,7 +2373,8 @@ bool TSFTextStore::MaybeHackNoErrorLayoutBugs(LONG& aACPStart, LONG& aACPEnd) {
+     //      there is stateful cause or race in them.
+     case TextInputProcessorID::MicrosoftPinyin:
+     case TextInputProcessorID::MicrosoftWubi:
+-      if (!StaticPrefs::
++      if (!IsWin8OrLater() ||
++          !StaticPrefs::
+               intl_tsf_hack_ms_simplified_chinese_do_not_return_no_layout_error()) {
+         return false;
+       }
+diff --git a/widget/windows/TSFUtils.cpp b/widget/windows/TSFUtils.cpp
+index 9bdd770d14a4..d03e82b1c2f3 100644
+--- a/widget/windows/TSFUtils.cpp
++++ b/widget/windows/TSFUtils.cpp
+@@ -991,8 +991,9 @@ bool TSFUtils::ShouldSetInputScopeOfURLBarToDefault() {
+     case TextInputProcessorID::MicrosoftPinyinNewExperienceInputStyle:
+     case TextInputProcessorID::MicrosoftOldHangul:
+     case TextInputProcessorID::MicrosoftWubi:
+-    case TextInputProcessorID::MicrosoftIMEForKorean:
+       return true;
++    case TextInputProcessorID::MicrosoftIMEForKorean:
++      return IsWin8OrLater();
+     default:
+       return false;
+   }
+diff --git a/widget/windows/ToastNotification.cpp b/widget/windows/ToastNotification.cpp
+index 90d40c4da791..55e4c53d377e 100644
+--- a/widget/windows/ToastNotification.cpp
++++ b/widget/windows/ToastNotification.cpp
+@@ -23,6 +23,7 @@
+ #include "mozilla/Logging.h"
+ #include "mozilla/Services.h"
+ #include "mozilla/WidgetUtils.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsAppRunner.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsCOMPtr.h"
+@@ -37,6 +38,7 @@
+ #include "prenv.h"
+ #include "ToastNotificationHandler.h"
+ #include "ToastNotificationHeaderOnlyUtils.h"
++#include "WinTaskbar.h"
+ 
+ namespace mozilla {
+ namespace widget {
+@@ -65,6 +67,10 @@ ToastNotification::ToastNotification() = default;
+ ToastNotification::~ToastNotification() = default;
+ 
+ nsresult ToastNotification::Init() {
++  if (!IsWin8OrLater()) {
++    return NS_ERROR_NOT_IMPLEMENTED;
++  }
++
+   if (!PR_GetEnv("XPCSHELL_TEST_PROFILE_DIR")) {
+     // Windows Toast Notification requires AppId.  But allow `xpcshell` to
+     // create the service to test other functionality.
+@@ -93,6 +99,18 @@ bool ToastNotification::EnsureAumidRegistered() {
+     return true;
+   }
+ 
++  // Fall back to start menu shortcut for Windows 8; toast AUMID registration in
++  // the registry only works in Windows 10+.
++  if (!IsWin10OrLater()) {
++    nsAutoString aumid;
++    if (!WinTaskbar::GetAppUserModelID(aumid)) {
++      return false;
++    }
++
++    mAumid = Some(aumid);
++    return true;
++  }
++
+   nsAutoString installHash;
+   nsresult rv = gDirServiceProvider->GetInstallHash(installHash);
+   NS_ENSURE_SUCCESS(rv, false);
+diff --git a/widget/windows/ToastNotificationHandler.cpp b/widget/windows/ToastNotificationHandler.cpp
+index 41cbc8183e34..9827ce410588 100644
+--- a/widget/windows/ToastNotificationHandler.cpp
++++ b/widget/windows/ToastNotificationHandler.cpp
+@@ -480,7 +480,7 @@ ComPtr<IXmlDocument> ToastNotificationHandler::CreateToastXmlDocument() {
+   // Use newer toast layout for system (chrome-privileged) toasts. This gains us
+   // UI elements such as new image placement options (default image placement is
+   // larger and inline) and buttons.
+-  if (mIsSystemPrincipal) {
++  if (IsWin10OrLater() && mIsSystemPrincipal) {
+     ComPtr<IXmlNodeList> bindingElements;
+     hr = toastXml->GetElementsByTagName(HStringReference(L"binding").Get(),
+                                         &bindingElements);
+@@ -770,16 +770,19 @@ bool ToastNotificationHandler::CreateWindowsNotificationFromXml(
+       &mFailedToken);
+   NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+ 
+-  ComPtr<IToastNotification2> notification2;
+-  hr = mNotification.As(&notification2);
+-  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
++  // `IToastNotification2` not supported on versions older than Windows 10.
++  if (IsWin10OrLater()) {
++    ComPtr<IToastNotification2> notification2;
++    hr = mNotification.As(&notification2);
++    NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+ 
+-  HString hTag;
+-  hr = hTag.Set(mWindowsTag.get());
+-  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
++    HString hTag;
++    hr = hTag.Set(mWindowsTag.get());
++    NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+ 
+-  hr = notification2->put_Tag(hTag.Get());
+-  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
++    hr = notification2->put_Tag(hTag.Get());
++    NS_ENSURE_TRUE(SUCCEEDED(hr), false);
++  }
+ 
+   ComPtr<IToastNotificationManagerStatics> toastNotificationManagerStatics =
+       GetToastNotificationManagerStatics();
+@@ -989,20 +992,24 @@ HRESULT
+ ToastNotificationHandler::OnDismiss(
+     const ComPtr<IToastNotification>& notification,
+     const ComPtr<IToastDismissedEventArgs>& aArgs) {
+-  ComPtr<IToastNotification2> notification2;
+-  HRESULT hr = notification.As(&notification2);
+-  NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
+-
+-  HString tagHString;
+-  hr = notification2->get_Tag(tagHString.GetAddressOf());
+-  NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
+-
+-  unsigned int len;
+-  const wchar_t* tagPtr = tagHString.GetRawBuffer(&len);
+-  nsAutoString tag(tagPtr, len);
+-
+-  if (FindNotificationByTag(tag, mAumid)) {
+-    return S_OK;
++  // Multiple dismiss events only occur on Windows 10 and later, prior versions
++  // of Windows didn't include `IToastNotification2`.
++  if (IsWin10OrLater()) {
++    ComPtr<IToastNotification2> notification2;
++    HRESULT hr = notification.As(&notification2);
++    NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
++
++    HString tagHString;
++    hr = notification2->get_Tag(tagHString.GetAddressOf());
++    NS_ENSURE_TRUE(SUCCEEDED(hr), E_FAIL);
++
++    unsigned int len;
++    const wchar_t* tagPtr = tagHString.GetRawBuffer(&len);
++    nsAutoString tag(tagPtr, len);
++
++    if (FindNotificationByTag(tag, mAumid)) {
++      return S_OK;
++    }
+   }
+ 
+   HandleCloseFromSystem();
+diff --git a/widget/windows/WinHeaderOnlyUtils.h b/widget/windows/WinHeaderOnlyUtils.h
+index 7a09405eaf6a..d0fe22e08ee4 100644
+--- a/widget/windows/WinHeaderOnlyUtils.h
++++ b/widget/windows/WinHeaderOnlyUtils.h
+@@ -21,6 +21,7 @@
+ #include "mozilla/NotNull.h"
+ #include "mozilla/ResultVariant.h"
+ #include "mozilla/UniquePtr.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsWindowsHelpers.h"
+ 
+ #if defined(MOZILLA_INTERNAL_API)
+@@ -509,13 +510,15 @@ class FileUniqueId final {
+  private:
+   void GetId(const nsAutoHandle& aFile) {
+     FILE_ID_INFO fileIdInfo = {};
+-    if (::GetFileInformationByHandleEx(aFile.get(), FileIdInfo, &fileIdInfo,
+-                                       sizeof(fileIdInfo))) {
+-      mId = fileIdInfo;
+-      return;
++    if (IsWin8OrLater()) {
++      if (::GetFileInformationByHandleEx(aFile.get(), FileIdInfo, &fileIdInfo,
++                                         sizeof(fileIdInfo))) {
++        mId = fileIdInfo;
++        return;
++      }
++      // Only NTFS and ReFS support FileIdInfo. So we have to fallback if
++      // GetFileInformationByHandleEx failed.
+     }
+-    // Only NTFS and ReFS support FileIdInfo. So we have to fallback if
+-    // GetFileInformationByHandleEx failed.
+ 
+     BY_HANDLE_FILE_INFORMATION info = {};
+     if (!::GetFileInformationByHandle(aFile.get(), &info)) {
+@@ -736,6 +739,10 @@ inline LauncherResult<TOKEN_ELEVATION_TYPE> GetElevationType(
+ }
+ 
+ inline bool HasPackageIdentity() {
++  if (!IsWin8OrLater()) {
++    return false;
++  }
++
+   HMODULE kernel32Dll = ::GetModuleHandleW(L"kernel32");
+   if (!kernel32Dll) {
+     return false;
+diff --git a/widget/windows/WinIMEHandler.cpp b/widget/windows/WinIMEHandler.cpp
+index 95788c1c685c..c5ccec51a434 100644
+--- a/widget/windows/WinIMEHandler.cpp
++++ b/widget/windows/WinIMEHandler.cpp
+@@ -707,13 +707,13 @@ bool IMEHandler::IsOnScreenKeyboardSupported() {
+     return true;
+   }
+ #endif  // NIGHTLY_BUILD
+-  if (!Preferences::GetBool(kOskEnabled, true) ||
++  if (!IsWin8OrLater() || !Preferences::GetBool(kOskEnabled, true) ||
+       !IMEHandler::NeedOnScreenKeyboard()) {
+     return false;
+   }
+ 
+   // On Windows 11, we ignore tablet mode (see bug 1722208)
+-  if (!IsWin11OrLater()) {
++  if (IsWin10OrLater() && !IsWin11OrLater()) {
+     // On Windows 10 we require tablet mode, unless the user has set the
+     // relevant setting to enable the on-screen keyboard in desktop mode.
+     if (!IsInWin10TabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
+@@ -745,6 +745,10 @@ void IMEHandler::MaybeDismissOnScreenKeyboard(nsWindow* aWindow, Sync aSync) {
+     OSKVRManager::DismissOnScreenKeyboard();
+   }
+ #endif  // NIGHTLY_BUILD
++  if (!IsWin8OrLater()) {
++    return;
++  }
++
+   if (aSync == Sync::Yes) {
+     DismissOnScreenKeyboard(aWindow);
+     return;
+@@ -783,6 +787,12 @@ bool IMEHandler::WStringStartsWithCaseInsensitive(const std::wstring& aHaystack,
+ // an on-screen keyboard for text input.
+ // static
+ bool IMEHandler::NeedOnScreenKeyboard() {
++  // This function is only supported for Windows 8 and up.
++  if (!IsWin8OrLater()) {
++    Preferences::SetString(kOskDebugReason, L"IKPOS: Requires Win8+.");
++    return false;
++  }
++
+   if (!Preferences::GetBool(kOskDetectPhysicalKeyboard, true)) {
+     Preferences::SetString(kOskDebugReason, L"IKPOS: Detection disabled.");
+     return true;
+diff --git a/widget/windows/WinPointerEvents.cpp b/widget/windows/WinPointerEvents.cpp
+index 24bc84792157..5da1017a1f46 100644
+--- a/widget/windows/WinPointerEvents.cpp
++++ b/widget/windows/WinPointerEvents.cpp
+@@ -12,6 +12,7 @@
+ #include "WinUtils.h"
+ #include "mozilla/MouseEvents.h"
+ #include "mozilla/StaticPrefs_dom.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/dom/MouseEventBinding.h"
+ 
+ using namespace mozilla;
+@@ -29,6 +30,10 @@ WinPointerEvents::WinPointerEvents() { InitLibrary(); }
+ /* Load and shutdown */
+ void WinPointerEvents::InitLibrary() {
+   MOZ_ASSERT(XRE_IsParentProcess());
++  if (!IsWin8OrLater()) {
++    // Only Win8 or later supports WM_POINTER*
++    return;
++  }
+   if (getPointerType) {
+     // Return if we already initialized the PointerEvent related interfaces
+     return;
+@@ -104,6 +109,12 @@ bool WinPointerEvents::GetPointerPenInfo(uint32_t aPointerId,
+   return getPointerPenInfo(aPointerId, aPenInfo);
+ }
+ 
++bool WinPointerEvents::ShouldEnableInkCollector() {
++  // We need InkCollector on Win7. For Win8 or later, we handle WM_POINTER* for
++  // pen.
++  return !IsWin8OrLater();
++}
++
+ void WinPointerEvents::GetPointerFrameTouchInfo(
+     uint32_t pointerId, nsTArray<POINTER_TOUCH_INFO>& aTouchInfoArray) {
+   uint32_t pointerCount = 0;
+diff --git a/widget/windows/WinPointerEvents.h b/widget/windows/WinPointerEvents.h
+index 97b14f5818ac..c657b631ddd4 100644
+--- a/widget/windows/WinPointerEvents.h
++++ b/widget/windows/WinPointerEvents.h
+@@ -43,6 +43,7 @@ class WinPointerEvents final {
+   POINTER_INPUT_TYPE GetPointerType(uint32_t aPointerId);
+   bool GetPointerInfo(uint32_t aPointerId, POINTER_INFO* aPointerInfo);
+   bool GetPointerPenInfo(uint32_t aPointerId, POINTER_PEN_INFO* aPenInfo);
++  bool ShouldEnableInkCollector();
+   void GetPointerFrameTouchInfo(uint32_t pointerId,
+                                 nsTArray<POINTER_TOUCH_INFO>& aTouchInfoArray);
+   bool ShouldRollupOnPointerEvent(UINT aMsg, WPARAM aWParam);
+diff --git a/widget/windows/WinUtils.cpp b/widget/windows/WinUtils.cpp
+index 9565a8a5e7f8..69d0cf14fa48 100644
+--- a/widget/windows/WinUtils.cpp
++++ b/widget/windows/WinUtils.cpp
+@@ -28,6 +28,7 @@
+ #include "mozilla/SchedulerGroup.h"
+ #include "mozilla/WindowsVersion.h"
+ #include "mozilla/WinHeaderOnlyUtils.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsIContentPolicy.h"
+ #include "WindowsUIUtils.h"
+ #include "nsContentUtils.h"
+@@ -94,7 +95,7 @@ void WinUtils::Initialize() {
+   // Dpi-Awareness is not supported with Win32k Lockdown enabled, so we don't
+   // initialize DPI-related members and assert later that nothing accidently
+   // uses these static members
+-  if (!IsWin32kLockedDown()) {
++  if (IsWin10OrLater() && !IsWin32kLockedDown()) {
+     HMODULE user32Dll = ::GetModuleHandleW(L"user32");
+     if (user32Dll) {
+       auto getThreadDpiAwarenessContext =
+@@ -123,7 +124,9 @@ void WinUtils::Initialize() {
+     }
+   }
+ 
+-  sHasPackageIdentity = mozilla::HasPackageIdentity();
++  if (IsWin8OrLater()) {
++    sHasPackageIdentity = mozilla::HasPackageIdentity();
++  }
+ }
+ 
+ // static
+@@ -1557,6 +1560,10 @@ static bool IsTabletDevice() {
+   // - The device has a touch screen.
+   // - It is used as a tablet which means that it has no keyboard connected.
+ 
++  if (!IsWin8OrLater()) {
++    return false;
++  }
++
+   if (WindowsUIUtils::GetInWin10TabletMode()) {
+     return true;
+   }
+@@ -2151,6 +2158,10 @@ static LONG SetRelativeScaleStep(LUID aAdapterId, int32_t aRelativeScaleStep) {
+ }
+ 
+ nsresult WinUtils::SetHiDPIMode(bool aHiDPI) {
++  if (!IsWin10OrLater()) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
+   auto config = GetDisplayConfig();
+   if (!config) {
+     return NS_ERROR_NOT_AVAILABLE;
+@@ -2206,6 +2217,10 @@ nsresult WinUtils::SetHiDPIMode(bool aHiDPI) {
+ }
+ 
+ nsresult WinUtils::RestoreHiDPIMode() {
++  if (!IsWin10OrLater()) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
+   if (sCurRelativeScaleStep == std::numeric_limits<int>::max()) {
+     // The DPI setting hasn't been changed.
+     return NS_ERROR_UNEXPECTED;
+diff --git a/widget/windows/WinWindowOcclusionTracker.cpp b/widget/windows/WinWindowOcclusionTracker.cpp
+index a318b20e1321..d7395a7e40ce 100644
+--- a/widget/windows/WinWindowOcclusionTracker.cpp
++++ b/widget/windows/WinWindowOcclusionTracker.cpp
+@@ -854,6 +854,10 @@ void WinWindowOcclusionTracker::WindowOcclusionCalculator::Initialize() {
+   MOZ_ASSERT(!mVirtualDesktopManager);
+   CALC_LOG(LogLevel::Info, "Initialize()");
+ 
++  if (!IsWin10OrLater()) {
++    return;
++  }
++
+   RefPtr<IVirtualDesktopManager> desktopManager;
+   HRESULT hr = ::CoCreateInstance(
+       CLSID_VirtualDesktopManager, NULL, CLSCTX_INPROC_SERVER,
+diff --git a/widget/windows/WindowsSMTCProvider.cpp b/widget/windows/WindowsSMTCProvider.cpp
+index 961ef18270d0..499ac7e73cf5 100644
+--- a/widget/windows/WindowsSMTCProvider.cpp
++++ b/widget/windows/WindowsSMTCProvider.cpp
+@@ -18,6 +18,7 @@
+ #  include "mozilla/Logging.h"
+ #  include "mozilla/Maybe.h"
+ #  include "mozilla/WidgetUtils.h"
++#  include "mozilla/WindowsVersion.h"
+ #  include "mozilla/ScopeExit.h"
+ #  include "mozilla/dom/MediaControlUtils.h"
+ #  include "mozilla/media/MediaUtils.h"
+@@ -135,6 +136,11 @@ bool WindowsSMTCProvider::Open() {
+   LOG("Opening Source");
+   MOZ_ASSERT(!mInitialized);
+ 
++  if (!IsWin8Point1OrLater()) {
++    LOG("Windows 8.1 or later is required for Media Key Support");
++    return false;
++  }
++
+   if (!InitDisplayAndControls()) {
+     LOG("Failed to initialize the SMTC and its display");
+     return false;
+diff --git a/widget/windows/WindowsUIUtils.cpp b/widget/windows/WindowsUIUtils.cpp
+index 16f92c950383..623e4ee23fcd 100644
+--- a/widget/windows/WindowsUIUtils.cpp
++++ b/widget/windows/WindowsUIUtils.cpp
+@@ -209,6 +209,11 @@ static IInspectable* GetUISettings() {
+   // expected, sigh.
+   static StaticRefPtr<IInspectable> sUiSettingsAsInspectable;
+ 
++  if (!IsWin10OrLater()) {
++    // Windows.UI.ViewManagement.UISettings is Win10+ only.
++    return nullptr;
++  }
++
+   if (!sUiSettingsAsInspectable) {
+     ComPtr<IInspectable> uiSettingsAsInspectable;
+     ::RoActivateInstance(
+@@ -462,6 +467,10 @@ void WindowsUIUtils::UpdateInWin10TabletMode() {
+   MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
+ 
+ #ifndef __MINGW32__
++  if (!IsWin10OrLater()) {
++    return;
++  }
++
+   nsresult rv;
+   nsCOMPtr<nsIWindowMediator> winMediator(
+       do_GetService(NS_WINDOWMEDIATOR_CONTRACTID, &rv));
+@@ -771,6 +780,10 @@ Result<HStringUniquePtr, HRESULT> ConvertToWindowsString(
+ 
+ static Result<Ok, nsresult> RequestShare(
+     std::function<HRESULT(IDataRequestedEventArgs* pArgs)>&& aCallback) {
++  if (!IsWin10OrLater()) {
++    return Err(NS_ERROR_FAILURE);
++  }
++
+   HWND hwnd = GetForegroundWindow();
+   if (!hwnd) {
+     return Err(NS_ERROR_FAILURE);
+diff --git a/widget/windows/docs/blocklist.rst b/widget/windows/docs/blocklist.rst
+index 34b24a1fe2e5..c0d28361fc9e 100644
+--- a/widget/windows/docs/blocklist.rst
++++ b/widget/windows/docs/blocklist.rst
+@@ -123,6 +123,8 @@ Parameters
+ |           |   - A tuple consisting of four digits                                          |
+ |           |   - A 32-bit integer representing a Unix timestamp with PETimeStamp            |
+ +-----------+--------------------------------------------------------------------------------+
++| Flags     | BLOCK_WIN8_AND_OLDER \| BLOCK_WIN7_AND_OLDER                                   |
+++-----------+--------------------------------------------------------------------------------+
+ 
+ Variable
+ ********
+@@ -173,6 +175,15 @@ To specify a version, you can use either of the following formats:
+ - | A 32-bit integer representing a Unix timestamp with PETimeStamp. This is compared to an integer of IMAGE_FILE_HEADER::TimeDateStamp.
+   | Example: PETimeStamp(0x12345678)
+ 
++Flags
++*****
++
++If you know a problem happens only on older Windows versions, you can use one of
++the following flags to narrow down the affected platform.
++
++- BLOCK_WIN8_AND_OLDER
++- BLOCK_WIN7_AND_OLDER
++
+ 
+ -----------------
+ Technical details
+diff --git a/widget/windows/moz.build b/widget/windows/moz.build
+index 1c43d388a70f..53fafe0c068c 100644
+--- a/widget/windows/moz.build
++++ b/widget/windows/moz.build
+@@ -75,6 +75,7 @@ UNIFIED_SOURCES += [
+     "GfxInfo.cpp",
+     "IEnumFE.cpp",
+     "IMMHandler.cpp",
++    "InkCollector.cpp",
+     "JumpListBuilder.cpp",
+     "KeyboardLayout.cpp",
+     "LSPAnnotator.cpp",
+diff --git a/widget/windows/nsAppShell.cpp b/widget/windows/nsAppShell.cpp
+index 233108d44e02..48aff644b1ee 100644
+--- a/widget/windows/nsAppShell.cpp
++++ b/widget/windows/nsAppShell.cpp
+@@ -32,6 +32,7 @@
+ #include "mozilla/NativeNt.h"
+ #include "mozilla/WindowsDiagnostics.h"
+ #include "mozilla/WindowsProcessMitigations.h"
++#include "mozilla/WindowsVersion.h"
+ 
+ #include <winternl.h>
+ 
+@@ -221,13 +222,66 @@ class WinWakeLockListener final : public nsIDOMMozWakeLockListener {
+   }
+ };
+ NS_IMPL_ISUPPORTS(WinWakeLockListener, nsIDOMMozWakeLockListener)
++
++// This wakelock is used for the version older than Windows7.
++class LegacyWinWakeLockListener final : public nsIDOMMozWakeLockListener {
++ public:
++  NS_DECL_ISUPPORTS
++  LegacyWinWakeLockListener() { MOZ_ASSERT(XRE_IsParentProcess()); }
++
++ private:
++  ~LegacyWinWakeLockListener() {}
++
++  NS_IMETHOD Callback(const nsAString& aTopic,
++                      const nsAString& aState) override {
++    WAKE_LOCK_LOG("WinWakeLock: topic=%s, state=%s",
++                  NS_ConvertUTF16toUTF8(aTopic).get(),
++                  NS_ConvertUTF16toUTF8(aState).get());
++    if (!aTopic.EqualsASCII("screen") && !aTopic.EqualsASCII("audio-playing") &&
++        !aTopic.EqualsASCII("video-playing")) {
++      return NS_OK;
++    }
++
++    // Check what kind of lock we will require, if both display lock and non
++    // display lock are needed, we would require display lock because it has
++    // higher priority.
++    if (aTopic.EqualsASCII("audio-playing")) {
++      mRequireForNonDisplayLock = aState.EqualsASCII("locked-foreground") ||
++                                  aState.EqualsASCII("locked-background");
++    } else if (aTopic.EqualsASCII("screen") ||
++               aTopic.EqualsASCII("video-playing")) {
++      mRequireForDisplayLock = aState.EqualsASCII("locked-foreground");
++    }
++
++    if (mRequireForDisplayLock) {
++      WAKE_LOCK_LOG("WinWakeLock: Request display lock");
++      SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_CONTINUOUS);
++    } else if (mRequireForNonDisplayLock) {
++      WAKE_LOCK_LOG("WinWakeLock: Request non-display lock");
++      SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_CONTINUOUS);
++    } else {
++      WAKE_LOCK_LOG("WinWakeLock: reset lock");
++      SetThreadExecutionState(ES_CONTINUOUS);
++    }
++    return NS_OK;
++  }
++
++  bool mRequireForDisplayLock = false;
++  bool mRequireForNonDisplayLock = false;
++};
++
++NS_IMPL_ISUPPORTS(LegacyWinWakeLockListener, nsIDOMMozWakeLockListener)
+ StaticRefPtr<nsIDOMMozWakeLockListener> sWakeLockListener;
+ 
+ static void AddScreenWakeLockListener() {
+   nsCOMPtr<nsIPowerManagerService> sPowerManagerService =
+       do_GetService(POWERMANAGERSERVICE_CONTRACTID);
+   if (sPowerManagerService) {
+-    sWakeLockListener = new WinWakeLockListener();
++    if (IsWin7SP1OrLater()) {
++      sWakeLockListener = new WinWakeLockListener();
++    } else {
++      sWakeLockListener = new LegacyWinWakeLockListener();
++    }
+     sPowerManagerService->AddWakeLockListener(sWakeLockListener);
+   } else {
+     NS_WARNING(
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+index d9ecf5d469f5..7a2b07afac55 100644
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -12,6 +12,7 @@
+ #include "nsWindowsHelpers.h"
+ #include "WinUtils.h"
+ #include "WindowsUIUtils.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/FontPropertyTypes.h"
+ #include "mozilla/glean/WidgetWindowsMetrics.h"
+ #include "mozilla/intl/LocaleService.h"
+@@ -648,6 +649,11 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+       aResult = GetTooltipOffsetVertical();
+       break;
+     case IntID::SystemUsesDarkTheme: {
++      if (!IsWin10OrLater()) {
++        aResult = false;
++        break;
++      }
++
+       if (mHighContrastOn) {
+         aResult =
+             LookAndFeel::IsDarkColor(GetColorForSysColorIndex(COLOR_WINDOW));
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index b9430a1b674a..99407ccf9fb0 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -18,6 +18,7 @@
+ #include "mozilla/RelativeLuminanceUtils.h"
+ #include "mozilla/StaticPrefs_layout.h"
+ #include "mozilla/StaticPrefs_widget.h"
++#include "mozilla/WindowsVersion.h"
+ #include "mozilla/dom/XULButtonElement.h"
+ #include "nsColor.h"
+ #include "nsComboboxControlFrame.h"
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 39cfb411dd97..89d6d8edd364 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -203,6 +203,8 @@
+ 
+ #include <d3d11.h>
+ 
++#include "InkCollector.h"
++
+ // ERROR from wingdi.h (below) gets undefined by some code.
+ // #define ERROR               0
+ // #define RGN_ERROR ERROR
+@@ -349,7 +351,8 @@ static void RegisterWindowClass(const wchar_t* aClassName, UINT aExtraStyle,
+ // Global event hook for window cloaking. Never deregistered.
+ //  - `Nothing` if not yet set.
+ //  - `Some(nullptr)` if no attempt should be made to set it.
+-static mozilla::Maybe<HWINEVENTHOOK> sWinCloakEventHook = Nothing();
++static mozilla::Maybe<HWINEVENTHOOK> sWinCloakEventHook =
++    IsWin8OrLater() ? Nothing() : Some(HWINEVENTHOOK(nullptr));
+ static mozilla::LazyLogModule sCloakingLog("DWMCloaking");
+ 
+ namespace mozilla {
+@@ -623,6 +626,10 @@ class TIPMessageHandler {
+   }
+ 
+   static void Initialize() {
++    if (!IsWin8OrLater()) {
++      return;
++    }
++
+     if (sInstance) {
+       return;
+     }
+@@ -656,6 +663,16 @@ class TIPMessageHandler {
+                                ::GetCurrentThreadId());
+     NS_WARNING_ASSERTION(mHook, "SetWindowsHookEx(WH_GETMESSAGE) failed");
+ 
++    // On touchscreen devices, tiptsf.dll will have been loaded when STA COM was
++    // first initialized.
++    if (!IsWin10OrLater() && GetModuleHandle(L"tiptsf.dll") &&
++        !sProcessCaretEventsStub) {
++      sTipTsfInterceptor.Init("tiptsf.dll");
++      DebugOnly<bool> ok = sProcessCaretEventsStub.Set(
++          sTipTsfInterceptor, "ProcessCaretEvents", &ProcessCaretEventsHook);
++      MOZ_ASSERT(ok);
++    }
++
+     if (!sSendMessageTimeoutWStub) {
+       sUser32Intercept.Init("user32.dll");
+       DebugOnly<bool> hooked = sSendMessageTimeoutWStub.Set(
+@@ -702,6 +719,16 @@ class TIPMessageHandler {
+     return ::CallNextHookEx(nullptr, aCode, aWParam, aLParam);
+   }
+ 
++  static void CALLBACK ProcessCaretEventsHook(HWINEVENTHOOK aWinEventHook,
++                                              DWORD aEvent, HWND aHwnd,
++                                              LONG aObjectId, LONG aChildId,
++                                              DWORD aGeneratingTid,
++                                              DWORD aEventTime) {
++    A11yInstantiationBlocker block;
++    sProcessCaretEventsStub(aWinEventHook, aEvent, aHwnd, aObjectId, aChildId,
++                            aGeneratingTid, aEventTime);
++  }
++
+   static LRESULT WINAPI SendMessageTimeoutWHook(HWND aHwnd, UINT aMsgCode,
+                                                 WPARAM aWParam, LPARAM aLParam,
+                                                 UINT aFlags, UINT aTimeout,
+@@ -727,6 +754,9 @@ class TIPMessageHandler {
+     return static_cast<LRESULT>(TRUE);
+   }
+ 
++  static WindowsDllInterceptor sTipTsfInterceptor;
++  static WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
++      sProcessCaretEventsStub;
+   static WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
+       sSendMessageTimeoutWStub;
+   static StaticAutoPtr<TIPMessageHandler> sInstance;
+@@ -736,6 +766,9 @@ class TIPMessageHandler {
+   uint32_t mA11yBlockCount;
+ };
+ 
++WindowsDllInterceptor TIPMessageHandler::sTipTsfInterceptor;
++WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
++    TIPMessageHandler::sProcessCaretEventsStub;
+ WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
+     TIPMessageHandler::sSendMessageTimeoutWStub;
+ StaticAutoPtr<TIPMessageHandler> TIPMessageHandler::sInstance;
+@@ -767,6 +800,10 @@ class InitializeVirtualDesktopManagerTask : public Task {
+ #endif
+ 
+   virtual TaskResult Run() override {
++    if (!IsWin10OrLater()) {
++      return TaskResult::Complete;
++    }
++
+     RefPtr<IVirtualDesktopManager> desktopManager;
+     HRESULT hr = ::CoCreateInstance(
+         CLSID_VirtualDesktopManager, NULL, CLSCTX_INPROC_SERVER,
+@@ -847,6 +884,9 @@ nsWindow::nsWindow()
+     NS_ASSERTION(sIsOleInitialized, "***** OLE is not initialized!\n");
+     MouseScrollHandler::Initialize();
+     RedirectedKeyDownMessageManager::Forget();
++    if (mPointerEvents.ShouldEnableInkCollector()) {
++      InkCollector::sInkCollector = new InkCollector();
++    }
+   }  // !sInstanceCount
+ 
+   sInstanceCount++;
+@@ -871,6 +911,10 @@ nsWindow::~nsWindow() {
+ 
+   // Global shutdown
+   if (sInstanceCount == 0) {
++    if (InkCollector::sInkCollector) {
++      InkCollector::sInkCollector->Shutdown();
++      InkCollector::sInkCollector = nullptr;
++    }
+     sCurrentCursor = {};
+     if (sIsOleInitialized) {
+       // When we reach here, IMEHandler::Terminate() should've already been
+@@ -959,6 +1003,13 @@ void nsWindow::RecreateDirectManipulationIfNeeded() {
+     return;
+   }
+ 
++  if (!IsWin10OrLater()) {
++    // Chrome source said the Windows Direct Manipulation implementation had
++    // important bugs until Windows 10 (although IE on Windows 8.1 seems to use
++    // Direct Manipulation).
++    return;
++  }
++
+   mDmOwner = MakeUnique<DirectManipulationOwner>(this);
+ 
+   LayoutDeviceIntRect bounds = mBounds;
+@@ -1036,7 +1087,25 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+       .ex = static_cast<LONG_PTR>(WindowExStyle()),
+   };
+ 
+-  if (mWindowType != WindowType::Popup) {
++  // When window is PiP window on Windows7, WS_EX_COMPOSITED is set to suppress
++  // flickering during resizing with hardware acceleration.
++  bool isPIPWindow = aInitData.mPiPType != PiPType::NoPiP;
++  if (isPIPWindow && !IsWin8OrLater() &&
++      gfxConfig::IsEnabled(gfx::Feature::HW_COMPOSITING) &&
++      WidgetTypeSupportsAcceleration()) {
++    desiredStyles.ex |= WS_EX_COMPOSITED;
++  }
++
++  if (mWindowType == WindowType::Popup) {
++    if (!IsWin8OrLater() && HasBogusPopupsDropShadowOnMultiMonitor() &&
++        ShouldUseOffMainThreadCompositing()) {
++      desiredStyles.ex |= WS_EX_COMPOSITED;
++    }
++    if (mTransparencyMode == TransparencyMode::Opaque &&
++        !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++      desiredStyles.ex &= ~WS_EX_COMPOSITED;
++    }
++  } else {
+     // See if the caller wants to explicitly set clip children and clip siblings
+     if (aInitData.mClipChildren) {
+       desiredStyles.style |= WS_CLIPCHILDREN;
+@@ -2756,6 +2825,9 @@ void nsWindow::UpdateGetWindowInfoCaptionStatus(bool aActiveCaption) {
+ }
+ 
+ void nsWindow::SetColorScheme(const Maybe<ColorScheme>& aScheme) {
++  if (!IsWin10OrLater()) {
++    return;
++  }
+   BOOL dark =
+       aScheme.valueOrFrom(LookAndFeel::SystemColorScheme) == ColorScheme::Dark;
+   DwmSetWindowAttribute(mWnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, &dark,
+@@ -4318,6 +4390,17 @@ bool nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
+   uint32_t pointerId =
+       aPointerInfo ? aPointerInfo->pointerId : MOUSE_POINTERID();
+ 
++  // Since it is unclear whether a user will use the digitizer,
++  // Postpone initialization until first PEN message will be found.
++  if (MouseEvent_Binding::MOZ_SOURCE_PEN == aInputSource
++      // Messages should be only at topLevel window.
++      && WindowType::TopLevel == mWindowType
++      // Currently this scheme is used only when pointer events is enabled.
++      && InkCollector::sInkCollector) {
++    InkCollector::sInkCollector->SetTarget(mWnd);
++    InkCollector::sInkCollector->SetPointerId(pointerId);
++  }
++
+   switch (aEventMessage) {
+     case eMouseDown:
+       // If the mouse was pressed down in the nonclient region, we do not
+@@ -5461,6 +5544,21 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
+                          MouseButton::ePrimary, MOUSE_INPUT_SOURCE());
+     } break;
+ 
++    case MOZ_WM_PEN_LEAVES_HOVER_OF_DIGITIZER: {
++      LPARAM pos = lParamToClient(::GetMessagePos());
++      MOZ_ASSERT(InkCollector::sInkCollector);
++      uint16_t pointerId = InkCollector::sInkCollector->GetPointerId();
++      if (pointerId != 0) {
++        WinPointerInfo pointerInfo;
++        pointerInfo.pointerId = pointerId;
++        DispatchMouseEvent(eMouseExitFromWidget, wParam, pos, false,
++                           MouseButton::ePrimary,
++                           MouseEvent_Binding::MOZ_SOURCE_PEN, &pointerInfo);
++        InkCollector::sInkCollector->ClearTarget();
++        InkCollector::sInkCollector->ClearPointerId();
++      }
++    } break;
++
+     case WM_CONTEXTMENU: {
+       // If the context menu is brought up by a touch long-press, then
+       // the APZ code is responsible for dealing with this, so we don't
+@@ -7324,6 +7422,7 @@ void nsWindow::OnDPIChanged(int32_t x, int32_t y, int32_t width,
+ /* static */
+ void nsWindow::OnCloakEvent(HWND aWnd, bool aCloaked) {
+   MOZ_ASSERT(NS_IsMainThread());
++  MOZ_ASSERT(IsWin8OrLater());
+ 
+   const char* const kEventName = aCloaked ? "CLOAKED" : "UNCLOAKED";
+   nsWindow* pWin = WinUtils::GetNSWindowPtr(aWnd);
+@@ -9049,6 +9148,25 @@ nsresult nsWindow::RestoreHiDPIMode() { return WinUtils::RestoreHiDPIMode(); }
+ mozilla::Maybe<UINT> nsWindow::GetHiddenTaskbarEdge() {
+   HMONITOR windowMonitor = ::MonitorFromWindow(mWnd, MONITOR_DEFAULTTONEAREST);
+ 
++  if (!IsWin8OrLater()) {
++    // Per-monitor taskbar information is not available.
++    APPBARDATA appBarData;
++    appBarData.cbSize = sizeof(appBarData);
++    UINT taskbarState = SHAppBarMessage(ABM_GETSTATE, &appBarData);
++    if (ABS_AUTOHIDE & taskbarState) {
++      appBarData.hWnd = FindWindow(L"Shell_TrayWnd", nullptr);
++      if (appBarData.hWnd) {
++        HMONITOR taskbarMonitor =
++            ::MonitorFromWindow(appBarData.hWnd, MONITOR_DEFAULTTOPRIMARY);
++        if (taskbarMonitor == windowMonitor) {
++          SHAppBarMessage(ABM_GETTASKBARPOS, &appBarData);
++          return Some(appBarData.uEdge);
++        }
++      }
++    }
++    return Nothing();
++  }
++
+   // Check all four sides of our monitor for an appbar.  Skip any that aren't
+   // the system taskbar.
+   MONITORINFO mi;
+diff --git a/widget/windows/nsWindowTaskbarConcealer.cpp b/widget/windows/nsWindowTaskbarConcealer.cpp
+index de7dc893ba5e..0f98912bcd94 100644
+--- a/widget/windows/nsWindowTaskbarConcealer.cpp
++++ b/widget/windows/nsWindowTaskbarConcealer.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "mozilla/Logging.h"
+ #include "mozilla/StaticPrefs_widget.h"
++#include "mozilla/WindowsVersion.h"
+ #include "WinUtils.h"
+ 
+ using namespace mozilla;
+@@ -273,6 +274,69 @@ void nsWindow::TaskbarConcealer::UpdateAllState(
+ // Mark this window as requesting to occlude, or not occlude, the taskbar. (The
+ // caller is responsible for keeping any local state up-to-date.)
+ void TaskbarConcealerImpl::MarkAsHidingTaskbar(HWND aWnd, bool aMark) {
++  // USE OF UNDOCUMENTED BEHAVIOR:
++  //
++  // `MarkFullscreenWindow` is documented not to be sufficient. It will indeed
++  // cause a window to be treated as fullscreen; but, in its absence, Windows
++  // will also use explicitly undocumented heuristics to determine whether or
++  // not to treat a given window as full-screen.
++  //
++  // In Windows 8.1 and later, these heuristics don't seem to apply to us.
++  // However, in Windows 7, they do -- they determine that our fullscreen
++  // windows are, indeed, fullscreen. (That this is technically correct is of
++  // little importance, given that Windows then goes on to do the wrong thing
++  // with that knowledge.)
++  //
++  // Fortunately, `MarkFullscreenWindow` does have a converse: the `NonRudeHWND`
++  // window property. A window with this property set will not be treated as
++  // fullscreen.
++  //
++  // ===
++  //
++  // DIFFERENCE FROM DOCUMENTED BEHAVIOR:
++  //
++  // The documentation, as it was at the time of writing, is archived at:
++  // https://web.archive.org/web/20211223073250/https://docs.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist2-markfullscreenwindow
++  //
++  // The most relevant paragraph follows:
++  //
++  // > **Since Windows 7**, call `SetProp(hwnd, L”NonRudeHWND”,
++  // > reinterpret_cast<HANDLE>(TRUE))` before showing a window to indicate to
++  // > the Shell that the window should not be treated as full-screen.
++  //
++  // The key words in that paragraph are "before showing a window". On Windows 7
++  // this has no particular effect, but it completely changes the behavior on
++  // Windows 8.1 and Windows 10 -- if `NonRudeHWND` is set on a window before it
++  // is shown, that window will not be treated as fullscreen **even if the
++  // property is later removed!**
++  //
++  // `NonRudeHWND` isn't actually documented to do anything at all if it's set
++  // after the window has already been shown. That it seems to do exactly what
++  // we need on Windows 7 -- prevent a window from being detected as fullscreen
++  // while it's set, and only then -- is a stroke of fortune.
++
++  static const bool kUseWin7MarkingHack = [&] {
++    switch (StaticPrefs::widget_windows_fullscreen_marking_workaround()) {
++      case -1:
++        return false;
++      case 1:
++        return true;
++      default:
++        // The behavior on Windows 8 is not known. Hopefully there are no
++        // side effects there.
++        return !mozilla::IsWin8Point1OrLater();
++    }
++  }();
++
++  if (kUseWin7MarkingHack) {
++    constexpr static LPCWSTR kPropName = L"NonRudeHWND";
++    if (aMark) {
++      ::RemovePropW(aWnd, kPropName);
++    } else {
++      ::SetPropW(aWnd, kPropName, reinterpret_cast<HANDLE>(TRUE));
++    }
++  }
++
+   // ## NOTE ON UNDERDOCUMENTED BEHAVIOR:
+   //
+   // A section of the `ITaskbarList2::MarkFullscreenWindow` documentation
+diff --git a/xpcom/base/AvailableMemoryTracker.cpp b/xpcom/base/AvailableMemoryTracker.cpp
+index 1c6a368a21db..e76b26b6eb20 100644
+--- a/xpcom/base/AvailableMemoryTracker.cpp
++++ b/xpcom/base/AvailableMemoryTracker.cpp
+@@ -5,7 +5,7 @@
+ #include "mozilla/AvailableMemoryTracker.h"
+ 
+ #if defined(XP_WIN)
+-#  include <windows.h>
++#  include "mozilla/WindowsVersion.h"
+ #  include "nsIMemoryReporter.h"
+ #endif
+ 
+@@ -97,11 +97,15 @@ nsJemallocFreeDirtyPagesRunnable::Run() {
+ 
+ #if defined(XP_WIN)
+ void nsJemallocFreeDirtyPagesRunnable::OptimizeSystemHeap() {
+-  HEAP_OPTIMIZE_RESOURCES_INFORMATION heapOptInfo = {
+-      HEAP_OPTIMIZE_RESOURCES_CURRENT_VERSION};
+-
+-  ::HeapSetInformation(nullptr, HeapOptimizeResources, &heapOptInfo,
+-                       sizeof(heapOptInfo));
++  // HeapSetInformation exists prior to Windows 8.1, but the
++  // HeapOptimizeResources information class does not.
++  if (IsWin8Point1OrLater()) {
++    HEAP_OPTIMIZE_RESOURCES_INFORMATION heapOptInfo = {
++        HEAP_OPTIMIZE_RESOURCES_CURRENT_VERSION};
++
++    ::HeapSetInformation(nullptr, HeapOptimizeResources, &heapOptInfo,
++                         sizeof(heapOptInfo));
++  }
+ }
+ #endif  // defined(XP_WIN)
+ 
+diff --git a/xpcom/glue/standalone/nsXPCOMGlue.cpp b/xpcom/glue/standalone/nsXPCOMGlue.cpp
+index 8a791d65ee0c..162e3e88844e 100644
+--- a/xpcom/glue/standalone/nsXPCOMGlue.cpp
++++ b/xpcom/glue/standalone/nsXPCOMGlue.cpp
+@@ -41,6 +41,7 @@ using LibHandleResult = ::mozilla::Result<LibHandleType, DLErrorType>;
+ 
+ #if defined(XP_WIN)
+ #  include <mbstring.h>
++#  include "mozilla/WindowsVersion.h"
+ #  include "mozilla/PreXULSkeletonUI.h"
+ 
+ static LibHandleResult GetLibHandle(pathstr_t aDependentLib) {
+@@ -294,6 +295,13 @@ static XPCOMGlueLoadResult XPCOMGlueLoad(
+     if (l == 0 || *buffer == '#') {
+       continue;
+     }
++#  ifdef XP_WIN
++    // There is no point in reading Universal CRT forwarder DLLs ahead on
++    // Windows 10 because they will not be touched later.
++    if (IsWin10OrLater() && !strncmp(buffer, "api-", 4)) {
++      continue;
++    }
++#  endif
+ 
+     // cut the trailing newline, if present
+     if (buffer[l - 1] == '\n') {

@@ -1,0 +1,111 @@
+diff --git a/gfx/thebes/gfxWindowsPlatform.cpp b/gfx/thebes/gfxWindowsPlatform.cpp
+index 02921fd104c1..68103b3ee02a 100755
+--- a/gfx/thebes/gfxWindowsPlatform.cpp
++++ b/gfx/thebes/gfxWindowsPlatform.cpp
+@@ -123,6 +123,9 @@ class GfxD2DVramReporter final : public nsIMemoryReporter {
+   SetGraphicsMode(mDC, GM_ADVANCED);
+ }
+ 
++#define GFX_USE_CLEARTYPE_ALWAYS "gfx.font_rendering.cleartype.always_use_for_content"
++#define GFX_DOWNLOADABLE_FONTS_USE_CLEARTYPE "gfx.font_rendering.cleartype.use_for_downloadable_fonts"
++
+ class GPUAdapterReporter final : public nsIMemoryReporter {
+   // Callers must Release the DXGIAdapter after use or risk mem-leak
+   static bool GetDXGIAdapter(IDXGIAdapter** aDXGIAdapter) {
+@@ -279,6 +282,8 @@ gfxWindowsPlatform::gfxWindowsPlatform()
+ 
+ gfxWindowsPlatform::gfxWindowsPlatform()
+     : mDwmCompositionStatus(DwmCompositionStatus::Unknown) {
++  mUseClearTypeForDownloadableFonts = UNINITIALIZED_VALUE;
++  mUseClearTypeAlways = UNINITIALIZED_VALUE;
+   // If win32k is locked down then we can't use COM STA and shouldn't need it.
+   // Also, we won't be using any GPU memory in this process.
+   if (!IsWin32kLockedDown()) {
+@@ -971,6 +977,26 @@ gfxWindowsPlatform::GetPlatformCMSOutputProfile(void* &mem, size_t &mem_size)
+   return sCached.Clone();
+ }
+ 
++bool
++gfxWindowsPlatform::UseClearTypeForDownloadableFonts()
++{
++    if (mUseClearTypeForDownloadableFonts == UNINITIALIZED_VALUE) {
++        mUseClearTypeForDownloadableFonts = Preferences::GetBool(GFX_DOWNLOADABLE_FONTS_USE_CLEARTYPE, true);
++    }
++
++    return mUseClearTypeForDownloadableFonts;
++}
++
++bool
++gfxWindowsPlatform::UseClearTypeAlways()
++{
++    if (mUseClearTypeAlways == UNINITIALIZED_VALUE) {
++        mUseClearTypeAlways = Preferences::GetBool(GFX_USE_CLEARTYPE_ALWAYS, false);
++    }
++
++    return mUseClearTypeAlways;
++}
++
+ void gfxWindowsPlatform::GetDLLVersion(char16ptr_t aDLLPath,
+                                        nsAString& aVersion) {
+   DWORD versInfoSize, vers[4] = {0};
+@@ -1062,8 +1081,12 @@ void gfxWindowsPlatform::FontsPrefsChanged(const char* aPref) {
+ 
+   gfxPlatform::FontsPrefsChanged(aPref);
+ 
+-  if (aPref &&
+-      !strncmp(GFX_CLEARTYPE_PARAMS, aPref, strlen(GFX_CLEARTYPE_PARAMS))) {
++  if (!strcmp(GFX_DOWNLOADABLE_FONTS_USE_CLEARTYPE, aPref)) {
++    mUseClearTypeForDownloadableFonts = UNINITIALIZED_VALUE;
++  } else if (!strcmp(GFX_USE_CLEARTYPE_ALWAYS, aPref)) {
++    mUseClearTypeAlways = UNINITIALIZED_VALUE;
++  } else if (!strncmp(GFX_CLEARTYPE_PARAMS, aPref,
++                      strlen(GFX_CLEARTYPE_PARAMS))) {
+     gfxDWriteFont::UpdateClearTypeVars();
+   } else {
+     clearTextFontCaches = false;
+diff --git a/gfx/thebes/gfxWindowsPlatform.h b/gfx/thebes/gfxWindowsPlatform.h
+index 24e626d62860..188f2ca06dd8 100644
+--- a/gfx/thebes/gfxWindowsPlatform.h
++++ b/gfx/thebes/gfxWindowsPlatform.h
+@@ -166,7 +166,12 @@ public:
+ 
+   mozilla::gfx::BackendType GetPreferredCanvasBackend() override;
+ 
++  // ClearType is not always enabled even when available (e.g. Windows XP).
++  // If either pref is enabled and applies, use ClearType rendering.
++  bool UseClearTypeForDownloadableFonts();
++  bool UseClearTypeAlways();
++
+   static void GetDLLVersion(char16ptr_t aDLLPath, nsAString& aVersion);
+ 
+   // returns ClearType tuning information for each display
+   static void GetCleartypeParams(nsTArray<ClearTypeParameterInfo>& aParams);
+@@ -222,6 +227,9 @@ protected:
+ 
+   BackendPrefsData GetBackendPrefs() const override;
+ 
++  int8_t mUseClearTypeForDownloadableFonts;
++  int8_t mUseClearTypeAlways;
++
+  private:
+   enum class DwmCompositionStatus : uint32_t {
+     Unknown,
+diff --git a/modules/libpref/init/all.js b/modules/libpref/init/all.js
+index 050f15fdf826..f0f0bb67d1ed 100644
+--- a/modules/libpref/init/all.js
++++ b/modules/libpref/init/all.js
+@@ -3415,6 +3415,14 @@ pref("font.name.sans-serif.x-math", "Arial");
+ pref("font.name.monospace.x-math", "");
+ pref("font.name.cursive.x-math", "");
+ 
++// cleartype settings - false implies default system settings
++
++// use cleartype rendering for downloadable fonts (win xp only)
++pref("gfx.font_rendering.cleartype.use_for_downloadable_fonts", true);
++
++// use cleartype rendering for all fonts always (win xp only)
++pref("gfx.font_rendering.cleartype.always_use_for_content", false);
++
+ pref("font.name-list.serif.x-math", "Latin Modern Math, STIX Two Math, XITS Math, Cambria Math, Libertinus Math, DejaVu Math TeX Gyre, TeX Gyre Bonum Math, TeX Gyre Pagella Math, TeX Gyre Schola, TeX Gyre Termes Math, STIX Math, Asana Math, STIXGeneral, DejaVu Serif, DejaVu Sans, serif");
+ pref("font.name-list.sans-serif.x-math", "sans-serif");
+ pref("font.name-list.monospace.x-math", "monospace");

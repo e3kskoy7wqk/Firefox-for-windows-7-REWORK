@@ -1,0 +1,1 @@
+Bug 1651843: Use high-res Windows timers when available to sleep/wake SampleThread when profiling r=mstange,profiler-reviewers    2026-02-05 03:37:31    448cb92b61a653aa53a73bf416c9f1b474dad837

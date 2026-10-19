@@ -1,0 +1,66 @@
+diff --git a/netwerk/cache2/CacheIOThread.cpp b/netwerk/cache2/CacheIOThread.cpp
+--- a/netwerk/cache2/CacheIOThread.cpp
++++ b/netwerk/cache2/CacheIOThread.cpp
+@@ -35,16 +35,19 @@
+  */
+ class NativeThreadHandle {
+ #ifdef XP_WIN
++  typedef BOOL(WINAPI* TCancelSynchronousIo)(HANDLE hThread);
++  TCancelSynchronousIo mCancelSynchronousIo;
+   // The native handle to the thread
+   HANDLE mThread = NULL;
+ #endif
+ 
+  public:
+   // Created and destroyed on the main thread only
+-  NativeThreadHandle() = default;
+ #ifdef XP_WIN
++  NativeThreadHandle();
+   ~NativeThreadHandle();
+ #else
++  NativeThreadHandle() = default;
+   ~NativeThreadHandle() = default;
+ #endif
+ 
+@@ -58,6 +61,21 @@
+ 
+ #ifdef XP_WIN
+ 
++NativeThreadHandle::NativeThreadHandle()
++    : mCancelSynchronousIo(NULL), mThread(NULL) {
++  HMODULE kernel32_dll = GetModuleHandleW(L"kernel32.dll");
++  if (!kernel32_dll) {
++    return;
++  }
++
++  FARPROC ptr = GetProcAddress(kernel32_dll, "CancelSynchronousIo");
++  if (!ptr) {
++    return;
++  }
++
++  mCancelSynchronousIo = reinterpret_cast<TCancelSynchronousIo>(ptr);
++}
++
+ NativeThreadHandle::~NativeThreadHandle() {
+   if (mThread) {
+     CloseHandle(mThread);
+@@ -72,6 +90,10 @@
+ }
+ 
+ void NativeThreadHandle::CancelBlockingIO(Monitor& aMonitor) {
++  if (!mCancelSynchronousIo) {
++    return;
++  }
++
+   HANDLE thread;
+   {
+     MonitorAutoLock lock(aMonitor);
+@@ -83,7 +105,7 @@
+   }
+ 
+   LOG(("CacheIOThread: Attempting to cancel a long blocking IO operation"));
+-  BOOL result = ::CancelSynchronousIo(thread);
++  BOOL result = mCancelSynchronousIo(thread);
+   if (result) {
+     LOG(("  cancelation signal succeeded"));
+   } else {

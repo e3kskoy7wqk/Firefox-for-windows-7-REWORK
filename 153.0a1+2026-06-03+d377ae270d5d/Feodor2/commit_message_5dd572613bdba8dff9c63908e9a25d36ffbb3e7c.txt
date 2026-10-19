@@ -1,0 +1,1 @@
+Bug 1967485 p2: Cache Windows system dirs used in policy rules. r=handyman    2025-06-10 21:43:43    5dd572613bdba8dff9c63908e9a25d36ffbb3e7c

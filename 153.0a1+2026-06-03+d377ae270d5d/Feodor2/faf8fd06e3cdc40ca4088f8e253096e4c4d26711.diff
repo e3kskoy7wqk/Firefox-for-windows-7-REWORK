@@ -1,0 +1,100 @@
+diff --git a/dom/media/platforms/wmf/moz.build b/dom/media/platforms/wmf/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/dom/media/platforms/wmf/moz.build
++++ b/dom/media/platforms/wmf/moz.build
+@@ -32,3 +32,5 @@ include('/ipc/chromium/chromium-config.mozbuild')
+ 
+ # Add libFuzzer configuration directives
+ include("/tools/fuzzing/libfuzzer-config.mozbuild")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/js/src/gc/moz.build b/js/src/gc/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/js/src/gc/moz.build
++++ b/js/src/gc/moz.build
+@@ -48,3 +48,5 @@ UNIFIED_SOURCES += [
+ 
+ if CONFIG["FUZZING_JS_FUZZILLI"]:
+     include("/tools/fuzzing/libfuzzer-config.mozbuild")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/tools/profiler/moz.build b/tools/profiler/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/tools/profiler/moz.build
++++ b/tools/profiler/moz.build
+@@ -173,3 +173,5 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
+ 
+ with Files("**"):
+     BUG_COMPONENT = ("Core", "Gecko Profiler")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/widget/windows/moz.build b/widget/windows/moz.build
+index afce7a62e50a..8196bdd0e7d5 100644
+--- a/widget/windows/moz.build
++++ b/widget/windows/moz.build
+@@ -166,3 +166,5 @@ if CONFIG["CC_TYPE"] == "clang-cl":
+             "Microsoft.UI.Windowing.dll",
+         )
+     ]
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/xpcom/base/moz.build b/xpcom/base/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/xpcom/base/moz.build
++++ b/xpcom/base/moz.build
+@@ -245,3 +245,5 @@ LOCAL_INCLUDES += [
+ 
+ with Files("PHCManager.*"):
+     BUG_COMPONENT = ("Core", "Memory Allocator")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/toolkit/xre/moz.build b/toolkit/xre/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/toolkit/xre/moz.build
++++ b/toolkit/xre/moz.build
+@@ -265,3 +265,5 @@ if CONFIG["MOZ_PROFILE_GENERATE"]:
+ FINAL_TARGET_PP_FILES += ["platform.ini"]
+ 
+ TEST_DIRS += ["test/gtest"]
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/xpcom/io/moz.build b/xpcom/io/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/xpcom/io/moz.build
++++ b/xpcom/io/moz.build
+@@ -150,3 +150,5 @@ LOCAL_INCLUDES += [
+     "../build",
+     "/toolkit/xre",
+ ]
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/mozglue/baseprofiler/moz.build b/mozglue/baseprofiler/moz.build
+index c7f93f43bd4b..8e32d7c9ddab 100644
+--- a/mozglue/baseprofiler/moz.build
++++ b/mozglue/baseprofiler/moz.build
+@@ -105,3 +105,5 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
+ 
+ with Files("**"):
+     BUG_COMPONENT = ("Core", "Gecko Profiler")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/toolkit/crashreporter/moz.build b/toolkit/crashreporter/moz.build
+index 3d4334dc976c..8b3fc6ed5a2d 100644
+--- a/toolkit/crashreporter/moz.build
++++ b/toolkit/crashreporter/moz.build
+@@ -136,3 +136,5 @@ GeneratedFile("CrashAnnotations.h", script="generate_crash_reporter_sources.py",
+ 
+ with Files("**"):
+     BUG_COMPONENT = ("Toolkit", "Crash Reporting")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"
+diff --git a/toolkit/components/processtools/moz.build b/toolkit/components/processtools/moz.build
+index c69f65e5b859..e97a8aa4062d 100644
+--- a/toolkit/components/processtools/moz.build
++++ b/toolkit/components/processtools/moz.build
+@@ -44,3 +44,5 @@ elif toolkit == "cocoa":
+     UNIFIED_SOURCES += ["ProcInfo.mm"]
+ 
+ include("/ipc/chromium/chromium-config.mozbuild")
++OS_LIBS += ["psapi"]
++DEFINES["PSAPI_VERSION"] = "1"

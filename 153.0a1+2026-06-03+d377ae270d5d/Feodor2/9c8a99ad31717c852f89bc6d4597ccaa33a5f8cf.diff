@@ -1,0 +1,27 @@
+diff --git a/third_party/rust/windows-core/src/imp/bindings.rs b/third_party/rust/windows-core/src/imp/bindings.rs
+index 8a6f710370ea..f3f2f4d49fcb 100644
+--- a/third_party/rust/windows-core/src/imp/bindings.rs
++++ b/third_party/rust/windows-core/src/imp/bindings.rs
+@@ -1,6 +1,6 @@
+-windows_link::link!("combase.dll" "system" fn CoIncrementMTAUsage(pcookie : *mut CO_MTA_USAGE_COOKIE) -> HRESULT);
+-windows_link::link!("combase.dll" "system" fn CoTaskMemAlloc(cb : usize) -> *mut core::ffi::c_void);
+-windows_link::link!("combase.dll" "system" fn CoTaskMemFree(pv : *const core::ffi::c_void));
++windows_link::link!("ole32.dll" "system" fn CoIncrementMTAUsage(pcookie : *mut CO_MTA_USAGE_COOKIE) -> HRESULT);
++windows_link::link!("ole32.dll" "system" fn CoTaskMemAlloc(cb : usize) -> *mut core::ffi::c_void);
++windows_link::link!("ole32.dll" "system" fn CoTaskMemFree(pv : *const core::ffi::c_void));
+ windows_link::link!("kernel32.dll" "system" fn EncodePointer(ptr : *const core::ffi::c_void) -> *mut core::ffi::c_void);
+ windows_link::link!("kernel32.dll" "system" fn FreeLibrary(hlibmodule : HMODULE) -> BOOL);
+ windows_link::link!("kernel32.dll" "system" fn GetProcAddress(hmodule : HMODULE, lpprocname : PCSTR) -> FARPROC);
+diff --git a/third_party/rust/windows-core/src/imp/marshaler.rs b/third_party/rust/windows-core/src/imp/marshaler.rs
+index 822cce6505bb..2ef9d847a3f0 100644
+--- a/third_party/rust/windows-core/src/imp/marshaler.rs
++++ b/third_party/rust/windows-core/src/imp/marshaler.rs
+@@ -4,7 +4,7 @@ use core::ffi::c_void;
+ use core::mem::{transmute, transmute_copy};
+ use core::ptr::null_mut;
+ 
+-windows_link::link!("combase.dll" "system" fn CoCreateFreeThreadedMarshaler(punkouter: *mut c_void, ppunkmarshal: *mut *mut c_void) -> HRESULT);
++windows_link::link!("ole32.dll" "system" fn CoCreateFreeThreadedMarshaler(punkouter: *mut c_void, ppunkmarshal: *mut *mut c_void) -> HRESULT);
+ 
+ pub unsafe fn marshaler(outer: IUnknown, result: *mut *mut c_void) -> HRESULT {
+     unsafe {

@@ -1,0 +1,15 @@
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+index e3c623a69755..25d2ca9af819 100644
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -2556,8 +2556,10 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
+   config->SetDelayedIntegrityLevel(delayedIntegrityLevel);
+ 
+   if (aSandboxLevel > 5) {
++    if (IsVistaOrLater()) {
+     config->SetLockdownDefaultDacl();
+     config->AddRestrictingRandomSid();
++    }
+   }
+ 
+   if (aSandboxLevel > 4) {

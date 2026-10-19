@@ -1,0 +1,1 @@
+Bug 2002985 - Remove unused browser.display.windows.non_native_menus pref. r=gregp    2025-12-03 22:03:41    9b29eed8549a894f23289bec6e60b57754f95cc6

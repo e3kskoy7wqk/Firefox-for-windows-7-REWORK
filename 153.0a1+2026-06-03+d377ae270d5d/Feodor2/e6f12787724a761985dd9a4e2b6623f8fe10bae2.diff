@@ -1,0 +1,127 @@
+diff --git a/browser/installer/allowed-dupes.mn b/browser/installer/allowed-dupes.mn
+index 1f3a406..c77f3e8 100644
+--- a/browser/installer/allowed-dupes.mn
++++ b/browser/installer/allowed-dupes.mn
+@@ -100,6 +100,10 @@ browser/defaults/settings/main/search-config-icons/f312610a-ebfb-a106-ea92-fd643
+ browser/defaults/settings/main/search-config-icons/47da97b5-600f-c450-fd15-a52bb2169c11
+ browser/defaults/settings/main/search-config-icons/fed4f021-ff3e-942a-010e-afa43fda2136
+ 
++# Bug 1975170 - Light and dark themes share a tiny experiment.css
++browser/chrome/browser/content/builtin-themes/light/experiment.css
++browser/chrome/browser/content/builtin-themes/dark/experiment.css
++
+ browser/chrome/browser/builtin-addons/newtab/data/data/content/assets/glyph-mail-16.svg
+ 
+ # Bug 2022304 - activity-stream-debug.html is intentionally identical to
+diff --git a/browser/themes/addons/dark/manifest.json b/browser/themes/addons/dark/manifest.json
+index 974229e..a74012c 100644
+--- a/browser/themes/addons/dark/manifest.json
++++ b/browser/themes/addons/dark/manifest.json
+@@ -17,5 +17,8 @@
+     "properties": {
+       "color_scheme": "dark"
+     }
++  },
++  "theme_experiment": {
++    "stylesheet": "experiment.css"
+   }
+ }
+diff --git a/browser/themes/addons/firefox-light-dark/experiment.css b/browser/themes/addons/firefox-light-dark/experiment.css
+new file mode 100644
+index 0000000..1463839
+--- /dev/null
++++ b/browser/themes/addons/firefox-light-dark/experiment.css
+@@ -0,0 +1,6 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/* Proton theme */
++@import url("chrome://browser/skin/light-dark-overrides.css");
+diff --git a/browser/themes/addons/jar.mn b/browser/themes/addons/jar.mn
+index de6187a..2777e6c 100644
+--- a/browser/themes/addons/jar.mn
++++ b/browser/themes/addons/jar.mn
+@@ -10,10 +10,12 @@ browser.jar:
+ 
+   content/builtin-themes/dark/preview.svg          (dark/preview.svg)
+   content/builtin-themes/dark/icon.svg             (dark/icon.svg)
++  content/builtin-themes/dark/experiment.css       (firefox-light-dark/experiment.css)
+   content/builtin-themes/dark/manifest.json        (dark/manifest.json)
+ 
+   content/builtin-themes/light/preview.svg         (light/preview.svg)
+   content/builtin-themes/light/icon.svg            (light/icon.svg)
++  content/builtin-themes/light/experiment.css      (firefox-light-dark/experiment.css)
+   content/builtin-themes/light/manifest.json       (light/manifest.json)
+ 
+   content/builtin-themes/aiwindow/manifest.json       (aiwindow/manifest.json)
+diff --git a/browser/themes/addons/light/manifest.json b/browser/themes/addons/light/manifest.json
+index 40a317b..8775209 100644
+--- a/browser/themes/addons/light/manifest.json
++++ b/browser/themes/addons/light/manifest.json
+@@ -17,5 +17,8 @@
+     "properties": {
+       "color_scheme": "light"
+     }
++  },
++  "theme_experiment": {
++    "stylesheet": "experiment.css"
+   }
+ }
+diff --git a/browser/themes/shared/identity-block/identity-block.css b/browser/themes/shared/identity-block/identity-block.css
+index 3996a05..4c28656 100644
+--- a/browser/themes/shared/identity-block/identity-block.css
++++ b/browser/themes/shared/identity-block/identity-block.css
+@@ -94,7 +94,7 @@
+ #identity-box[pageproxystate="valid"]:is(.notSecureText, .chromeUI, .extensionPage),
+ #urlbar-label-box {
+   margin-inline-end: 8px;
+-  @media -moz-pref("browser.urlbar.searchModeSwitcher.featureGate") or -moz-pref("browser.urlbar.scotchBonnet.enableOverride") {
++  @media (-moz-pref("browser.urlbar.searchModeSwitcher.featureGate") or -moz-pref("browser.urlbar.scotchBonnet.enableOverride")) {
+     margin-inline-end: var(--urlbar-searchmodeswitcher-margin-inline-end);
+   }
+   @media -moz-pref("browser.urlbar.trustPanel.featureGate") {
+diff --git a/browser/themes/shared/jar.inc.mn b/browser/themes/shared/jar.inc.mn
+index ccae208..f752f84 100644
+--- a/browser/themes/shared/jar.inc.mn
++++ b/browser/themes/shared/jar.inc.mn
+@@ -21,6 +21,7 @@
+   skin/classic/browser/browser-shared.css                      (../shared/browser-shared.css)
+   skin/classic/browser/formautofill-notification.css           (../shared/formautofill-notification.css)
+   skin/classic/browser/identity-credential-notification.css    (../shared/identity-credential-notification.css)
++  skin/classic/browser/light-dark-overrides.css                (../shared/light-dark-overrides.css)
+   skin/classic/browser/menupanel.css                           (../shared/menupanel.css)
+   skin/classic/browser/notification-icons.css                  (../shared/notification-icons.css)
+   skin/classic/browser/pageInfo.css                            (../shared/pageInfo.css)
+diff --git a/browser/themes/shared/light-dark-overrides.css b/browser/themes/shared/light-dark-overrides.css
+new file mode 100644
+index 0000000..8b10da7
+--- /dev/null
++++ b/browser/themes/shared/light-dark-overrides.css
+@@ -0,0 +1,9 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#urlbar {
++  --urlbar-box-bgcolor: var(--toolbar-field-focus-background-color);
++  --urlbar-box-focus-bgcolor: var(--button-background-color);
++  --urlbar-box-hover-bgcolor: var(--button-background-color-hover);
++}
+diff --git a/toolkit/modules/LightweightThemeConsumer.sys.mjs b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+index 43097ba..88ad92b 100644
+--- a/toolkit/modules/LightweightThemeConsumer.sys.mjs
++++ b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+@@ -355,7 +355,11 @@ LightweightThemeConsumer.prototype = {
+           return y == "center" || y == "bottom";
+         })
+     );
+-    this._setExperiment(hasTheme, themeData.experiment, theme.experimental);
++    this._setExperiment(
++      hasTheme || !!builtinThemeConfig?.inApp,
++      themeData.experiment,
++      theme.experimental
++    );
+     _setImage(this._win, root, hasTheme, "--lwt-header-image", theme.headerURL);
+     _setImage(
+       this._win,

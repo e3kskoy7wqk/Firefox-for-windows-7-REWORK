@@ -1,0 +1,1 @@
+Bug 1533462 - Enable the cross-process shared font list by default on Nightly builds. r=jwatt    2020-06-19 06:07:44    bf8bcf7aa75d27ad6eb340de76038c9fc33625d6

@@ -1,0 +1,1831 @@
+diff --git a/browser/themes/shared/browser-shared.css b/browser/themes/shared/browser-shared.css
+index a20c4a9dc3c9..089f5b6c59a0 100644
+--- a/browser/themes/shared/browser-shared.css
++++ b/browser/themes/shared/browser-shared.css
+@@ -302,17 +302,20 @@ body {
+  * which case they go on the toolbox for backwards compatibility */
+ :root:not([lwtheme-image-y-align]) body,
+ :root[lwtheme-image-y-align] #navigator-toolbox {
+-  @media not (-moz-platform: windows-win7) {
+-    @media not (-moz-platform: windows-win8) {
+-      background-image: var(--toolbox-background-image);
+-      background-repeat: var(--toolbox-background-repeat);
+-      background-position: var(--toolbox-background-position);
+-      background-size: var(--toolbox-background-size);
++  @media not (-moz-platform: windows-xp) {
++    @media not (-moz-platform: windows-win7) {
++      @media not (-moz-platform: windows-win8) {
++        background-image: var(--toolbox-background-image);
++        background-repeat: var(--toolbox-background-repeat);
++        background-position: var(--toolbox-background-position);
++        background-size: var(--toolbox-background-size);
++      }
+     }
+   }
+ }
+ /* TODO bug 1695280: Remove this block. */
+-@media (-moz-platform: windows-win7),
++@media (-moz-platform: windows-xp),
++       (-moz-platform: windows-win7),
+        (-moz-platform: windows-win8) {
+   :root[lwtheme] {
+     background-color: var(--lwt-accent-color);
+diff --git a/browser/themes/windows/browser.css b/browser/themes/windows/browser.css
+index 2d3c7038f8d9..0984ab7948f0 100644
+--- a/browser/themes/windows/browser.css
++++ b/browser/themes/windows/browser.css
+@@ -197,7 +197,8 @@
+ .titlebar-buttonbox-container {
+   align-items: stretch;
+ }
+-@media (-moz-platform: windows-win7),
++@media (-moz-platform: windows-xp),
++       (-moz-platform: windows-win7),
+        (-moz-platform: windows-win8) {
+   /* Preserve window control buttons position at the top of the button box. */
+   .titlebar-buttonbox-container {
+@@ -205,6 +206,16 @@
+   }
+ }
+ 
++/* Add extra margin for unmaximized windows on Win XP Luna themes. */
++@media not (-moz-windows-classic) {
++  @media (-moz-platform: windows-xp) {
++    :root[customtitlebar]:not([sizemode="maximized"])
++      .titlebar-buttonbox-container {
++      margin-top: 4px;
++    }
++  }
++}
++
+ /* Window control buttons */
+ 
+ .titlebar-button:focus-visible {
+diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
+index 32843da3ccbb..216e85267a78 100644
+--- a/layout/style/nsMediaFeatures.cpp
++++ b/layout/style/nsMediaFeatures.cpp
+@@ -259,9 +259,13 @@ bool Gecko_MediaFeatures_MatchesPlatform(StylePlatform aPlatform) {
+ #if defined(XP_WIN)
+     case StylePlatform::Windows:
+       return true;
++    case StylePlatform::WindowsXp:
+     case StylePlatform::WindowsWin10:
+     case StylePlatform::WindowsWin7:
+     case StylePlatform::WindowsWin8: {
++      if (!IsVistaOrLater()) {
++        return aPlatform == StylePlatform::WindowsXp;
++      }
+       if (IsWin10OrLater()) {
+         return aPlatform == StylePlatform::WindowsWin10;
+       }
+diff --git a/servo/components/style/gecko/media_features.rs b/servo/components/style/gecko/media_features.rs
+index 93b77fcdd39e..64e9dcbbfdf2 100644
+--- a/servo/components/style/gecko/media_features.rs
++++ b/servo/components/style/gecko/media_features.rs
+@@ -557,6 +557,8 @@ pub enum Platform {
+     Macos,
+     /// Matches any Windows version.
+     Windows,
++    /// Matches Windows XP and Windows Server 2003.
++    WindowsXp,
+     /// Matches only Windows 7.
+     WindowsWin7,
+     /// Matches only Windows 8.
+diff --git a/widget/GfxInfoOperatingSystemDefs.inc b/widget/GfxInfoOperatingSystemDefs.inc
+index 3eb43a93a8ab..92ad0be57a7c 100644
+--- a/widget/GfxInfoOperatingSystemDefs.inc
++++ b/widget/GfxInfoOperatingSystemDefs.inc
+@@ -10,6 +10,9 @@
+ 
+ // For historical reasons, "All" in blocklist means "All Windows"
+ GFXINFO_OS(Windows, "All")
++GFXINFO_OS(WindowsXP, "WINNT 5.1")
++GFXINFO_OS(WindowsServer2003, "WINNT 5.2")
++GFXINFO_OS(WindowsVista, "WINNT 6.0")
+ GFXINFO_OS(Windows7, "WINNT 6.1")
+ GFXINFO_OS(Windows8, "WINNT 6.2")
+ GFXINFO_OS(Windows8_1, "WINNT 6.3")
+diff --git a/widget/windows/GfxInfo.cpp b/widget/windows/GfxInfo.cpp
+index 2822756f6601..77e1e143d10a 100644
+--- a/widget/windows/GfxInfo.cpp
++++ b/widget/windows/GfxInfo.cpp
+@@ -298,6 +298,9 @@ uint32_t ParseIDFromDeviceID(const nsAString& key, const nsAString& prefix,
+ // based on http://msdn.microsoft.com/en-us/library/ms724834(VS.85).aspx
+ enum {
+   kWindowsUnknown = 0,
++  kWindowsXP = 0x50001,
++  kWindowsServer2003 = 0x50002,
++  kWindowsVista = 0x60000,
+   kWindows7 = 0x60001,
+   kWindows8 = 0x60002,
+   kWindows8_1 = 0x60003,
+@@ -1151,6 +1154,12 @@ void GfxInfo::AddCrashReportAnnotations() {
+ static OperatingSystem WindowsVersionToOperatingSystem(
+     int32_t aWindowsVersion, int32_t aWindowsBuildNumber) {
+   switch (aWindowsVersion) {
++    case kWindowsXP:
++      return OperatingSystem::WindowsXP;
++    case kWindowsServer2003:
++      return OperatingSystem::WindowsServer2003;
++    case kWindowsVista:
++      return OperatingSystem::WindowsVista;
+     case kWindows7:
+       return OperatingSystem::Windows7;
+     case kWindows8:
+@@ -1211,6 +1220,11 @@ const nsTArray<RefPtr<GfxDriverInfo>>& GfxInfo::GetGfxDriverInfo() {
+     /*
+      * NVIDIA entries
+      */
++    APPEND_TO_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP,
++      DeviceFamily::NvidiaAll,
++      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
++      DRIVER_LESS_THAN_OR_EQUAL, V(6,14,11,8745), "FEATURE_FAILURE_NV_XP", "nVidia driver > 187.45" );
++
+     /*
+      * The last 5 digit of the NVIDIA driver version maps to the version that
+      * NVIDIA uses. The minor version (15, 16, 17) corresponds roughtly to the
+@@ -1221,12 +1235,22 @@ const nsTArray<RefPtr<GfxDriverInfo>>& GfxInfo::GetGfxDriverInfo() {
+      * 187.45 (late October 2009) and earlier contain a bug which can cause us
+      * to crash on shutdown.
+      */
++    APPEND_TO_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista,
++      DeviceFamily::NvidiaAll,
++      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
++      DRIVER_LESS_THAN_OR_EQUAL, V(8,15,11,8745),
++      "FEATURE_FAILURE_NV_VISTA_15", "nVidia driver > 187.45" );
+     APPEND_TO_DRIVER_BLOCKLIST(
+         OperatingSystem::Windows7, DeviceFamily::NvidiaAll,
+         GfxDriverInfo::optionalFeatures,
+         nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_LESS_THAN_OR_EQUAL,
+         V(8, 15, 11, 8745), "FEATURE_FAILURE_NV_W7_15",
+         "nVidia driver > 187.45");
++    APPEND_TO_DRIVER_BLOCKLIST_RANGE(OperatingSystem::WindowsVista,
++      DeviceFamily::NvidiaAll,
++      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
++      DRIVER_BETWEEN_INCLUSIVE_START, V(8,16,10,0000), V(8,16,11,8745),
++      "FEATURE_FAILURE_NV_VISTA_16", "nVidia driver > 187.45" );
+     APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+         OperatingSystem::Windows7, DeviceFamily::NvidiaAll,
+         GfxDriverInfo::optionalFeatures,
+@@ -1235,6 +1259,12 @@ const nsTArray<RefPtr<GfxDriverInfo>>& GfxInfo::GetGfxDriverInfo() {
+         "FEATURE_FAILURE_NV_W7_16", "nVidia driver > 187.45");
+     // Telemetry doesn't show any driver in this range so it might not even be
+     // required.
++    APPEND_TO_DRIVER_BLOCKLIST_RANGE(OperatingSystem::WindowsVista,
++      DeviceFamily::NvidiaAll,
++      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
++      DRIVER_BETWEEN_INCLUSIVE_START, V(8,17,10,0000), V(8,17,11,8745),
++      "FEATURE_FAILURE_NV_VISTA_17", "nVidia driver > 187.45" );
++    // Telemetry doesn't show any driver in this range so it might not even be required.
+     APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+         OperatingSystem::Windows7, DeviceFamily::NvidiaAll,
+         GfxDriverInfo::optionalFeatures,
+@@ -1377,6 +1407,30 @@ const nsTArray<RefPtr<GfxDriverInfo>>& GfxInfo::GetGfxDriverInfo() {
+         OperatingSystem::Windows7, DeviceFamily::IntelHDGraphicsToSandyBridge,
+         V(7, 15, 10, 1666), "FEATURE_FAILURE_INTEL_22");
+ 
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMA500,   V(3,0,20,3200), "FEATURE_FAILURE_INTEL_1");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMA900,   V(6,14,10,4764), "FEATURE_FAILURE_INTEL_2");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMA950,   V(6,14,10,4926), "FEATURE_FAILURE_INTEL_3");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMA3150,  V(6,14,10,5134), "FEATURE_FAILURE_INTEL_4");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMAX3000, V(6,14,10,5218), "FEATURE_FAILURE_INTEL_5");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelGMAX4500HD, V(6,14,10,4969), "FEATURE_FAILURE_INTEL_6");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsXP, DeviceFamily::IntelHDGraphicsToSandyBridge, V(6,14,10,4969), "FEATURE_FAILURE_INTEL_7");
++
++    // StrechRect seems to suffer from precision issues which leads to artifacting
++    // during content drawing starting with at least version 6.14.10.5082
++    // and going until 6.14.10.5218. See bug 919454 and bug 949275 for more info.
++    APPEND_TO_DRIVER_BLOCKLIST_RANGE(OperatingSystem::WindowsXP,
++      DeviceFamily::IntelGMAX4500HD,
++      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
++      DRIVER_BETWEEN_EXCLUSIVE, V(6,14,10,5076), V(6,14,10,5218), "FEATURE_FAILURE_INTEL_8", "6.14.10.5218");
++
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMA500,   V(3,0,20,3200), "FEATURE_FAILURE_INTEL_9");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMA900,   GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_INTEL_10");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMA950,   V(7,14,10,1504), "FEATURE_FAILURE_INTEL_11");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMA3150,  V(7,14,10,1910), "FEATURE_FAILURE_INTEL_12");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMAX3000, V(7,15,10,1666), "FEATURE_FAILURE_INTEL_13");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelGMAX4500HD, V(7,15,10,1666), "FEATURE_FAILURE_INTEL_14");
++    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(OperatingSystem::WindowsVista, DeviceFamily::IntelHDGraphicsToSandyBridge, V(7,15,10,1666), "FEATURE_FAILURE_INTEL_15");
++
+     // Bug 1074378
+     APPEND_TO_DRIVER_BLOCKLIST(
+         OperatingSystem::Windows7, DeviceFamily::IntelGMAX4500HD,
+@@ -1948,6 +2002,23 @@ nsresult GfxInfo::GetFeatureStatusImpl(
+       }
+       return NS_OK;
+     }
++
++    // special-case the WinXP test slaves: they have out-of-date drivers, but we still want to
++    // whitelist them, actually we do know that this combination of device and driver version
++    // works well.
++    if (mWindowsVersion == kWindowsXP &&
++        adapterVendorID.Equals(GfxDriverInfo::GetDeviceVendor(DeviceFamily::NvidiaAll), nsCaseInsensitiveStringComparator) &&
++        adapterDeviceID.LowerCaseEqualsLiteral("0x0861") && // GeForce 9400
++        driverVersion == V(6,14,11,7756))
++    {
++      *aStatus = FEATURE_STATUS_OK;
++      return NS_OK;
++    }
++
++    // Windows Server 2003 should be just like Windows XP for present purpose, but still has a different version number.
++    // OTOH Windows Server 2008 R1 and R2 already have the same version numbers as Vista and Seven respectively
++    if (os == OperatingSystem::WindowsServer2003)
++      os = OperatingSystem::WindowsXP;
+   }
+ 
+   return GfxInfoBase::GetFeatureStatusImpl(
+diff --git a/widget/windows/KeyboardLayout.cpp b/widget/windows/KeyboardLayout.cpp
+index 7d73594e1b87..214b1218b699 100644
+--- a/widget/windows/KeyboardLayout.cpp
++++ b/widget/windows/KeyboardLayout.cpp
+@@ -1490,6 +1490,34 @@ void NativeKey::InitWithKeyOrChar() {
+         break;
+       }
+ 
++      if (!CanComputeVirtualKeyCodeFromScanCode()) {
++        // The right control key and the right alt key are extended keys.
++        // Therefore, we never get VK_RCONTRL and VK_RMENU for the result of
++        // MapVirtualKeyEx() on WinXP or WinServer2003.
++        //
++        // If VK_SHIFT, VK_CONTROL or VK_MENU key message is caused by well
++        // known scan code, we should decide it as Right key.  Otherwise,
++        // decide it as Left key.
++        switch (mOriginalVirtualKeyCode) {
++          case VK_CONTROL:
++            mVirtualKeyCode =
++              mIsExtended && mScanCode == 0x1D ? VK_RCONTROL : VK_LCONTROL;
++            break;
++          case VK_MENU:
++            mVirtualKeyCode =
++              mIsExtended && mScanCode == 0x38 ? VK_RMENU : VK_LMENU;
++            break;
++          case VK_SHIFT:
++            // Neither left shift nor right shift is an extended key,
++            // let's use VK_LSHIFT for unknown mapping.
++            mVirtualKeyCode = VK_LSHIFT;
++            break;
++          default:
++            MOZ_CRASH("Unsupported mOriginalVirtualKeyCode");
++        }
++        break;
++      }
++
+       NS_ASSERTION(!mVirtualKeyCode,
+                    "mVirtualKeyCode has been computed already");
+ 
+@@ -1548,6 +1576,11 @@ void NativeKey::InitWithKeyOrChar() {
+       //       scancode, we cannot compute virtual keycode.  I.e., with such
+       //       applications, we cannot generate proper KeyboardEvent.code value.
+ 
++      // We cannot compute the virtual key code from WM_CHAR message on WinXP
++      // if it's caused by an extended key.
++      if (!CanComputeVirtualKeyCodeFromScanCode()) {
++        break;
++      }
+       mVirtualKeyCode = mOriginalVirtualKeyCode =
+           ComputeVirtualKeyCodeFromScanCodeEx();
+       NS_ASSERTION(mVirtualKeyCode, "Failed to compute virtual keycode");
+@@ -2032,6 +2065,18 @@ uint32_t NativeKey::GetKeyLocation() const {
+   }
+ }
+ 
++bool
++NativeKey::CanComputeVirtualKeyCodeFromScanCode() const
++{
++  // Vista or later supports ScanCodeEx.
++  if (IsVistaOrLater()) {
++    return true;
++  }
++  // Otherwise, MapVirtualKeyEx() can compute virtual keycode only with
++  // non-extended key.
++  return !mIsExtended;
++}
++
+ uint8_t NativeKey::ComputeVirtualKeyCodeFromScanCode() const {
+   return static_cast<uint8_t>(
+       ::MapVirtualKeyEx(mScanCode, MAPVK_VSC_TO_VK, mKeyboardLayout));
+@@ -2041,6 +2086,12 @@ uint8_t NativeKey::ComputeVirtualKeyCodeFromScanCodeEx() const {
+   // MapVirtualKeyEx() has been improved for supporting extended keys since
+   // Vista.  When we call it for mapping a scancode of an extended key and
+   // a virtual keycode, we need to add 0xE000 to the scancode.
++  // On the other hand, neither WinXP nor WinServer2003 doesn't support 0xE000.
++  // Therefore, we have no way to get virtual keycode from scan code of
++  // extended keys.
++  if (NS_WARN_IF(!CanComputeVirtualKeyCodeFromScanCode())) {
++    return 0;
++  }
+   return static_cast<uint8_t>(::MapVirtualKeyEx(
+       GetScanCodeWithExtendedFlag(), MAPVK_VSC_TO_VK_EX, mKeyboardLayout));
+ }
+@@ -2048,7 +2099,10 @@ uint8_t NativeKey::ComputeVirtualKeyCodeFromScanCodeEx() const {
+ uint16_t NativeKey::ComputeScanCodeExFromVirtualKeyCode(
+     UINT aVirtualKeyCode) const {
+   return static_cast<uint16_t>(
+-      ::MapVirtualKeyEx(aVirtualKeyCode, MAPVK_VK_TO_VSC_EX, mKeyboardLayout));
++           ::MapVirtualKeyEx(aVirtualKeyCode,
++                             IsVistaOrLater() ? MAPVK_VK_TO_VSC_EX :
++                                                MAPVK_VK_TO_VSC,
++                             mKeyboardLayout));
+ }
+ 
+ char16_t NativeKey::ComputeUnicharFromScanCode() const {
+@@ -4517,7 +4571,8 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
+ 
+   if (MOZ_LOG_TEST(gKeyLog, LogLevel::Verbose)) {
+     static const UINT kExtendedScanCode[] = {0x0000, 0xE000};
+-    static const UINT kMapType = MAPVK_VSC_TO_VK_EX;
++    static const UINT kMapType =
++      IsVistaOrLater() ? MAPVK_VSC_TO_VK_EX : MAPVK_VSC_TO_VK;
+     MOZ_LOG(gKeyLog, LogLevel::Verbose,
+             ("Logging virtual keycode values for scancode (0x%p)...",
+              mKeyboardLayout));
+@@ -4529,6 +4584,11 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
+         MOZ_LOG(gKeyLog, LogLevel::Verbose,
+                 ("0x%04X, %s", scanCode, kVirtualKeyName[virtualKeyCode]));
+       }
++      // XP and Server 2003 don't support 0xE0 prefix of the scancode.
++      // Therefore, we don't need to continue on them.
++      if (!IsVistaOrLater()) {
++        break;
++      }
+     }
+   }
+ 
+diff --git a/widget/windows/KeyboardLayout.h b/widget/windows/KeyboardLayout.h
+index 0f8608e24765..bf93540adca0 100644
+--- a/widget/windows/KeyboardLayout.h
++++ b/widget/windows/KeyboardLayout.h
+@@ -695,6 +695,11 @@ class MOZ_STACK_CLASS NativeKey final {
+    */
+   bool GetFollowingCharMessage(MSG& aCharMsg);
+ 
++  /**
++   * Whether the key event can compute virtual keycode from the scancode value.
++   */
++  bool CanComputeVirtualKeyCodeFromScanCode() const;
++
+   /**
+    * Wraps MapVirtualKeyEx() with MAPVK_VSC_TO_VK.
+    */
+diff --git a/widget/windows/WinMouseScrollHandler.cpp b/widget/windows/WinMouseScrollHandler.cpp
+index 8a10a4f5fd2f..f1b9a1312b5b 100644
+--- a/widget/windows/WinMouseScrollHandler.cpp
++++ b/widget/windows/WinMouseScrollHandler.cpp
+@@ -929,8 +929,9 @@ bool MouseScrollHandler::SystemSettings::InitScrollChars() {
+     MOZ_LOG(gMouseScrollLog, LogLevel::Info,
+             ("MouseScroll::SystemSettings::InitScrollChars(): "
+              "::SystemParametersInfo("
+-             "SPI_GETWHEELSCROLLCHARS) failed, this is unexpected on Vista or "
+-             "later"));
++             "SPI_GETWHEELSCROLLCHARS) failed, %s",
++             IsVistaOrLater() ? "this is unexpected on Vista or later"
++                              : "but on XP or earlier, this is not a problem"));
+     // XXX Should we use DefaultScrollChars()?
+     mScrollChars = 1;
+   }
+diff --git a/widget/windows/WinTaskbar.cpp b/widget/windows/WinTaskbar.cpp
+index 9a8fb0986c34..9efd57449b15 100644
+--- a/widget/windows/WinTaskbar.cpp
++++ b/widget/windows/WinTaskbar.cpp
+@@ -328,6 +328,9 @@ WinTaskbar::GetDefaultPrivateGroupId(nsAString& aDefaultPrivateGroupId) {
+ 
+ // (static) Called from AppShell
+ bool WinTaskbar::RegisterAppUserModelID() {
++  if (!IsWin7OrLater())
++    return false;
++
+   SetCurrentProcessExplicitAppUserModelIDPtr funcAppUserModelID = nullptr;
+   bool retVal = false;
+ 
+@@ -357,7 +360,7 @@ NS_IMETHODIMP
+ WinTaskbar::GetAvailable(bool* aAvailable) {
+   // ITaskbarList4::HrInit() may fail with shell extensions like blackbox
+   // installed. Initialize early to return available=false in those cases.
+-  *aAvailable = Initialize();
++  *aAvailable = IsWin7OrLater() && Initialize();
+ 
+   return NS_OK;
+ }
+diff --git a/widget/windows/WinUtils.cpp b/widget/windows/WinUtils.cpp
+index f820f71b0048..cb21e8dd65a4 100644
+--- a/widget/windows/WinUtils.cpp
++++ b/widget/windows/WinUtils.cpp
+@@ -283,13 +283,15 @@ GETDPIFORMONITORPROC sGetDpiForMonitor;
+ GETPROCESSDPIAWARENESSPROC sGetProcessDpiAwareness;
+ 
+ static bool SlowIsPerMonitorDPIAware() {
+-  // Intentionally leak the handle.
+-  HMODULE shcore = LoadLibraryEx(L"shcore", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+-  if (shcore) {
+-    sGetDpiForMonitor =
+-        (GETDPIFORMONITORPROC)GetProcAddress(shcore, "GetDpiForMonitor");
+-    sGetProcessDpiAwareness = (GETPROCESSDPIAWARENESSPROC)GetProcAddress(
+-        shcore, "GetProcessDpiAwareness");
++  if (IsVistaOrLater()) {
++    // Intentionally leak the handle.
++    HMODULE shcore = LoadLibraryEx(L"shcore", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++    if (shcore) {
++      sGetDpiForMonitor =
++          (GETDPIFORMONITORPROC)GetProcAddress(shcore, "GetDpiForMonitor");
++      sGetProcessDpiAwareness = (GETPROCESSDPIAWARENESSPROC)GetProcAddress(
++          shcore, "GetProcessDpiAwareness");
++    }
+   }
+   PROCESS_DPI_AWARENESS dpiAwareness;
+   return sGetDpiForMonitor && sGetProcessDpiAwareness &&
+@@ -459,7 +461,7 @@ bool WinUtils::GetMessage(LPMSG aMsg, HWND aWnd, UINT aFirstMessage,
+ #if defined(ACCESSIBILITY)
+ static DWORD GetWaitFlags() {
+   DWORD result = MWMO_INPUTAVAILABLE;
+-  if (XRE_IsContentProcess()) {
++  if (IsVistaOrLater() && XRE_IsContentProcess()) {
+     result |= MWMO_ALERTABLE;
+   }
+   return result;
+@@ -1572,7 +1574,7 @@ uint32_t WinUtils::IsTouchDeviceSupportPresent() {
+ 
+ /* static */
+ uint32_t WinUtils::GetMaxTouchPoints() {
+-  if (IsTouchDeviceSupportPresent()) {
++  if (IsWin7OrLater() && IsTouchDeviceSupportPresent()) {
+     return GetSystemMetrics(SM_MAXIMUMTOUCHES);
+   }
+   return 0;
+@@ -1973,18 +1975,21 @@ bool WinUtils::GetAppInitDLLs(nsAString& aOutput) {
+   }
+   nsAutoRegKey key(hkey);
+   LONG status;
+-  const wchar_t kLoadAppInitDLLs[] = L"LoadAppInit_DLLs";
+-  DWORD loadAppInitDLLs = 0;
+-  DWORD loadAppInitDLLsLen = sizeof(loadAppInitDLLs);
+-  status = RegQueryValueExW(hkey, kLoadAppInitDLLs, nullptr, nullptr,
+-                            (LPBYTE)&loadAppInitDLLs, &loadAppInitDLLsLen);
+-  if (status != ERROR_SUCCESS) {
+-    return false;
+-  }
+-  if (!loadAppInitDLLs) {
+-    // If loadAppInitDLLs is zero then AppInit_DLLs is disabled.
+-    // In this case we'll return true along with an empty output string.
+-    return true;
++  if (IsVistaOrLater()) {
++    const wchar_t kLoadAppInitDLLs[] = L"LoadAppInit_DLLs";
++    DWORD loadAppInitDLLs = 0;
++    DWORD loadAppInitDLLsLen = sizeof(loadAppInitDLLs);
++    status = RegQueryValueExW(hkey, kLoadAppInitDLLs, nullptr,
++                              nullptr, (LPBYTE)&loadAppInitDLLs,
++                              &loadAppInitDLLsLen);
++    if (status != ERROR_SUCCESS) {
++      return false;
++    }
++    if (!loadAppInitDLLs) {
++      // If loadAppInitDLLs is zero then AppInit_DLLs is disabled.
++      // In this case we'll return true along with an empty output string.
++      return true;
++    }
+   }
+   DWORD numBytes = 0;
+   const wchar_t kAppInitDLLs[] = L"AppInit_DLLs";
+diff --git a/widget/windows/nsDataObj.cpp b/widget/windows/nsDataObj.cpp
+index 2f88ddda9fc7..be104aa67530 100644
+--- a/widget/windows/nsDataObj.cpp
++++ b/widget/windows/nsDataObj.cpp
+@@ -1332,7 +1332,7 @@ nsDataObj ::GetFileContentsInternetShortcut(FORMATETC& aFE, STGMEDIUM& aSTG) {
+   const char* shortcutFormatStr;
+   int totalLen;
+   nsCString asciiPath;
+-  if (!Preferences::GetBool(kShellIconPref, true)) {
++  if (!Preferences::GetBool(kShellIconPref, true) || !IsVistaOrLater()) {
+     shortcutFormatStr = "[InternetShortcut]\r\nURL=%s\r\n";
+     const int formatLen = strlen(shortcutFormatStr) - 2;  // don't include %s
+     totalLen = formatLen + asciiUrl.Length();  // don't include null character
+diff --git a/widget/windows/nsFilePicker.cpp b/widget/windows/nsFilePicker.cpp
+index 1645ba1f3d50..b449a81ded3c 100644
+--- a/widget/windows/nsFilePicker.cpp
++++ b/widget/windows/nsFilePicker.cpp
+@@ -26,6 +26,7 @@
+ #include "mozilla/ProfilerLabels.h"
+ #include "mozilla/StaticPrefs_widget.h"
+ #include "mozilla/UniquePtr.h"
++#include "mozilla/widget/WinMessages.h"
+ #include "nsArrayEnumerator.h"
+ #include "nsCRT.h"
+ #include "nsEnumeratorUtils.h"
+@@ -47,6 +48,7 @@
+ #include "mozilla/widget/filedialog/WinFileDialogCommands.h"
+ #include "mozilla/widget/filedialog/WinFileDialogParent.h"
+ 
++using mozilla::IsVistaOrLater;
+ using mozilla::MakeUnique;
+ using mozilla::LogLevel;
+ using mozilla::UniquePtr;
+@@ -61,6 +63,11 @@ constinit UniquePtr<char16_t[], nsFilePicker::FreeDeleter>
+ 
+ static const wchar_t kDialogPtrProp[] = L"DialogPtrProperty";
+ static const DWORD kDialogTimerID = 9999;
++
++#define FILE_BUFFER_SIZE 4096
++
++static const unsigned long kDialogTimerTimeout = 300;
++
+ #define MAX_EXTENSION_LENGTH 10
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+@@ -145,6 +152,198 @@ NS_IMETHODIMP nsFilePicker::Init(
+   return nsBaseFilePicker::Init(aBrowsingContext, aTitle, aMode, aGlobal);
+ }
+ 
++/*
++ * XP picker callbacks
++ */
++
++// Show - Display the file dialog
++int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lParam,
++                                LPARAM lpData) {
++  if (uMsg == BFFM_INITIALIZED) {
++    char16_t* filePath = (char16_t*)lpData;
++    if (filePath)
++      ::SendMessageW(hwnd, BFFM_SETSELECTIONW,
++                     TRUE /* true because lpData is a path string */, lpData);
++  }
++  return 0;
++}
++
++static void EnsureWindowVisible(HWND hwnd) {
++  // Obtain the monitor which has the largest area of intersection
++  // with the window, or nullptr if there is no intersection.
++  HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
++  if (!monitor) {
++    // The window is not visible, we should reposition it to the same place as
++    // its parent
++    HWND parentHwnd = GetParent(hwnd);
++    RECT parentRect;
++    GetWindowRect(parentHwnd, &parentRect);
++    SetWindowPos(hwnd, nullptr, parentRect.left, parentRect.top, 0, 0,
++                 SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
++  }
++}
++
++// Callback hook which will ensure that the window is visible. Currently
++// only in use on os <= XP.
++UINT_PTR CALLBACK nsFilePicker::FilePickerHook(HWND hwnd, UINT msg,
++                                               WPARAM wParam, LPARAM lParam) {
++  switch (msg) {
++    case WM_NOTIFY: {
++      LPOFNOTIFYW lpofn = (LPOFNOTIFYW)lParam;
++      if (!lpofn || !lpofn->lpOFN) {
++        return 0;
++      }
++
++      if (CDN_INITDONE == lpofn->hdr.code) {
++        // The Window will be automatically moved to the last position after
++        // CDN_INITDONE.  We post a message to ensure the window will be visible
++        // so it will be done after the automatic last position window move.
++        PostMessage(hwnd, MOZ_WM_ENSUREVISIBLE, 0, 0);
++      }
++    } break;
++    case MOZ_WM_ENSUREVISIBLE:
++      EnsureWindowVisible(GetParent(hwnd));
++      break;
++    case WM_INITDIALOG: {
++      OPENFILENAMEW* pofn = reinterpret_cast<OPENFILENAMEW*>(lParam);
++      SetProp(hwnd, kDialogPtrProp, (HANDLE)pofn->lCustData);
++      nsFilePicker* picker = reinterpret_cast<nsFilePicker*>(pofn->lCustData);
++      if (picker) {
++        picker->SetDialogHandle(hwnd);
++        SetTimer(hwnd, kDialogTimerID, kDialogTimerTimeout, nullptr);
++      }
++    } break;
++    case WM_TIMER: {
++      // Check to see if our parent has been torn down, if so, we close too.
++      if (wParam == kDialogTimerID) {
++        nsFilePicker* picker =
++            reinterpret_cast<nsFilePicker*>(GetProp(hwnd, kDialogPtrProp));
++        if (picker && picker->ClosePickerIfNeeded(true)) {
++          KillTimer(hwnd, kDialogTimerID);
++        }
++      }
++    } break;
++  }
++  return 0;
++}
++
++// Callback hook which will dynamically allocate a buffer large enough
++// for the file picker dialog.  Currently only in use on  os <= XP.
++UINT_PTR CALLBACK nsFilePicker::MultiFilePickerHook(HWND hwnd, UINT msg,
++                                                    WPARAM wParam,
++                                                    LPARAM lParam) {
++  switch (msg) {
++    case WM_INITDIALOG: {
++      // Finds the child drop down of a File Picker dialog and sets the
++      // maximum amount of text it can hold when typed in manually.
++      // A wParam of 0 mean 0x7FFFFFFE characters.
++      HWND comboBox =
++          FindWindowEx(GetParent(hwnd), nullptr, L"ComboBoxEx32", nullptr);
++      if (comboBox) SendMessage(comboBox, CB_LIMITTEXT, 0, 0);
++      // Store our nsFilePicker ptr for future use
++      OPENFILENAMEW* pofn = reinterpret_cast<OPENFILENAMEW*>(lParam);
++      SetProp(hwnd, kDialogPtrProp, (HANDLE)pofn->lCustData);
++      nsFilePicker* picker =
++          reinterpret_cast<nsFilePicker*>(pofn->lCustData);
++      if (picker) {
++        picker->SetDialogHandle(hwnd);
++        SetTimer(hwnd, kDialogTimerID, kDialogTimerTimeout, nullptr);
++      }
++    } break;
++    case WM_NOTIFY: {
++      LPOFNOTIFYW lpofn = (LPOFNOTIFYW)lParam;
++      if (!lpofn || !lpofn->lpOFN) {
++        return 0;
++      }
++      // CDN_SELCHANGE is sent when the selection in the list box of the file
++      // selection dialog changes
++      if (lpofn->hdr.code == CDN_SELCHANGE) {
++        HWND parentHWND = GetParent(hwnd);
++
++        // Get the required size for the selected files buffer
++        UINT newBufLength = 0;
++        int requiredBufLength =
++            CommDlg_OpenSave_GetSpecW(parentHWND, nullptr, 0);
++        if (requiredBufLength >= 0)
++          newBufLength += requiredBufLength;
++        else
++          newBufLength += MAX_PATH;
++
++        // If the user selects multiple files, the buffer contains the
++        // current directory followed by the file names of the selected
++        // files. So make room for the directory path.  If the user
++        // selects a single file, it is no harm to add extra space.
++        requiredBufLength =
++            CommDlg_OpenSave_GetFolderPathW(parentHWND, nullptr, 0);
++        if (requiredBufLength >= 0)
++          newBufLength += requiredBufLength;
++        else
++          newBufLength += MAX_PATH;
++
++        // Check if lpstrFile and nMaxFile are large enough
++        if (newBufLength > lpofn->lpOFN->nMaxFile) {
++          if (lpofn->lpOFN->lpstrFile) delete[] lpofn->lpOFN->lpstrFile;
++
++          // We allocate FILE_BUFFER_SIZE more bytes than is needed so that
++          // if the user selects a file and holds down shift and down to
++          // select additional items, we will not continuously reallocate
++          newBufLength += FILE_BUFFER_SIZE;
++
++          wchar_t* filesBuffer = new wchar_t[newBufLength];
++          ZeroMemory(filesBuffer, newBufLength * sizeof(wchar_t));
++
++          lpofn->lpOFN->lpstrFile = filesBuffer;
++          lpofn->lpOFN->nMaxFile = newBufLength;
++        }
++      }
++    } break;
++    case WM_TIMER: {
++      // Check to see if our parent has been torn down, if so, we close too.
++      if (wParam == kDialogTimerID) {
++        nsFilePicker* picker =
++            reinterpret_cast<nsFilePicker*>(GetProp(hwnd, kDialogPtrProp));
++        if (picker && picker->ClosePickerIfNeeded(true)) {
++          KillTimer(hwnd, kDialogTimerID);
++        }
++      }
++    } break;
++  }
++
++  return FilePickerHook(hwnd, msg, wParam, lParam);
++}
++
++/*
++ * Close on parent close logic
++ */
++
++bool nsFilePicker::ClosePickerIfNeeded(bool aIsXPDialog) {
++  if (!mParentWidget || !mDlgWnd) return false;
++
++  nsWindow* win = static_cast<nsWindow*>(mParentWidget.get());
++  // Note, the xp callbacks hand us an inner window, so we have to step up
++  // one to get the actual dialog.
++  HWND dlgWnd;
++  if (aIsXPDialog)
++    dlgWnd = GetParent(mDlgWnd);
++  else
++    dlgWnd = mDlgWnd;
++  if (IsWindow(dlgWnd) && IsWindowVisible(dlgWnd) && win->DestroyCalled()) {
++    wchar_t className[64];
++    // Make sure we have the right window
++    if (GetClassNameW(dlgWnd, className,std::size(className)) &&
++        !wcscmp(className, L"#32770") && DestroyWindow(dlgWnd)) {
++      mDlgWnd = nullptr;
++      return true;
++    }
++  }
++  return false;
++}
++
++void nsFilePicker::SetDialogHandle(HWND aWnd) {
++  if (!aWnd || mDlgWnd) return;
++  mDlgWnd = aWnd;
++}
++
+ namespace mozilla::detail {
+ using Error = mozilla::widget::filedialog::Error;
+ 
+@@ -490,6 +689,49 @@ using fd_async::AsyncExecute;
+ 
+ }  // namespace mozilla::detail
+ 
++// Open the older XP style folder picker dialog. We end up in this call
++// on XP systems or when the modern dialog cannot be initialized.
++bool nsFilePicker::ShowXPFolderPicker(const nsString& aInitialDir) {
++  bool result = false;
++
++  auto dirBuffer = MakeUnique<wchar_t[]>(FILE_BUFFER_SIZE);
++  wcsncpy(dirBuffer.get(), aInitialDir.get(), FILE_BUFFER_SIZE);
++  dirBuffer[FILE_BUFFER_SIZE - 1] = '\0';
++
++  ScopedRtlShimWindow shim(mParentWidget.get());
++  AutoWidgetPickerState awps(mParentWidget);
++
++  BROWSEINFOW browserInfo = {0};
++  browserInfo.pidlRoot = nullptr;
++  browserInfo.pszDisplayName = dirBuffer.get();
++  browserInfo.lpszTitle = mTitle.get();
++  browserInfo.ulFlags = BIF_USENEWUI | BIF_RETURNONLYFSDIRS;
++  browserInfo.hwndOwner = shim.get();
++  browserInfo.iImage = 0;
++  browserInfo.lParam = reinterpret_cast<LPARAM>(this);
++
++  if (!aInitialDir.IsEmpty()) {
++    // the dialog is modal so that |initialDir.get()| will be valid in
++    // BrowserCallbackProc. Thus, we don't need to clone it.
++    browserInfo.lParam = (LPARAM)aInitialDir.get();
++    browserInfo.lpfn = &BrowseCallbackProc;
++  } else {
++    browserInfo.lParam = 0;
++    browserInfo.lpfn = nullptr;
++  }
++
++  LPITEMIDLIST list = ::SHBrowseForFolderW(&browserInfo);
++  if (list) {
++    result = ::SHGetPathFromIDListW(list, dirBuffer.get());
++    if (result)
++      mUnicodeFile.Assign(static_cast<const wchar_t*>(dirBuffer.get()));
++    // free PIDL
++    CoTaskMemFree(list);
++  }
++
++  return result;
++}
++
+ /*
+  * Folder picker invocation
+  */
+@@ -507,6 +749,15 @@ using fd_async::AsyncExecute;
+  */
+ RefPtr<mozilla::MozPromise<bool, nsFilePicker::Error, true>>
+ nsFilePicker::ShowFolderPicker(const nsString& aInitialDir) {
++  using Promise = mozilla::MozPromise<bool, Error, true>;
++  constexpr static auto Ok = [](bool val) {
++    return Promise::CreateAndResolve(val, "nsFilePicker::ShowFolderPicker");
++  };
++
++  if (!IsVistaOrLater()) {
++    return Ok(ShowXPFolderPicker(aInitialDir));
++  }
++
+   namespace fd = ::mozilla::widget::filedialog;
+   nsTArray<fd::Command> commands = {
+       fd::SetOptions(FOS_PICKFOLDERS),
+@@ -527,21 +778,239 @@ nsFilePicker::ShowFolderPicker(const nsString& aInitialDir) {
+   return mozilla::detail::AsyncExecute(&mozilla::detail::ShowFolderPickerLocal,
+                                        &mozilla::detail::ShowFolderPickerRemote,
+                                        shim.get(), commands)
+-      ->Map(NS_GetCurrentThread(), __PRETTY_FUNCTION__,
+-            [self = RefPtr(this), shim = std::move(shim),
+-             awps = std::move(awps)](Maybe<nsString> val) {
+-              if (val) {
+-                self->mUnicodeFile = val.extract();
+-                return true;
+-              }
+-              return false;
+-            });
++      ->Then(NS_GetCurrentThread(), __PRETTY_FUNCTION__,
++             [self = RefPtr(this), shim = std::move(shim),
++              awps = std::move(awps)](Maybe<nsString> val) {
++               if (val) {
++                 self->mUnicodeFile = val.extract();
++                 return Ok(true);
++               }
++               return Ok(false);
++             },
++             [self = RefPtr(this), initialDir = nsString(aInitialDir)](Error const&) {
++               return Ok(self->ShowXPFolderPicker(initialDir));
++             });
+ }
+ 
+ /*
+  * File open and save picker invocation
+  */
+ 
++/* static */
++bool nsFilePicker::GetFileNameWrapper(OPENFILENAMEW* ofn, PickerType aType) {
++  MOZ_SEH_TRY {
++    if (aType == PICKER_TYPE_OPEN)
++      return ::GetOpenFileNameW(ofn);
++    else if (aType == PICKER_TYPE_SAVE)
++      return ::GetSaveFileNameW(ofn);
++  }
++  MOZ_SEH_EXCEPT(true) {
++    NS_ERROR(
++        "nsFilePicker GetFileName win32 call generated an exception! This is "
++        "bad!");
++  }
++  return false;
++}
++
++bool nsFilePicker::FilePickerWrapper(OPENFILENAMEW* ofn, PickerType aType) {
++  if (!ofn) return false;
++  AutoWidgetPickerState awps(mParentWidget);
++  mDlgWnd = nullptr;
++  bool result = GetFileNameWrapper(ofn, aType);
++  mDlgWnd = nullptr;
++  return result;
++}
++
++bool nsFilePicker::ShowXPFilePicker(const nsString& aInitialDir) {
++  OPENFILENAMEW ofn = {0};
++  ofn.lStructSize = sizeof(ofn);
++  nsString filterBuffer = mFilterListXP;
++
++  auto fileBuffer = MakeUnique<wchar_t[]>(FILE_BUFFER_SIZE);
++  wcsncpy(fileBuffer.get(), mDefaultFilePath.get(), FILE_BUFFER_SIZE);
++  fileBuffer[FILE_BUFFER_SIZE - 1] = '\0';  // null terminate if copy truncated
++
++  if (!aInitialDir.IsEmpty()) {
++    ofn.lpstrInitialDir = aInitialDir.get();
++  }
++
++  ScopedRtlShimWindow shim(mParentWidget.get());
++
++  ofn.lpstrTitle = (LPCWSTR)mTitle.get();
++  ofn.lpstrFilter = (LPCWSTR)filterBuffer.get();
++  ofn.nFilterIndex = mSelectedType;
++  ofn.lpstrFile = fileBuffer.get();
++  ofn.nMaxFile = FILE_BUFFER_SIZE;
++  ofn.hwndOwner = shim.get();
++  ofn.lCustData = reinterpret_cast<LPARAM>(this);
++  ofn.Flags = OFN_SHAREAWARE | OFN_LONGNAMES | OFN_OVERWRITEPROMPT |
++              OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_ENABLESIZING |
++              OFN_EXPLORER;
++
++  // Windows Vista and up won't allow you to use the new looking dialogs with
++  // a hook procedure.  The hook procedure fixes a problem on XP dialogs for
++  // file picker visibility.  Vista and up automatically ensures the file
++  // picker is always visible.
++  if (!IsVistaOrLater()) {
++    ofn.lpfnHook = FilePickerHook;
++    ofn.Flags |= OFN_ENABLEHOOK;
++  }
++
++  // Handle add to recent docs settings
++  if (IsPrivacyModeEnabled() || !mAddToRecentDocs) {
++    ofn.Flags |= OFN_DONTADDTORECENT;
++  }
++
++  static const wchar_t htmExt[] = L"html";
++
++  if (!mDefaultExtension.IsEmpty()) {
++    ofn.lpstrDefExt = mDefaultExtension.get();
++  } else if (IsDefaultPathHtml()) {
++    // Get file extension from suggested filename to detect if we are
++    // saving an html file.
++    // This is supposed to append ".htm" if user doesn't supply an
++    // extension but the behavior is sort of weird:
++    // - Often appends ".html" even if you have an extension
++    // - It obeys your extension if you put quotes around name
++    ofn.lpstrDefExt = htmExt;
++  }
++
++  // When possible, instead of using OFN_NOCHANGEDIR to ensure the current
++  // working directory will not change from this call, we will retrieve the
++  // current working directory before the call and restore it after the
++  // call.  This flag causes problems on Windows XP for paths that are
++  // selected like C:test.txt where the user is currently at C:\somepath
++  // In which case expected result should be C:\somepath\test.txt
++  AutoRestoreWorkingPath restoreWorkingPath;
++  // If we can't get the current working directory, the best case is to
++  // use the OFN_NOCHANGEDIR flag
++  if (!restoreWorkingPath.HasWorkingPath()) {
++    ofn.Flags |= OFN_NOCHANGEDIR;
++  }
++
++  bool result = false;
++
++  switch (mMode) {
++    case modeOpen:
++      // FILE MUST EXIST!
++      ofn.Flags |= OFN_FILEMUSTEXIST;
++      result = FilePickerWrapper(&ofn, PICKER_TYPE_OPEN);
++      break;
++
++    case modeOpenMultiple:
++      ofn.Flags |= OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
++
++      // The hook set here ensures that the buffer returned will always be
++      // large enough to hold all selected files.  The hook may modify the
++      // value of ofn.lpstrFile and deallocate the old buffer that it pointed
++      // to (fileBuffer). The hook assumes that the passed in value is heap
++      // allocated and that the returned value should be freed by the caller.
++      // If the hook changes the buffer, it will deallocate the old buffer.
++      // This fix would be nice to have in Vista and up, but it would force
++      // the file picker to use the old style dialogs because hooks are not
++      // allowed in the new file picker UI.  We need to eventually move to
++      // the new Common File Dialogs for Vista and up.
++      if (!IsVistaOrLater()) {
++        ofn.lpfnHook = MultiFilePickerHook;
++        fileBuffer.release();
++        result = FilePickerWrapper(&ofn, PICKER_TYPE_OPEN);
++        fileBuffer.reset(ofn.lpstrFile);
++      } else {
++        result = FilePickerWrapper(&ofn, PICKER_TYPE_OPEN);
++        if (!result && CommDlgExtendedError() == FNERR_BUFFERTOOSMALL) {
++          UINT newBufLength = *reinterpret_cast<WORD*>(fileBuffer.get());
++          if (newBufLength > ofn.nMaxFile) {
++            fileBuffer = MakeUnique<wchar_t[]>(newBufLength);
++            ZeroMemory(fileBuffer.get(), newBufLength * sizeof(wchar_t));
++            ofn.lpstrFile = fileBuffer.get();
++            ofn.nMaxFile = newBufLength;
++            result = FilePickerWrapper(&ofn, PICKER_TYPE_OPEN);
++          }
++        }
++      }
++      break;
++
++    case modeSave: {
++      ofn.Flags |= OFN_NOREADONLYRETURN;
++
++      // Don't follow shortcuts when saving a shortcut, this can be used
++      // to trick users (bug 271732)
++      if (IsDefaultPathLink()) ofn.Flags |= OFN_NODEREFERENCELINKS;
++
++      result = FilePickerWrapper(&ofn, PICKER_TYPE_SAVE);
++      if (!result) {
++        // Error, find out what kind.
++        if (CommDlgExtendedError() == FNERR_INVALIDFILENAME) {
++          // Probably the default file name is too long or contains illegal
++          // characters. Try again, without a starting file name.
++          ofn.lpstrFile[0] = L'\0';
++          result = FilePickerWrapper(&ofn, PICKER_TYPE_SAVE);
++        }
++      }
++    } break;
++
++    default:
++      // NS_NOTREACHED("unsupported file picker mode");
++      return false;
++  }
++
++  if (!result) return false;
++
++  // Remember what filter type the user selected
++  mSelectedType = (int16_t)ofn.nFilterIndex;
++
++  // Single file selection, we're done
++  if (mMode != modeOpenMultiple) {
++    GetQualifiedPath(fileBuffer.get(), mUnicodeFile);
++    return true;
++  }
++
++  // Set user-selected location of file or directory.  From msdn's "Open and
++  // Save As Dialog Boxes" section:
++  // If you specify OFN_EXPLORER, the directory and file name strings are '\0'
++  // separated, with an extra '\0' character after the last file name. This
++  // format enables the Explorer-style dialog boxes to return long file names
++  // that include spaces.
++  wchar_t* current = fileBuffer.get();
++
++  nsAutoString dirName(current);
++  // Sometimes dirName contains a trailing slash and sometimes it doesn't:
++  if (current[dirName.Length() - 1] != '\\') dirName.Append((char16_t)'\\');
++
++  while (current && *current && *(current + wcslen(current) + 1)) {
++    current = current + wcslen(current) + 1;
++
++    // Only prepend the directory if the path specified is a relative path
++    nsAutoString path;
++    if (PathIsRelativeW(current)) {
++      path = dirName + nsDependentString(current);
++    } else {
++      path = current;
++    }
++
++    nsAutoString canonicalizedPath;
++    GetQualifiedPath(path.get(), canonicalizedPath);
++    nsCOMPtr<nsIFile> file;
++    if (NS_FAILED(NS_NewLocalFile(canonicalizedPath, getter_AddRefs(file))) ||
++        !mFiles.AppendObject(file))
++      return false;
++  }
++
++  // Handle the case where the user selected just one file. From msdn: If you
++  // specify OFN_ALLOWMULTISELECT and the user selects only one file the
++  // lpstrFile string does not have a separator between the path and file name.
++  if (current && *current && (current == fileBuffer.get())) {
++    nsAutoString canonicalizedPath;
++    GetQualifiedPath(current, canonicalizedPath);
++    nsCOMPtr<nsIFile> file;
++    if (NS_FAILED(NS_NewLocalFile(canonicalizedPath, getter_AddRefs(file))) ||
++        !mFiles.AppendObject(file))
++      return false;
++  }
++
++  return true;
++}
++
+ /*
+  * Show a file picker.
+  *
+@@ -558,11 +1027,18 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
+   AUTO_PROFILER_LABEL("nsFilePicker::ShowFilePicker", OTHER);
+ 
+   using Promise = mozilla::MozPromise<bool, Error, true>;
++  constexpr static auto Ok = [](bool val) {
++    return Promise::CreateAndResolve(val, "nsFilePicker::ShowFilePicker");
++  };
+   constexpr static auto NotOk = [](Error error) -> RefPtr<Promise> {
+     return Promise::CreateAndReject(std::move(error),
+                                     "nsFilePicker::ShowFilePicker");
+   };
+ 
++  if (!IsVistaOrLater()) {
++    return Ok(ShowXPFilePicker(aInitialDir));
++  }
++
+   namespace fd = ::mozilla::widget::filedialog;
+   nsTArray<fd::Command> commands;
+   // options
+@@ -671,12 +1147,12 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
+       &mozilla::detail::ShowFilePickerLocal,
+       &mozilla::detail::ShowFilePickerRemote, shim.get(), type, commands);
+ 
+-  return promise->Map(
++  return promise->Then(
+       mozilla::GetMainThreadSerialEventTarget(), __PRETTY_FUNCTION__,
+       [self = RefPtr(this), mode = mMode, shim = std::move(shim),
+        awps = std::move(awps)](Maybe<Results> res_opt) {
+         if (!res_opt) {
+-          return false;  // operation cancelled by user
++          return Ok(false);  // operation cancelled by user
+         }
+         auto result = res_opt.extract();
+ 
+@@ -690,9 +1166,9 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
+           if (!paths.IsEmpty()) {
+             MOZ_ASSERT(paths.Length() == 1);
+             self->mUnicodeFile = paths[0];
+-            return true;
++            return Ok(true);
+           }
+-          return false;
++          return Ok(false);
+         }
+ 
+         // multiple selection
+@@ -703,7 +1179,10 @@ nsFilePicker::ShowFilePicker(const nsString& aInitialDir) {
+           }
+         }
+ 
+-        return true;
++        return Ok(true);
++      },
++      [self = RefPtr(this), initialDir = nsString(aInitialDir)](Error const&) {
++        return Ok(self->ShowXPFilePicker(initialDir));
+       });
+ }
+ 
+@@ -999,6 +1478,27 @@ void nsFilePicker::InitNative(nsIWidget* aParent, const nsAString& aTitle) {
+   mTitle.Assign(aTitle);
+ }
+ 
++void nsFilePicker::GetQualifiedPath(const wchar_t* aInPath,
++                                    nsString& aOutPath) {
++  // Prefer a qualified path over a non qualified path.
++  // Things like c:file.txt would be accepted in Win XP but would later
++  // fail to open from the download manager.
++  wchar_t qualifiedFileBuffer[MAX_PATH];
++  if (PathSearchAndQualifyW(aInPath, qualifiedFileBuffer, MAX_PATH)) {
++    aOutPath.Assign(qualifiedFileBuffer);
++  } else {
++    aOutPath.Assign(aInPath);
++  }
++}
++
++void nsFilePicker::AppendXPFilter(const nsAString& aTitle,
++                                  const nsAString& aFilter) {
++  mFilterListXP.Append(aTitle);
++  mFilterListXP.Append(char16_t('\0'));
++  mFilterListXP.Append(aFilter);
++  mFilterListXP.Append(char16_t('\0'));
++}
++
+ NS_IMETHODIMP
+ nsFilePicker::AppendFilter(const nsAString& aTitle, const nsAString& aFilter) {
+   nsString sanitizedFilter(aFilter);
+@@ -1013,7 +1513,9 @@ nsFilePicker::AppendFilter(const nsAString& aTitle, const nsAString& aFilter) {
+     }
+   }
+   mFilterList.AppendElement(
+-      Filter{.title = nsString(aTitle), .filter = std::move(sanitizedFilter)});
++      Filter{.title = nsString(aTitle), .filter = sanitizedFilter});
++
++  AppendXPFilter(aTitle, sanitizedFilter);
+   return NS_OK;
+ }
+ 
+diff --git a/widget/windows/nsFilePicker.h b/widget/windows/nsFilePicker.h
+index a949028709d3..f9b8490c42db 100644
+--- a/widget/windows/nsFilePicker.h
++++ b/widget/windows/nsFilePicker.h
+@@ -85,9 +85,20 @@ class nsFilePicker final : public nsBaseWinFilePicker {
+                           const nsAString& aFilter) override;
+ 
+  protected:
++  enum PickerType {
++    PICKER_TYPE_OPEN,
++    PICKER_TYPE_SAVE,
++  };
++
+   /* method from nsBaseFilePicker */
+   virtual void InitNative(nsIWidget* aParent, const nsAString& aTitle) override;
++  static void GetQualifiedPath(const wchar_t* aInPath, nsString& aOutPath);
+   void GetFilterListArray(nsString& aFilterList);
++  static bool GetFileNameWrapper(OPENFILENAMEW* ofn, PickerType aType);
++  bool FilePickerWrapper(OPENFILENAMEW* ofn, PickerType aType);
++  bool ShowXPFolderPicker(const nsString& aInitialDir);
++  bool ShowXPFilePicker(const nsString& aInitialDir);
++  void AppendXPFilter(const nsAString& aTitle, const nsAString& aFilter);
+ 
+   NS_IMETHOD Open(nsIFilePickerShownCallback* aCallback) override;
+ 
+@@ -103,6 +114,13 @@ class nsFilePicker final : public nsBaseWinFilePicker {
+       mozilla::MozPromise<nsCOMArray<nsIFile>, nsresult, true>;
+   RefPtr<ContentAnalysisResponse> CheckContentAnalysisService();
+ 
++  void SetDialogHandle(HWND aWnd);
++  bool ClosePickerIfNeeded(bool aIsXPDialog);
++  static UINT_PTR CALLBACK MultiFilePickerHook(HWND hwnd, UINT msg,
++                                               WPARAM wParam, LPARAM lParam);
++  static UINT_PTR CALLBACK FilePickerHook(HWND hwnd, UINT msg, WPARAM wParam,
++                                          LPARAM lParam);
++
+  protected:
+   void RememberLastUsedDirectory();
+   bool IsPrivacyModeEnabled();
+@@ -132,6 +150,7 @@ class nsFilePicker final : public nsBaseWinFilePicker {
+     nsString filter;
+   };
+   AutoTArray<Filter, 1> mFilterList;
++  nsString mFilterListXP;
+ };
+ 
+ #endif  // nsFilePicker_h_
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+index 8863da82c328..fec8bf20c236 100644
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -169,8 +169,10 @@ void nsLookAndFeel::EnsureCommandButtonMetrics() {
+   sCommandButtonMetrics[1].cy = sCommandButtonMetrics[2].cy =
+       sCommandButtonMetrics[0].cy;
+ 
+-  // Trigger a refresh on the next layout.
+-  sTitlebarInfoPopulatedAero = sTitlebarInfoPopulatedThemed = false;
++  // Use system metrics for pre-vista, otherwise trigger a
++  // refresh on the next layout.
++  sTitlebarInfoPopulatedAero = sTitlebarInfoPopulatedThemed =
++    !IsVistaOrLater();
+ }
+ 
+ // static
+@@ -640,7 +642,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+         aColor = kNonNativeMenuText;
+         return NS_OK;
+       }
+-      if (!nsLookAndFeel::IsAppThemed()) {
++      if (!IsVistaOrLater() || !nsLookAndFeel::IsAppThemed()) {
+         idx = COLOR_MENUTEXT;
+         break;
+       }
+@@ -1121,8 +1123,8 @@ LookAndFeelFont nsLookAndFeel::GetLookAndFeelFont(LookAndFeel::FontID anID) {
+   }
+ 
+   NONCLIENTMETRICSW ncm;
+-  ncm.cbSize = sizeof(NONCLIENTMETRICSW);
+-  if (!::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm),
++  ncm.cbSize = sizeof(NONCLIENTMETRICSW) - sizeof(ncm.iPaddedBorderWidth);
++  if (!::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, ncm.cbSize,
+                                (PVOID)&ncm, 0)) {
+     return result;
+   }
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index 11cfa9dabd45..42aae6444ee0 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -41,6 +41,7 @@
+ #include "prinrval.h"
+ #include "WinUtils.h"
+ 
++using mozilla::IsVistaOrLater;
+ using namespace mozilla;
+ using namespace mozilla::gfx;
+ using namespace mozilla::widget;
+@@ -312,6 +313,10 @@ static HRESULT DrawThemeBGRTLAware(HANDLE aTheme, HDC aHdc, int aPart,
+  *  aero basic max          0        2        1        2
+  *  aero basic close        1        2        1        2
+  *
++ *  xp theme min            0        2        0        2
++ *  xp theme max            0        2        1        2
++ *  xp theme close          1        2        2        2
++ *
+  *  'cold' button padding - generic button padding, should
+  *  be handled in css.
+  *                       left      top    right   bottom
+@@ -322,11 +327,16 @@ static HRESULT DrawThemeBGRTLAware(HANDLE aTheme, HDC aHdc, int aPart,
+  *  aero basic min          0        0        1        0
+  *  aero basic max          1        0        0        0
+  *  aero basic close        0        0        0        0
++ *
++ *  xp theme min            0        0        1        0
++ *  xp theme max            1        0        0        0
++ *  xp theme close          0        0        0        0
+  */
+ 
+ enum CaptionDesktopTheme {
+   CAPTION_CLASSIC = 0,
+   CAPTION_BASIC,
++  CAPTION_XPTHEME,
+ };
+ 
+ enum CaptionButton {
+@@ -351,6 +361,8 @@ static void AddPaddingRect(LayoutDeviceIntSize* aSize, CaptionButton button) {
+   RECT offset;
+   if (!nsLookAndFeel::IsAppThemed())
+     offset = buttonData[CAPTION_CLASSIC].hotPadding[button];
++  else if (!IsVistaOrLater())
++    offset = buttonData[CAPTION_XPTHEME].hotPadding[button];
+   else
+     offset = buttonData[CAPTION_BASIC].hotPadding[button];
+   aSize->width += offset.left + offset.right;
+@@ -363,6 +375,8 @@ static void OffsetBackgroundRect(RECT& rect, CaptionButton button) {
+   RECT offset;
+   if (!nsLookAndFeel::IsAppThemed())
+     offset = buttonData[CAPTION_CLASSIC].hotPadding[button];
++  else if (!IsVistaOrLater())
++    offset = buttonData[CAPTION_XPTHEME].hotPadding[button];
+   else
+     offset = buttonData[CAPTION_BASIC].hotPadding[button];
+   rect.left += offset.left;
+@@ -408,7 +422,10 @@ static const double kProgressDeterminateTimeSpan = 3.0;
+ static const double kProgressIndeterminateTimeSpan = 5.0;
+ // The width of the overlay used to animate the horizontal progress bar (Vista
+ // and later).
+-static const int32_t kProgressHorizontalOverlaySize = 120;
++static const int32_t kProgressHorizontalVistaOverlaySize = 120;
++// The width of the overlay used for the horizontal indeterminate progress bars
++// on XP.
++static const int32_t kProgressHorizontalXPOverlaySize = 55;
+ // The height of the overlay used to animate the vertical progress bar (Vista
+ // and later).
+ static const int32_t kProgressVerticalOverlaySize = 45;
+@@ -424,7 +441,17 @@ static const int32_t kProgressClassicOverlaySize = 40;
+  * progress bars based on os and orientation.
+  */
+ static int32_t GetProgressOverlayStyle(bool aIsVertical) {
+-  return aIsVertical ? PP_MOVEOVERLAYVERT : PP_MOVEOVERLAY;
++  if (aIsVertical) {
++    if (IsVistaOrLater()) {
++      return PP_MOVEOVERLAYVERT;
++    }
++    return PP_CHUNKVERT;
++  } else {
++    if (IsVistaOrLater()) {
++      return PP_MOVEOVERLAY;
++    }
++    return PP_CHUNK;
++  }
+ }
+ 
+ /*
+@@ -433,11 +460,14 @@ static int32_t GetProgressOverlayStyle(bool aIsVertical) {
+  * and vista pulse overlays.
+  */
+ static int32_t GetProgressOverlaySize(bool aIsVertical, bool aIsIndeterminate) {
+-  if (aIsVertical) {
+-    return aIsIndeterminate ? kProgressVerticalIndeterminateOverlaySize
+-                            : kProgressVerticalOverlaySize;
++  if (IsVistaOrLater()) {
++    if (aIsVertical) {
++      return aIsIndeterminate ? kProgressVerticalIndeterminateOverlaySize
++                              : kProgressVerticalOverlaySize;
++    }
++    return kProgressHorizontalVistaOverlaySize;
+   }
+-  return kProgressHorizontalOverlaySize;
++  return kProgressHorizontalXPOverlaySize;
+ }
+ 
+ /*
+@@ -521,6 +551,87 @@ RECT nsNativeThemeWin::CalculateProgressOverlayRect(nsIFrame* aFrame,
+   return overlayRect;
+ }
+ 
++/*
++ * DrawChunkProgressMeter - renders an xp style chunked progress meter. Called
++ * by DrawProgressMeter.
++ *
++ * @param aTheme       progress theme handle
++ * @param aHdc         hdc returned by gfxWindowsNativeDrawing
++ * @param aPart        the PP_X progress part
++ * @param aState       the theme state
++ * @param aFrame       the elements frame
++ * @param aWidgetRect  bounding rect for the widget
++ * @param aClipRect    dirty rect that needs drawing.
++ * @param aAppUnits    app units per device pixel
++ * @param aIsIndeterm  is an indeterminate progress?
++ * @param aIsVertical  render a vertical progress?
++ * @param aIsRtl       direction is rtl
++ */
++static void
++DrawChunkProgressMeter(HTHEME aTheme, HDC aHdc, int aPart,
++                       int aState, nsIFrame* aFrame, RECT* aWidgetRect,
++                       RECT* aClipRect, gfxFloat aAppUnits, bool aIsIndeterm,
++                       bool aIsVertical, bool aIsRtl)
++{
++  NS_ASSERTION(aTheme, "Bad theme.");
++  NS_ASSERTION(aHdc, "Bad hdc.");
++  NS_ASSERTION(aWidgetRect, "Bad rect.");
++  NS_ASSERTION(aClipRect, "Bad clip rect.");
++  NS_ASSERTION(aFrame, "Bad frame.");
++
++  // For horizontal meters, the theme lib paints the right graphic but doesn't
++  // paint the chunks, so we do that manually. For vertical meters, the theme
++  // library draws everything correctly.
++  if (aIsVertical) {
++    DrawThemeBackground(aTheme, aHdc, aPart, aState, aWidgetRect, aClipRect);
++    return;
++  }
++
++  // query for the proper chunk metrics
++  int chunkSize, spaceSize;
++  if (FAILED(GetThemeMetric(aTheme, aHdc, aPart, aState,
++                            TMT_PROGRESSCHUNKSIZE, &chunkSize)) ||
++      FAILED(GetThemeMetric(aTheme, aHdc, aPart, aState,
++                            TMT_PROGRESSSPACESIZE, &spaceSize))) {
++    DrawThemeBackground(aTheme, aHdc, aPart, aState, aWidgetRect, aClipRect);
++    return;
++  }
++
++  // render chunks
++  if (!aIsRtl || aIsIndeterm) {
++    for (int chunk = aWidgetRect->left; chunk <= aWidgetRect->right;
++         chunk += (chunkSize+spaceSize)) {
++      if (!aIsIndeterm && ((chunk + chunkSize) > aWidgetRect->right)) {
++        // aWidgetRect->right represents the end of the meter. Partial blocks
++        // don't get rendered with one exception, so exit here if we don't have
++        // a full chunk to draw.
++        // The above is true *except* when the meter is at 100% fill, in which
++        // case Windows renders any remaining partial block. Query the parent
++        // frame to find out if we're at 100%.
++        if (!IsProgressMeterFilled(aFrame)) {
++          break;
++        }
++      }
++      RECT bounds =
++        { chunk, aWidgetRect->top, chunk + chunkSize, aWidgetRect->bottom };
++      DrawThemeBackground(aTheme, aHdc, aPart, aState, &bounds, aClipRect);
++    }
++  } else {
++    // rtl needs to grow in the opposite direction to look right.
++    for (int chunk = aWidgetRect->right; chunk >= aWidgetRect->left;
++         chunk -= (chunkSize+spaceSize)) {
++      if ((chunk - chunkSize) < aWidgetRect->left) {
++        if (!IsProgressMeterFilled(aFrame)) {
++          break;
++        }
++      }
++      RECT bounds =
++        { chunk - chunkSize, aWidgetRect->top, chunk, aWidgetRect->bottom };
++      DrawThemeBackground(aTheme, aHdc, aPart, aState, &bounds, aClipRect);
++    }
++  }
++}
++
+ /*
+  * DrawProgressMeter - render an appropriate progress meter based on progress
+  * meter style, orientation, and os. Note, this does not render the underlying
+@@ -547,6 +658,12 @@ void nsNativeThemeWin::DrawThemedProgressMeter(
+   RECT adjWidgetRect, adjClipRect;
+   adjWidgetRect = *aWidgetRect;
+   adjClipRect = *aClipRect;
++  if (!IsVistaOrLater()) {
++    // Adjust clipping out by one pixel. XP progress meters are inset,
++    // Vista+ are not.
++    InflateRect(&adjWidgetRect, 1, 1);
++    InflateRect(&adjClipRect, 1, 1);
++  }
+ 
+   nsIFrame* parentFrame = aFrame->GetParent();
+   if (!parentFrame) {
+@@ -560,21 +677,36 @@ void nsNativeThemeWin::DrawThemedProgressMeter(
+   bool indeterminate = elementState.HasState(ElementState::INDETERMINATE);
+   bool animate = indeterminate;
+ 
+-  // Vista and up progress meter is fill style, rendered here. We render
+-  // the pulse overlay in the follow up section below.
+-  DrawThemeBackground(aTheme, aHdc, aPart, aState, &adjWidgetRect,
+-                      &adjClipRect);
+-  if (!IsProgressMeterFilled(aFrame)) {
+-    animate = true;
++  gfxFloat appUnits = aFrame->PresContext()->AppUnitsPerDevPixel();
++  if (IsVistaOrLater()) {
++    // Vista and up progress meter is fill style, rendered here. We render
++    // the pulse overlay in the follow up section below.
++    DrawThemeBackground(aTheme, aHdc, aPart, aState,
++                        &adjWidgetRect, &adjClipRect);
++    if (!IsProgressMeterFilled(aFrame)) {
++      animate = true;
++    }
++  } else if (!indeterminate) {
++    // XP progress meters are 'chunk' style.
++    DrawChunkProgressMeter(aTheme, aHdc, aPart, aState, aFrame,
++                           &adjWidgetRect, &adjClipRect, appUnits,
++                           indeterminate, vertical, IsFrameRTL(aFrame));
+   }
+ 
+   if (animate) {
+     // Indeterminate rendering
+     int32_t overlayPart = GetProgressOverlayStyle(vertical);
+-    RECT overlayRect = CalculateProgressOverlayRect(
+-        aFrame, &adjWidgetRect, vertical, indeterminate, false);
+-    DrawThemeBackground(aTheme, aHdc, overlayPart, aState, &overlayRect,
+-                        &adjClipRect);
++    RECT overlayRect =
++      CalculateProgressOverlayRect(aFrame, &adjWidgetRect, vertical,
++                                   indeterminate, false);
++    if (IsVistaOrLater()) {
++      DrawThemeBackground(aTheme, aHdc, overlayPart, aState, &overlayRect,
++                          &adjClipRect);
++    } else {
++      DrawChunkProgressMeter(aTheme, aHdc, overlayPart, aState, aFrame,
++                             &overlayRect, &adjClipRect, appUnits,
++                             indeterminate, vertical, IsFrameRTL(aFrame));
++    }
+ 
+     if (!QueueAnimatedContentForRefresh(aFrame->GetContent(), 60)) {
+       NS_WARNING("unable to animate progress widget!");
+@@ -743,6 +875,15 @@ mozilla::Maybe<UXThemeClass> nsNativeThemeWin::GetThemeClass(
+ 
+ HANDLE
+ nsNativeThemeWin::GetTheme(StyleAppearance aAppearance) {
++  if (!IsVistaOrLater()) {
++    if (aAppearance == StyleAppearance::Menulist) {
++      aAppearance = StyleAppearance::Textfield;
++    }
++    if (aAppearance == StyleAppearance::Tooltip) {
++      return nullptr;
++    }
++  }
++
+   mozilla::Maybe<UXThemeClass> themeClass = GetThemeClass(aAppearance);
+   if (themeClass.isNothing()) {
+     return nullptr;
+@@ -797,6 +938,10 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
+                                                 StyleAppearance aAppearance,
+                                                 int32_t& aPart,
+                                                 int32_t& aState) {
++  if (!IsVistaOrLater() && aAppearance == StyleAppearance::Menulist) {
++    aAppearance = StyleAppearance::Textfield;
++  }
++
+   switch (aAppearance) {
+     case StyleAppearance::Button: {
+       aPart = BP_BUTTON;
+@@ -865,6 +1010,20 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
+     case StyleAppearance::Textarea: {
+       ElementState elementState = GetContentState(aFrame, aAppearance);
+ 
++      if (!IsVistaOrLater()) {
++        aPart = TFP_TEXTFIELD;
++
++        if (!aFrame)
++          aState = TS_NORMAL;
++        else if (elementState.HasState(ElementState::DISABLED))
++          aState = TS_DISABLED;
++        else if (CheckBooleanAttr(aFrame, nsGkAtoms::readonly))
++          aState = TFS_READONLY;
++        else
++          aState = StandardGetState(aFrame, aAppearance, true);
++        return NS_OK;
++      }
++
+       /* Note: the NOSCROLL type has a rounded corner in each corner.  The more
+        * specific HSCROLL, VSCROLL, HVSCROLL types have side and/or top/bottom
+        * edges rendered as straight horizontal lines with sharp corners to
+@@ -1001,7 +1160,7 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
+       aFrame = parentFrame;
+ 
+       ElementState elementState = GetContentState(aFrame, aAppearance);
+-      aPart = CBP_DROPMARKER_VISTA;
++      aPart = IsVistaOrLater() ? CBP_DROPMARKER_VISTA : CBP_DROPMARKER;
+ 
+       // For HTML controls with author styling, we should fall
+       // back to the old dropmarker style to avoid clashes with
+@@ -1016,27 +1175,33 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
+         return NS_OK;
+       }
+ 
+-      if (nsComboboxControlFrame* ccf = do_QueryFrame(aFrame)) {
+-        isOpen = ccf->IsDroppedDown();
+-        if (isOpen) {
+-          /* Hover is propagated, but we need to know whether we're hovering
+-           * just the combobox frame, not the dropdown frame. But, we can't get
+-           * that information, since hover is on the content node, and they
+-           * share the same content node.  So, instead, we cheat -- if the
+-           * dropdown is open, we always show the hover state.  This looks fine
+-           * in practice.
++      if (IsVistaOrLater()) {
++        if (nsComboboxControlFrame* ccf = do_QueryFrame(aFrame)) {
++          isOpen = ccf->IsDroppedDown();
++          if (isOpen) {
++            /* Hover is propagated, but we need to know whether we're hovering
++             * just the combobox frame, not the dropdown frame. But, we can't get
++             * that information, since hover is on the content node, and they
++             * share the same content node.  So, instead, we cheat -- if the
++             * dropdown is open, we always show the hover state.  This looks fine
++             * in practice.
++             */
++            aState = TS_HOVER;
++            return NS_OK;
++          }
++        } else {
++          /* On Vista, the dropdown indicator on a menulist button in chrome is
++           * not given a hover effect. When the frame isn't HTML content, force
++           * the dropdown state to normal. (Bug 430434)
+            */
+-          aState = TS_HOVER;
++          isOpen = IsOpenButton(aFrame);
++          aState = TS_NORMAL;
+           return NS_OK;
+         }
++      } else if (nsComboboxControlFrame* ccf = do_QueryFrame(aFrame)) {
++        isOpen = ccf->IsDroppedDown();
+       } else {
+-        /* The dropdown indicator on a menulist button in chrome is not given a
+-         * hover effect. When the frame isn't isn't HTML content, we cheat and
+-         * force the dropdown state to be normal. (Bug 430434)
+-         */
+         isOpen = IsOpenButton(aFrame);
+-        aState = TS_NORMAL;
+-        return NS_OK;
+       }
+ 
+       aState = TS_NORMAL;
+@@ -1736,6 +1901,7 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
+     return ok;
+   }
+ 
++  if (IsVistaOrLater()) {
+   /* textfields need extra pixels on all sides, otherwise they wrap their
+    * content too tightly.  The actual border is drawn 1px inside the specified
+    * rectangle, so Gecko will end up making the contents look too small.
+@@ -1761,6 +1927,7 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
+     ScaleForFrameDPI(aResult, aFrame);
+     return ok;
+   }
++  }
+ 
+   int32_t right, left, top, bottom;
+   right = left = top = bottom = 0;
+@@ -1931,6 +2098,10 @@ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+       // stores that info in nsUXThemeData.
+       SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_RESTORE);
+       LayoutDeviceIntSize result(sz.cx, sz.cy);
++      if (!IsVistaOrLater()) {
++        result.width -= 4;
++        result.height -= 4;
++      }
+       AddPaddingRect(&result, CAPTIONBUTTON_RESTORE);
+       return result;
+     }
+@@ -1938,6 +2109,10 @@ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+     case StyleAppearance::MozWindowButtonMinimize: {
+       SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_MINIMIZE);
+       LayoutDeviceIntSize result(sz.cx, sz.cy);
++      if (!IsVistaOrLater()) {
++        result.width -= 4;
++        result.height -= 4;
++      }
+       AddPaddingRect(&result, CAPTIONBUTTON_MINIMIZE);
+       return result;
+     }
+@@ -1945,6 +2120,10 @@ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+     case StyleAppearance::MozWindowButtonClose: {
+       SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_CLOSE);
+       LayoutDeviceIntSize result(sz.cx, sz.cy);
++      if (!IsVistaOrLater()) {
++        result.width -= 4;
++        result.height -= 4;
++      }
+       AddPaddingRect(&result, CAPTIONBUTTON_CLOSE);
+       return result;
+     }
+@@ -2008,6 +2187,21 @@ bool nsNativeThemeWin::WidgetAttributeChangeRequiresRepaint(
+     return false;
+   }
+ 
++  // On Vista, the scrollbar buttons need to change state when the track has/doesn't have hover
++  if (!IsVistaOrLater() &&
++      (aAppearance == StyleAppearance::ScrollbarVertical ||
++       aAppearance == StyleAppearance::ScrollbarHorizontal)) {
++    return false;
++  }
++
++  // Repaint native HTML dropdown arrows when their state-related attributes change.
++  if (IsVistaOrLater() &&
++      (aAppearance == StyleAppearance::Menulist ||
++       aAppearance == StyleAppearance::MenulistButton ||
++       aAppearance == StyleAppearance::MozMenulistArrowButton)) {
++    return true;
++  }
++
+   if (aAppearance == StyleAppearance::MozWindowTitlebar ||
+       aAppearance == StyleAppearance::MozWindowTitlebarMaximized ||
+       aAppearance == StyleAppearance::MozWindowButtonClose ||
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index c8e67f3077a5..b8c0afb01747 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -103,6 +103,7 @@
+ #include "nsITheme.h"
+ #include "nsIObserverService.h"
+ #include "nsIScreenManager.h"
++#include "nsISound.h"
+ #include "imgIContainer.h"
+ #include "nsIFile.h"
+ #include "nsIRollupListener.h"
+@@ -330,6 +331,8 @@ HWND nsWindow::sRollupMsgWnd = nullptr;
+ UINT nsWindow::sHookTimerId = 0;
+ 
+ bool nsWindow::sIsRestoringSession = false;
++// Trim heap on minimize. (initialized, but still true.)
++int nsWindow::sTrimOnMinimize = 2;
+ 
+ bool nsWindow::sTouchInjectInitialized = false;
+ InjectTouchInputPtr nsWindow::sInjectTouchFuncPtr;
+@@ -1115,7 +1118,8 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+   }
+ 
+   if (mWindowType == WindowType::Popup) {
+-    if (!IsWin8OrLater() && HasBogusPopupsDropShadowOnMultiMonitor() &&
++    if (IsVistaOrLater() && !IsWin8OrLater() &&
++        HasBogusPopupsDropShadowOnMultiMonitor() &&
+         ShouldUseOffMainThreadCompositing()) {
+       desiredStyles.ex |= WS_EX_COMPOSITED;
+     }
+@@ -1372,6 +1376,18 @@ const wchar_t kShellLibraryName[] =  L"shell32.dll";
+   mDefaultIMC.Init(this);
+   IMEHandler::InitInputContext(this, mInputContext);
+ 
++  // Initialize config.trim_on_minimize when the first top-level window is
++  // created; Windows no longer creates an Invisible nsWindow.
++  if (sTrimOnMinimize == 2 && mWindowType == WindowType::TopLevel) {
++    // Our internal trim prevention logic is effective on 2K/XP at maintaining
++    // the working set when windows are minimized, but on Vista and up it has
++    // little to no effect. Since this feature has been the source of numerous
++    // bugs over the years, disable it (sTrimOnMinimize=1) on Vista and up.
++    sTrimOnMinimize =
++      Preferences::GetBool("config.trim_on_minimize",
++        IsVistaOrLater() ? 1 : 0);
++  }
++
+   // Query for command button metric data for rendering the titlebar. We
+   // only do this once on the first window that has an actual titlebar
+   if (ShouldCacheTitleBarInfo(mWindowType, mBorderStyle)) {
+@@ -2043,7 +2059,7 @@ bool nsWindow::IsVisible() const { return mIsVisible; }
+ // operations.
+ // XXX this is apparently still needed in Windows 7 and later
+ void nsWindow::ClearThemeRegion() {
+-  if (!HasGlass() &&
++  if (IsVistaOrLater() && !HasGlass() &&
+       (mWindowType == WindowType::Popup &&
+        (mPopupType == PopupType::Tooltip || mPopupType == PopupType::Panel))) {
+     SetWindowRgn(mWnd, nullptr, false);
+@@ -6232,6 +6248,12 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
+ 
+     case WM_SYSCOMMAND: {
+       WPARAM const filteredWParam = (wParam & 0xFFF0);
++      // prevent Windows from trimming the working set. bug 76831
++      if (!sTrimOnMinimize && filteredWParam == SC_MINIMIZE) {
++        ::ShowWindow(mWnd, SW_SHOWMINIMIZED);
++        result = true;
++      }
++
+ 
+       // SC_CLOSE may trigger a synchronous confirmation prompt. If we're in the
+       // middle of something important, put off responding to it.
+@@ -7007,6 +7029,31 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp) {
+   }
+ }
+ 
++// static
++void nsWindow::ActivateOtherWindowHelper(HWND aWnd)
++{
++  // Find the next window that is enabled, visible, and not minimized.
++  HWND hwndBelow = ::GetNextWindow(aWnd, GW_HWNDNEXT);
++  while (hwndBelow && (!::IsWindowEnabled(hwndBelow) || !::IsWindowVisible(hwndBelow) ||
++                       ::IsIconic(hwndBelow))) {
++    hwndBelow = ::GetNextWindow(hwndBelow, GW_HWNDNEXT);
++  }
++
++  // Push ourselves to the bottom of the stack, then activate the
++  // next window.
++  ::SetWindowPos(aWnd, HWND_BOTTOM, 0, 0, 0, 0,
++                 SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
++  if (hwndBelow)
++    ::SetForegroundWindow(hwndBelow);
++
++  // Play the minimize sound while we're here, since that is also
++  // forgotten when we use SW_SHOWMINIMIZED.
++  nsCOMPtr<nsISound> sound(do_CreateInstance("@mozilla.org/sound;1"));
++  if (sound) {
++//  sound->PlaySystemSound(NS_LITERAL_STRING("Minimize"));
++  }
++}
++
+ void nsWindow::OnWindowPosChanging(WINDOWPOS* info) {
+   // Update non-client margins if the frame size is changing, and let the
+   // browser know we are changing size modes, so alternative css can kick in.
+@@ -9423,7 +9470,8 @@ static nsSizeMode GetSizeModeForWindowFrame(HWND aWnd, bool aFullscreenMode) {
+   }
+ }
+ 
+-static void ShowWindowWithMode(HWND aWnd, nsSizeMode aMode) {
++static void ShowWindowWithMode(HWND aWnd, nsSizeMode aMode,
++                               bool aTrimOnMinimize) {
+   // This will likely cause a callback to
+   // nsWindow::FrameState::{OnFrameChanging() and OnFrameChanged()}
+   switch (aMode) {
+@@ -9436,7 +9484,10 @@ static void ShowWindowWithMode(HWND aWnd, nsSizeMode aMode) {
+       break;
+ 
+     case nsSizeMode_Minimized:
+-      ::ShowWindow(aWnd, SW_MINIMIZE);
++      // SW_SHOWMINIMIZED avoids trimming the working set, but leaves this
++      // window active. WM_WINDOWPOSCHANGED will fix activation afterward.
++      // Use normal minimization when trimming was explicitly requested.
++      ::ShowWindow(aWnd, aTrimOnMinimize ? SW_MINIMIZE : SW_SHOWMINIMIZED);
+       break;
+ 
+     default:
+@@ -9546,6 +9597,12 @@ void nsWindow::FrameState::OnFrameChanged() {
+       GetSizeModeForWindowFrame(mWindow->mWnd, mFullscreenMode);
+   EnsureSizeMode(newSizeMode, DoShowWindow::No);
+ 
++  // SW_SHOWMINIMIZED keeps the minimized window active, so activate another
++  // window after the native frame state has been synchronized.
++  if (!nsWindow::sTrimOnMinimize && mSizeMode == nsSizeMode_Minimized) {
++    nsWindow::ActivateOtherWindowHelper(mWindow->mWnd);
++  }
++
+   // If window was restored, activate the window now to get correct attributes.
+   if (mWindow->mIsVisible && mWindow->IsForegroundWindow() &&
+       oldSizeMode == nsSizeMode_Minimized &&
+@@ -9577,7 +9634,7 @@ void nsWindow::FrameState::SetSizeModeInternal(nsSizeMode aMode,
+   MaybeLogSizeMode(mSizeMode);
+ 
+   if (bool(aDoShowWindow) && mWindow->mIsVisible) {
+-    ShowWindowWithMode(mWindow->mWnd, aMode);
++    ShowWindowWithMode(mWindow->mWnd, aMode, nsWindow::sTrimOnMinimize);
+   }
+ 
+   mWindow->UpdateNonClientMargins(false);
+diff --git a/widget/windows/nsWindow.h b/widget/windows/nsWindow.h
+index ba04a27f2f43..3f08ea02f184 100644
+--- a/widget/windows/nsWindow.h
++++ b/widget/windows/nsWindow.h
+@@ -694,6 +694,7 @@ class nsWindow final : public nsIWidget {
+       mozilla::layers::WebRenderBridgeChild* aWrBridge,
+       mozilla::wr::DisplayListBuilder& aBuilder,
+       mozilla::wr::IpcResourceUpdateQueue& aResourceUpdates) override;
++  static void ActivateOtherWindowHelper(HWND aWnd);
+ 
+   void CreateCompositor() override;
+   void DestroyCompositor() override;
+@@ -745,6 +746,7 @@ class nsWindow final : public nsIWidget {
+   static bool sJustGotActivate;
+   static bool sIsInMouseCapture;
+   static bool sIsRestoringSession;
++  static int sTrimOnMinimize;
+   static bool sIsNativePointLocked;
+   static bool sIsUsingRawInputForMouseMove;
+ 

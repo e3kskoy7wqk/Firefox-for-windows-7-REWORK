@@ -1,0 +1,123 @@
+diff --git a/security/sandbox/chromium/base/synchronization/condition_variable.h b/security/sandbox/chromium/base/synchronization/condition_variable.h
+index 3dcf5c339a96..9287154cd014 100644
+--- a/security/sandbox/chromium/base/synchronization/condition_variable.h
++++ b/security/sandbox/chromium/base/synchronization/condition_variable.h
+@@ -121,7 +121,7 @@ class BASE_EXPORT ConditionVariable {
+  private:
+ #if BUILDFLAG(IS_WIN)
+   CHROME_CONDITION_VARIABLE cv_;
+-  const raw_ptr<CHROME_SRWLOCK> srwlock_;
++  char const crit_sec_[100];
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   pthread_cond_t condition_;
+   raw_ptr<pthread_mutex_t> user_mutex_;
+diff --git a/security/sandbox/chromium/base/synchronization/lock.h b/security/sandbox/chromium/base/synchronization/lock.h
+index 60ecf178c7e3..2b6b741f1441 100644
+--- a/security/sandbox/chromium/base/synchronization/lock.h
++++ b/security/sandbox/chromium/base/synchronization/lock.h
+@@ -47,9 +47,9 @@ class LOCKABLE BASE_EXPORT Lock {
+   Lock();
+   ~Lock();
+ 
+-  // NOTE: We do not permit recursive locks and will commonly fire a DCHECK() if
+-  // a thread attempts to acquire the lock a second time (while already holding
+-  // it).
++  // NOTE: Although windows critical sections support recursive locks, we do not
++  // allow this, and we will commonly fire a DCHECK() if a thread attempts to
++  // acquire the lock a second time (while already holding it).
+   void Acquire() EXCLUSIVE_LOCK_FUNCTION() {
+     lock_.Lock();
+     CheckUnheldAndMark();
+diff --git a/security/sandbox/chromium/base/synchronization/lock_impl.h b/security/sandbox/chromium/base/synchronization/lock_impl.h
+index b983547adaad..2a4134f63c8e 100644
+--- a/security/sandbox/chromium/base/synchronization/lock_impl.h
++++ b/security/sandbox/chromium/base/synchronization/lock_impl.h
+@@ -46,9 +46,9 @@ class BASE_EXPORT LockImpl {
+   friend class base::win::internal::ScopedHandleVerifier;
+ 
+ #if BUILDFLAG(IS_WIN)
+-  using NativeHandle = CHROME_SRWLOCK;
++  typedef char NativeHandle[100];
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+-  using NativeHandle = pthread_mutex_t;
++  typedef pthread_mutex_t NativeHandle;
+ #endif
+ 
+   LockImpl();
+@@ -76,6 +76,9 @@ class BASE_EXPORT LockImpl {
+ #endif
+ 
+   void LockInternal();
++#if BUILDFLAG(IS_WIN)
++  alignas(void*)
++#endif
+   NativeHandle native_handle_;
+ };
+ 
+@@ -95,12 +98,14 @@ void LockImpl::Lock() {
+ 
+ #if BUILDFLAG(IS_WIN)
+ bool LockImpl::Try() {
+-  return !!::TryAcquireSRWLockExclusive(
+-      reinterpret_cast<PSRWLOCK>(&native_handle_));
++  if (::TryEnterCriticalSection(reinterpret_cast<PCRITICAL_SECTION>(&native_handle_)) != 0) {
++    return true;
++  }
++  return false;
+ }
+ 
+ void LockImpl::Unlock() {
+-  ::ReleaseSRWLockExclusive(reinterpret_cast<PSRWLOCK>(&native_handle_));
++  ::LeaveCriticalSection(reinterpret_cast<PCRITICAL_SECTION>(&native_handle_));
+ }
+ 
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+diff --git a/security/sandbox/chromium/base/synchronization/lock_impl_win.cc b/security/sandbox/chromium/base/synchronization/lock_impl_win.cc
+index 6819c23356c3..9de599205fc6 100644
+--- a/security/sandbox/chromium/base/synchronization/lock_impl_win.cc
++++ b/security/sandbox/chromium/base/synchronization/lock_impl_win.cc
+@@ -9,12 +9,18 @@
+ namespace base {
+ namespace internal {
+ 
+-LockImpl::LockImpl() : native_handle_(SRWLOCK_INIT) {}
++LockImpl::LockImpl() {
++  // The second parameter is the spin count, for short-held locks it avoid the
++  // contending thread from going to sleep which helps performance greatly.
++  ::InitializeCriticalSectionAndSpinCount(reinterpret_cast<PCRITICAL_SECTION>(&native_handle_), 2000);
++}
+ 
+-LockImpl::~LockImpl() = default;
++LockImpl::~LockImpl() {
++  ::DeleteCriticalSection(reinterpret_cast<PCRITICAL_SECTION>(&native_handle_));
++}
+ 
+ void LockImpl::LockInternal() {
+-  ::AcquireSRWLockExclusive(reinterpret_cast<PSRWLOCK>(&native_handle_));
++  ::EnterCriticalSection(reinterpret_cast<PCRITICAL_SECTION>(&native_handle_));
+ }
+ 
+ }  // namespace internal
+diff --git a/security/sandbox/chromium/base/win/windows_types.h b/security/sandbox/chromium/base/win/windows_types.h
+index d5085bde89a2..8ae1aa133a49 100644
+--- a/security/sandbox/chromium/base/win/windows_types.h
++++ b/security/sandbox/chromium/base/win/windows_types.h
+@@ -103,6 +103,8 @@ typedef struct tagPOINTER_INFO POINTER_INFO;
+ typedef struct _RTL_SRWLOCK RTL_SRWLOCK;
+ typedef RTL_SRWLOCK SRWLOCK, *PSRWLOCK;
+ 
++typedef struct _RTL_CRITICAL_SECTION CRITICAL_SECTION, *PCRITICAL_SECTION;
++
+ typedef struct _GUID GUID;
+ typedef GUID CLSID;
+ typedef GUID IID;
+@@ -295,6 +297,9 @@ struct CHROME_MSG {
+ WINBASEAPI _Releases_exclusive_lock_(*SRWLock) VOID WINAPI
+     ReleaseSRWLockExclusive(_Inout_ PSRWLOCK SRWLock);
+ WINBASEAPI BOOLEAN WINAPI TryAcquireSRWLockExclusive(_Inout_ PSRWLOCK SRWLock);
++WINBASEAPI BOOL WINAPI TryEnterCriticalSection(_Inout_ PCRITICAL_SECTION lpCriticalSection);
++WINBASEAPI _Releases_exclusive_lock_(*lpCriticalSection) VOID WINAPI
++    LeaveCriticalSection(_Inout_ PCRITICAL_SECTION lpCriticalSection);
+ 
+ // Needed to support protobuf's GetMessage macro magic.
+ WINUSERAPI BOOL WINAPI GetMessageW(_Out_ LPMSG lpMsg,

@@ -1,0 +1,1494 @@
+diff --git a/dom/canvas/CanvasRenderingContext2D.cpp b/dom/canvas/CanvasRenderingContext2D.cpp
+index e742ce867572..a4accfa89718 100644
+--- a/dom/canvas/CanvasRenderingContext2D.cpp
++++ b/dom/canvas/CanvasRenderingContext2D.cpp
+@@ -5809,7 +5809,7 @@ bool ValidSurfaceDescriptorForRemoteCanvas2d(
+             .get_SurfaceDescriptorRemoteDecoder()
+             .subdesc()
+             .get_SurfaceDescriptorD3D10()
+-            .handle() = nullptr;
++            .handle() = 0;
+       } else if (ssd.handle()) {
+         return false;
+       }
+diff --git a/dom/webgpu/ExternalTexture.cpp b/dom/webgpu/ExternalTexture.cpp
+index 80db56e41ea4..74f6f22fe2b7 100644
+--- a/dom/webgpu/ExternalTexture.cpp
++++ b/dom/webgpu/ExternalTexture.cpp
+@@ -691,7 +691,7 @@ ExternalTextureSourceHost::CreateFromDXGITextureHost(
+           textureMap->GetSharedHandle(aTextureHost->mGpuProcessTextureId.ref());
+     }
+   } else if (aTextureHost->mHandle) {
+-    handle.emplace(aTextureHost->mHandle->GetHandle());
++    handle.emplace(reinterpret_cast<HANDLE>(aTextureHost->mHandle));
+   }
+ 
+   if (!handle) {
+@@ -854,7 +854,7 @@ ExternalTextureSourceHost::CreateFromDXGIYCbCrTextureHost(
+       ErrorBuffer error;
+       ffi::wgpu_server_device_import_texture_from_shared_handle(
+           aParent->GetContext(), aDeviceId, aDesc.mTextureIds[i], &textureDesc,
+-          aTextureHost->mHandles[i]->GetHandle(), error.ToFFI());
++          reinterpret_cast<HANDLE>(aTextureHost->mHandles[i]), error.ToFFI());
+       // From here on there's no need to return early with `CreateError()` in
+       // case of an error, as an error creating a texture or view will be
+       // propagated to any views or external textures created from them.
+diff --git a/dom/webgpu/SharedTextureD3D11.cpp b/dom/webgpu/SharedTextureD3D11.cpp
+index e5d27e77898d..8d7a462ef4f6 100644
+--- a/dom/webgpu/SharedTextureD3D11.cpp
++++ b/dom/webgpu/SharedTextureD3D11.cpp
+@@ -7,6 +7,7 @@
+ #include <d3d11.h>
+ 
+ #include "mozilla/gfx/DeviceManagerDx.h"
++#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
+ #include "mozilla/layers/FenceD3D11.h"
+@@ -61,8 +62,7 @@ UniquePtr<SharedTextureD3D11> SharedTextureD3D11::Create(
+     desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+   }
+ 
+-  desc.MiscFlags =
+-      D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++  desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+ 
+   RefPtr<ID3D11Texture2D> texture;
+   HRESULT hr =
+@@ -72,43 +72,22 @@ UniquePtr<SharedTextureD3D11> SharedTextureD3D11::Create(
+     return nullptr;
+   }
+ 
+-  RefPtr<IDXGIResource1> resource;
+-  texture->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
+-  if (!resource) {
+-    gfxCriticalNoteOnce << "Failed to get IDXGIResource";
+-    return nullptr;
+-  }
+-
+-  HANDLE sharedHandle;
+-  hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
+-  if (FAILED(hr) || !sharedHandle) {
+-    gfxCriticalNoteOnce << "GetSharedHandle failed: " << gfx::hexa(hr);
+-    return nullptr;
+-  }
+-
+-  RefPtr<gfx::FileHandleWrapper> handle =
+-      new gfx::FileHandleWrapper(UniqueFileHandle(sharedHandle));
+-
+   auto fencesHolderId = layers::CompositeProcessFencesHolderId::GetNext();
+   fencesHolderMap->Register(fencesHolderId);
+ 
+   return MakeUnique<SharedTextureD3D11>(aWidth, aHeight, aFormat, aUsage,
+-                                        texture, std::move(handle),
+-                                        fencesHolderId, std::move(fence));
++                                        texture, fencesHolderId,
++                                        std::move(fence));
+ }
+ 
+ SharedTextureD3D11::SharedTextureD3D11(
+     const uint32_t aWidth, const uint32_t aHeight,
+     const struct ffi::WGPUTextureFormat aFormat,
+-    const ffi::WGPUTextureUsages aUsage, const RefPtr<ID3D11Texture2D> aTexture,
+-    RefPtr<gfx::FileHandleWrapper>&& aSharedHandle,
++    const ffi::WGPUTextureUsages aUsage, RefPtr<ID3D11Texture2D> aTexture,
+     const layers::CompositeProcessFencesHolderId aFencesHolderId,
+     RefPtr<layers::FenceD3D11>&& aWriteFence)
+     : SharedTexture(aWidth, aHeight, aFormat, aUsage),
+       mTexture(aTexture),
+-      mSharedHandle(std::move(aSharedHandle)),
+       mFencesHolderId(aFencesHolderId),
+       mWriteFence(std::move(aWriteFence)) {
+   MOZ_ASSERT(mTexture);
+@@ -133,7 +112,20 @@ void* SharedTextureD3D11::GetSharedTextureHandle() {
+   // XXX deliver fences to wgpu
+   fencesHolderMap->WaitAllFencesAndForget(mFencesHolderId, device);
+ 
+-  return mSharedHandle->GetHandle();
++  RefPtr<IDXGIResource> resource;
++  mTexture->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
++  if (!resource) {
++    gfxCriticalNoteOnce << "Failed to get IDXGIResource";
++    return 0;
++  }
++
++  HANDLE sharedHandle;
++  HRESULT hr = resource->GetSharedHandle(&sharedHandle);
++  if (FAILED(hr)) {
++    gfxCriticalNoteOnce << "GetSharedHandle failed: " << gfx::hexa(hr);
++    return 0;
++  }
++  return sharedHandle;
+ }
+ 
+ Maybe<layers::SurfaceDescriptor> SharedTextureD3D11::ToSurfaceDescriptor() {
+@@ -147,7 +139,7 @@ Maybe<layers::SurfaceDescriptor> SharedTextureD3D11::ToSurfaceDescriptor() {
+ 
+   const auto format = gfx::SurfaceFormat::B8G8R8A8;
+   return Some(layers::SurfaceDescriptorD3D10(
+-      mSharedHandle,
++      (WindowsHandle)GetSharedTextureHandle(),
+       /* gpuProcessTextureId */ Nothing(),
+       /* arrayIndex */ 0, format, gfx::IntSize(mWidth, mHeight),
+       gfx::ColorSpace2::SRGB, gfx::ColorRange::FULL,
+diff --git a/dom/webgpu/SharedTextureD3D11.h b/dom/webgpu/SharedTextureD3D11.h
+index 706844dfae4f..27cf9aad0327 100644
+--- a/dom/webgpu/SharedTextureD3D11.h
++++ b/dom/webgpu/SharedTextureD3D11.h
+@@ -5,7 +5,6 @@
+ #ifndef GPU_SharedTextureD3D11_H_
+ #define GPU_SharedTextureD3D11_H_
+ 
+-#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/webgpu/SharedTexture.h"
+ 
+ struct ID3D11Texture2D;
+@@ -29,9 +28,7 @@ class SharedTextureD3D11 final : public SharedTexture {
+   SharedTextureD3D11(
+       const uint32_t aWidth, const uint32_t aHeight,
+       const struct ffi::WGPUTextureFormat aFormat,
+-      const ffi::WGPUTextureUsages aUsage,
+-      const RefPtr<ID3D11Texture2D> aTexture,
+-      RefPtr<gfx::FileHandleWrapper>&& aSharedHandle,
++      const ffi::WGPUTextureUsages aUsage, RefPtr<ID3D11Texture2D> aTexture,
+       const layers::CompositeProcessFencesHolderId aFencesHolderId,
+       RefPtr<layers::FenceD3D11>&& aWriteFence);
+   virtual ~SharedTextureD3D11();
+@@ -45,8 +42,7 @@ class SharedTextureD3D11 final : public SharedTexture {
+   SharedTextureD3D11* AsSharedTextureD3D11() override { return this; }
+ 
+  protected:
+-  const RefPtr<ID3D11Texture2D> mTexture;
+-  const RefPtr<gfx::FileHandleWrapper> mSharedHandle;
++  RefPtr<ID3D11Texture2D> mTexture;
+   const layers::CompositeProcessFencesHolderId mFencesHolderId;
+   const RefPtr<layers::FenceD3D11> mWriteFence;
+ };
+diff --git a/dom/webgpu/ipc/WebGPUParent.cpp b/dom/webgpu/ipc/WebGPUParent.cpp
+index a2ed6c3f3e7f..79c89d67db0d 100644
+--- a/dom/webgpu/ipc/WebGPUParent.cpp
++++ b/dom/webgpu/ipc/WebGPUParent.cpp
+@@ -1845,6 +1845,13 @@ std::shared_ptr<SharedTexture> WebGPUParent::CreateSharedTexture(
+   }
+ 
+   texture->SetOwnerId(aOwnerId);
++  auto* textureD3D11 = texture->AsSharedTextureD3D11();
++  if (!textureD3D11 || !textureD3D11->GetSharedTextureHandle()) {
++    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
++    gfxCriticalNoteOnce << "Failed to get shared handle";
++    return nullptr;
++  }
++
+   std::shared_ptr<SharedTexture> shared(texture.release());
+   mSharedTextures.emplace(aTextureId, shared);
+ 
+diff --git a/gfx/gl/GLBlitHelperD3D.cpp b/gfx/gl/GLBlitHelperD3D.cpp
+index ccf6aa511734..435ac16686c1 100644
+--- a/gfx/gl/GLBlitHelperD3D.cpp
++++ b/gfx/gl/GLBlitHelperD3D.cpp
+@@ -5,7 +5,6 @@
+ #include "GLBlitHelper.h"
+ 
+ #include <d3d11.h>
+-#include <d3d11_1.h>
+ 
+ #include "GLContextEGL.h"
+ #include "GLLibraryEGL.h"
+@@ -58,19 +57,12 @@ static EGLStreamKHR StreamFromD3DTexture(EglDisplay* const egl,
+ 
+ static RefPtr<ID3D11Texture2D> OpenSharedTexture(ID3D11Device* const d3d,
+                                                  const WindowsHandle handle) {
+-  RefPtr<ID3D11Device1> device1;
+-  d3d->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return nullptr;
+-  }
+-
+   RefPtr<ID3D11Texture2D> tex;
+-  auto hr = device1->OpenSharedResource1(
++  auto hr = d3d->OpenSharedResource(
+       (HANDLE)handle, __uuidof(ID3D11Texture2D),
+       (void**)(ID3D11Texture2D**)getter_AddRefs(tex));
+   if (FAILED(hr)) {
+-    gfxCriticalError() << "Error code from OpenSharedResource1: "
++    gfxCriticalError() << "Error code from OpenSharedResource: "
+                        << gfx::hexa(hr);
+     return nullptr;
+   }
+@@ -222,13 +214,9 @@ bool GLBlitHelper::BlitImage(layers::D3D11YCbCrImage* const srcImage,
+   const auto& data = srcImage->GetData();
+   if (!data) return false;
+ 
+-  const WindowsHandle handles[3] = {
+-      (WindowsHandle)(data->mHandles[0] ? data->mHandles[0]->GetHandle()
+-                                        : nullptr),
+-      (WindowsHandle)(data->mHandles[1] ? data->mHandles[1]->GetHandle()
+-                                        : nullptr),
+-      (WindowsHandle)(data->mHandles[2] ? data->mHandles[2]->GetHandle()
+-                                        : nullptr)};
++  const WindowsHandle handles[3] = {(WindowsHandle)data->mHandles[0],
++                                    (WindowsHandle)data->mHandles[1],
++                                    (WindowsHandle)data->mHandles[2]};
+   return BlitAngleYCbCr(handles, srcImage->mPictureRect, srcImage->GetYSize(),
+                         srcImage->GetCbCrSize(), srcImage->mColorSpace, destRect,
+                         destOrigin, fbSize);
+@@ -244,6 +232,7 @@ bool GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
+   const auto& d3d = GetD3D11();
+   if (!d3d) return false;
+ 
++  const auto& handle = desc.handle();
+   const auto& gpuProcessTextureId = desc.gpuProcessTextureId();
+   auto arrayIndex = desc.arrayIndex();
+   const auto& format = desc.format();
+@@ -287,11 +276,11 @@ bool GLBlitHelper::BlitDescriptor(const layers::SurfaceDescriptorD3D10& desc,
+         arrayIndex = 0;
+       }
+     }
+-  } else if (desc.handle()) {
+-    tex = OpenSharedTexture(d3d, (WindowsHandle)desc.handle()->GetHandle());
++  } else {
++    tex = OpenSharedTexture(d3d, handle);
+   }
+   if (!tex) {
+-    MOZ_GL_ASSERT(mGL, false);  // Get a nullptr from OpenSharedResource1.
++    MOZ_GL_ASSERT(mGL, false);  // Get a nullptr from OpenSharedResource.
+     return false;
+   }
+ 
+@@ -397,12 +386,8 @@ bool GLBlitHelper::BlitDescriptor(
+ 
+   const gfx::IntRect clipRect(0, 0, clipSize.width, clipSize.height);
+ 
+-  auto handleY = desc.handleY() ? desc.handleY()->GetHandle() : nullptr;
+-  auto handleCb = desc.handleCb() ? desc.handleCb()->GetHandle() : nullptr;
+-  auto handleCr = desc.handleCr() ? desc.handleCr()->GetHandle() : nullptr;
+-
+-  const WindowsHandle handles[3] = {
+-      (WindowsHandle)handleY, (WindowsHandle)handleCb, (WindowsHandle)handleCr};
++  const WindowsHandle handles[3] = {desc.handleY(), desc.handleCb(),
++                                    desc.handleCr()};
+   return BlitAngleYCbCr(handles, clipRect, ySize, uvSize, colorSpace, destRect,
+                         destOrigin, fbSize, convertAlpha);
+ }
+diff --git a/gfx/gl/SharedSurfaceANGLE.cpp b/gfx/gl/SharedSurfaceANGLE.cpp
+index d349726d8926..ba61f77da9f1 100644
+--- a/gfx/gl/SharedSurfaceANGLE.cpp
++++ b/gfx/gl/SharedSurfaceANGLE.cpp
+@@ -8,7 +8,6 @@
+ #include "GLContextEGL.h"
+ #include "GLLibraryEGL.h"
+ #include "mozilla/gfx/DeviceManagerDx.h"
+-#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
+ #include "mozilla/layers/FenceD3D11.h"
+ #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
+@@ -93,20 +92,18 @@ SharedSurface_ANGLEShareHandle::Create(const SharedSurfaceDesc& desc) {
+     return nullptr;
+   }
+ 
+-  RefPtr<IDXGIResource1> texDXGI;
+-  hr = texture2D->QueryInterface(__uuidof(IDXGIResource1),
++  HANDLE shareHandle = nullptr;
++  RefPtr<IDXGIResource> texDXGI;
++  hr = texture2D->QueryInterface(__uuidof(IDXGIResource),
+                                  getter_AddRefs(texDXGI));
+   if (FAILED(hr)) {
+     return nullptr;
+   }
+ 
+-  HANDLE sharedHandle = nullptr;
+-  texDXGI->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
+-
+-  RefPtr<gfx::FileHandleWrapper> handle =
+-      new gfx::FileHandleWrapper(UniqueFileHandle(sharedHandle));
++  hr = texDXGI->GetSharedHandle(&shareHandle);
++  if (FAILED(hr)) {
++    return nullptr;
++  }
+ 
+   Maybe<layers::CompositeProcessFencesHolderId> fencesHolderId;
+   RefPtr<layers::FenceD3D11> fence;
+@@ -137,14 +134,14 @@ SharedSurface_ANGLEShareHandle::Create(const SharedSurfaceDesc& desc) {
+   }
+ 
+   return AsUnique(new SharedSurface_ANGLEShareHandle(
+-      desc, device, egl, pbuffer, std::move(handle), fencesHolderId, fence,
++      desc, device, egl, pbuffer, shareHandle, fencesHolderId, fence,
+       keyedMutex));
+ }
+ 
+ SharedSurface_ANGLEShareHandle::SharedSurface_ANGLEShareHandle(
+     const SharedSurfaceDesc& desc, const RefPtr<ID3D11Device> aDevice,
+     const std::weak_ptr<EglDisplay>& egl, EGLSurface pbuffer,
+-    RefPtr<gfx::FileHandleWrapper>&& aSharedHandle,
++    HANDLE shareHandle,
+     const Maybe<layers::CompositeProcessFencesHolderId> aFencesHolderId,
+     const RefPtr<layers::FenceD3D11>& aWriteFence,
+     const RefPtr<IDXGIKeyedMutex>& keyedMutex)
+@@ -152,7 +149,7 @@ SharedSurface_ANGLEShareHandle::SharedSurface_ANGLEShareHandle(
+       mDevice(aDevice),
+       mEGL(egl),
+       mPBuffer(pbuffer),
+-      mSharedHandle(std::move(aSharedHandle)),
++      mShareHandle(shareHandle),
+       mFencesHolderId(aFencesHolderId),
+       mWriteFence(std::move(aWriteFence)),
+       mKeyedMutex(keyedMutex) {
+@@ -233,7 +230,7 @@ Maybe<layers::SurfaceDescriptor>
+ SharedSurface_ANGLEShareHandle::ToSurfaceDescriptor() {
+   const auto format = gfx::SurfaceFormat::B8G8R8A8;
+   return Some(layers::SurfaceDescriptorD3D10(
+-      mSharedHandle, /* gpuProcessTextureId */ Nothing(),
++      (WindowsHandle)mShareHandle, /* gpuProcessTextureId */ Nothing(),
+       /* arrayIndex */ 0, format, mDesc.size, mDesc.colorSpace,
+       gfx::ColorRange::FULL, mDesc.transferFunction,
+       /* hdrMetadata */ Nothing(), !!mKeyedMutex, mFencesHolderId));
+diff --git a/gfx/gl/SharedSurfaceANGLE.h b/gfx/gl/SharedSurfaceANGLE.h
+index 9035157d7464..4f5683b3810e 100644
+--- a/gfx/gl/SharedSurfaceANGLE.h
++++ b/gfx/gl/SharedSurfaceANGLE.h
+@@ -17,10 +17,6 @@ struct ID3D11Texture2D;
+ 
+ namespace mozilla {
+ 
+-namespace gfx {
+-class FileHandleWrapper;
+-}  // namespace gfx
+-
+ namespace layers {
+ class FenceD3D11;
+ }  // namespace layers
+@@ -35,7 +31,7 @@ class SharedSurface_ANGLEShareHandle final : public SharedSurface {
+   const RefPtr<ID3D11Device> mDevice;
+   const std::weak_ptr<EglDisplay> mEGL;
+   const EGLSurface mPBuffer;
+-  const RefPtr<gfx::FileHandleWrapper> mSharedHandle;
++  const HANDLE mShareHandle;
+   const Maybe<layers::CompositeProcessFencesHolderId> mFencesHolderId;
+   const RefPtr<layers::FenceD3D11> mWriteFence;
+   const RefPtr<IDXGIKeyedMutex> mKeyedMutex;
+@@ -47,7 +43,7 @@ class SharedSurface_ANGLEShareHandle final : public SharedSurface {
+   SharedSurface_ANGLEShareHandle(
+       const SharedSurfaceDesc&, const RefPtr<ID3D11Device> aDevice,
+       const std::weak_ptr<EglDisplay>& egl, EGLSurface pbuffer,
+-      RefPtr<gfx::FileHandleWrapper>&& aSharedHandle,
++      HANDLE shareHandle,
+       const Maybe<layers::CompositeProcessFencesHolderId> aFencesHolderId,
+       const RefPtr<layers::FenceD3D11>& aWriteFence,
+       const RefPtr<IDXGIKeyedMutex>& keyedMutex);
+diff --git a/gfx/gl/SharedSurfaceD3D11Interop.cpp b/gfx/gl/SharedSurfaceD3D11Interop.cpp
+index c73aadffc58a..8aaba9f19ade 100644
+--- a/gfx/gl/SharedSurfaceD3D11Interop.cpp
++++ b/gfx/gl/SharedSurfaceD3D11Interop.cpp
+@@ -13,7 +13,6 @@
+ #include "WGLLibrary.h"
+ #include "nsPrintfCString.h"
+ #include "mozilla/gfx/DeviceManagerDx.h"
+-#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/layers/LayersSurfaces.h"
+ #include "mozilla/StaticPrefs_webgl.h"
+@@ -324,8 +323,7 @@ UniquePtr<SharedSurface_D3D11Interop> SharedSurface_D3D11Interop::Create(
+   // Create a texture in case we need to readback.
+   const DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
+   CD3D11_TEXTURE2D_DESC texDesc(format, size.width, size.height, 1, 1);
+-  texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+-                      D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++  texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+ 
+   auto hr =
+       d3d->CreateTexture2D(&texDesc, nullptr, getter_AddRefs(data.texD3D));
+@@ -334,20 +332,15 @@ UniquePtr<SharedSurface_D3D11Interop> SharedSurface_D3D11Interop::Create(
+     return nullptr;
+   }
+ 
+-  RefPtr<IDXGIResource1> texDXGI;
+-  hr = data.texD3D->QueryInterface(__uuidof(IDXGIResource1),
++  RefPtr<IDXGIResource> texDXGI;
++  hr = data.texD3D->QueryInterface(__uuidof(IDXGIResource),
+                                    getter_AddRefs(texDXGI));
+   if (FAILED(hr)) {
+     NS_WARNING("Failed to open texture for sharing!");
+     return nullptr;
+   }
+ 
+-  HANDLE sharedHandle = nullptr;
+-  texDXGI->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
+-
+-  data.dxgiHandle = new gfx::FileHandleWrapper(UniqueFileHandle(sharedHandle));
++  texDXGI->GetSharedHandle(&data.dxgiHandle);
+ 
+   ////
+ 
+@@ -448,7 +441,7 @@ Maybe<layers::SurfaceDescriptor>
+ SharedSurface_D3D11Interop::ToSurfaceDescriptor() {
+   const auto format = gfx::SurfaceFormat::B8G8R8A8;
+   return Some(layers::SurfaceDescriptorD3D10(
+-      mData.dxgiHandle, /* gpuProcessTextureId */ Nothing(),
++      WindowsHandle(mData.dxgiHandle), /* gpuProcessTextureId */ Nothing(),
+       /* arrayIndex */ 0, format, mDesc.size, mDesc.colorSpace,
+       gfx::ColorRange::FULL, mDesc.transferFunction,
+       /* hdrMetadata */ Nothing(),
+diff --git a/gfx/gl/SharedSurfaceD3D11Interop.h b/gfx/gl/SharedSurfaceD3D11Interop.h
+index 54bc66ca1182..213e771f2ead 100644
+--- a/gfx/gl/SharedSurfaceD3D11Interop.h
++++ b/gfx/gl/SharedSurfaceD3D11Interop.h
+@@ -10,11 +10,6 @@
+ #include "SharedSurface.h"
+ 
+ namespace mozilla {
+-
+-namespace gfx {
+-class FileHandleWrapper;
+-}  // namespace gfx
+-
+ namespace gl {
+ 
+ class DXInterop2Device;
+@@ -27,7 +22,7 @@ class SharedSurface_D3D11Interop final : public SharedSurface {
+     const RefPtr<DXInterop2Device> interop;
+     HANDLE lockHandle;
+     RefPtr<ID3D11Texture2D> texD3D;
+-    RefPtr<gfx::FileHandleWrapper> dxgiHandle;
++    HANDLE dxgiHandle;
+     UniquePtr<Renderbuffer> interopRb;
+     UniquePtr<MozFramebuffer> interopFbIfNeedsIndirect;
+   };
+diff --git a/gfx/ipc/FileHandleWrapper.cpp b/gfx/ipc/FileHandleWrapper.cpp
+index 82185455266a..b42628dc72e9 100644
+--- a/gfx/ipc/FileHandleWrapper.cpp
++++ b/gfx/ipc/FileHandleWrapper.cpp
+@@ -4,8 +4,6 @@
+ 
+ #include "FileHandleWrapper.h"
+ 
+-#include "mozilla/ipc/FileDescriptor.h"
+-
+ namespace mozilla::gfx {
+ 
+ FileHandleWrapper::FileHandleWrapper(mozilla::UniqueFileHandle&& aHandle)
+@@ -17,9 +15,4 @@ mozilla::detail::FileHandleType FileHandleWrapper::GetHandle() {
+   return mHandle.get();
+ }
+ 
+-mozilla::UniqueFileHandle FileHandleWrapper::ClonePlatformHandle() {
+-  auto handle = ipc::FileDescriptor(GetHandle());
+-  return handle.TakePlatformHandle();
+-}
+-
+ }  // namespace mozilla::gfx
+diff --git a/gfx/ipc/FileHandleWrapper.h b/gfx/ipc/FileHandleWrapper.h
+index 2b53e45104a3..7d5fd5717a70 100644
+--- a/gfx/ipc/FileHandleWrapper.h
++++ b/gfx/ipc/FileHandleWrapper.h
+@@ -32,8 +32,6 @@ class FileHandleWrapper {
+ 
+   mozilla::detail::FileHandleType GetHandle();
+ 
+-  mozilla::UniqueFileHandle ClonePlatformHandle();
+-
+  protected:
+   ~FileHandleWrapper();
+ 
+diff --git a/gfx/layers/CompositorTypes.h b/gfx/layers/CompositorTypes.h
+index 48934533b0c8..8bd3f12c9dd6 100644
+--- a/gfx/layers/CompositorTypes.h
++++ b/gfx/layers/CompositorTypes.h
+@@ -11,7 +11,6 @@
+ #include "LayersTypes.h"  // for LayersBackend, etc
+ #include "nsXULAppAPI.h"  // for GeckoProcessType, etc
+ #include "mozilla/gfx/Types.h"
+-#include "mozilla/layers/SyncObject.h"
+ 
+ #include "mozilla/TypedEnumBits.h"
+ 
+@@ -162,6 +161,12 @@ enum class ImageUsageType : uint8_t {
+   COUNT
+ };
+ 
++#ifdef XP_WIN
++typedef void* SyncHandle;
++#else
++typedef uintptr_t SyncHandle;
++#endif  // XP_WIN
++
+ /**
+  * Sent from the compositor to the content-side LayerManager, includes
+  * properties of the compositor and should (in the future) include information
+@@ -190,7 +195,7 @@ struct TextureFactoryIdentifier {
+       bool aCompositorUseDComp = false, bool aUseLayerCompositor = false,
+       bool aUseCompositorWnd = false, bool aSupportsTextureBlitting = false,
+       bool aSupportsPartialUploads = false, bool aSupportsComponentAlpha = true,
+-      bool aSupportsD3D11NV12 = false, SyncHandle aSyncHandle = {})
++      bool aSupportsD3D11NV12 = false, SyncHandle aSyncHandle = 0)
+       : mParentBackend(aLayersBackend),
+         mWebRenderBackend(WebRenderBackend::HARDWARE),
+         mWebRenderCompositor(WebRenderCompositor::DRAW),
+@@ -214,7 +219,7 @@ struct TextureFactoryIdentifier {
+       bool aCompositorUseDComp = false, bool aUseLayerCompositor = false,
+       bool aUseCompositorWnd = false, bool aSupportsTextureBlitting = false,
+       bool aSupportsPartialUploads = false, bool aSupportsComponentAlpha = true,
+-      bool aSupportsD3D11NV12 = false, SyncHandle aSyncHandle = {})
++      bool aSupportsD3D11NV12 = false, SyncHandle aSyncHandle = 0)
+       : mParentBackend(LayersBackend::LAYERS_WR),
+         mWebRenderBackend(aWebRenderBackend),
+         mWebRenderCompositor(aWebRenderCompositor),
+diff --git a/gfx/layers/D3D11ShareHandleImage.cpp b/gfx/layers/D3D11ShareHandleImage.cpp
+index dfac98ebfddc..08079611fa81 100644
+--- a/gfx/layers/D3D11ShareHandleImage.cpp
++++ b/gfx/layers/D3D11ShareHandleImage.cpp
+@@ -57,8 +57,7 @@ bool D3D11ShareHandleImage::AllocateTexture(D3D11RecycleAllocator* aAllocator,
+     CD3D11_TEXTURE2D_DESC newDesc(
+         format, mSize.width, mSize.height, 1, 1,
+         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+-    newDesc.MiscFlags =
+-        D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++    newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+ 
+     HRESULT hr =
+         aDevice->CreateTexture2D(&newDesc, nullptr, getter_AddRefs(mTexture));
+@@ -253,7 +252,7 @@ RefPtr<ID3D11Texture2D> D3D11RecycleAllocator::GetStagingTextureNV12(
+     desc.Usage = D3D11_USAGE_STAGING;
+     desc.BindFlags = 0;
+     desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+-    desc.MiscFlags = 0;
++    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+     desc.SampleDesc.Count = 1;
+ 
+     HRESULT hr = mDevice->CreateTexture2D(&desc, nullptr,
+diff --git a/gfx/layers/D3D11YCbCrImage.cpp b/gfx/layers/D3D11YCbCrImage.cpp
+index 6d58ed85c8ed..d36510c0ed58 100644
+--- a/gfx/layers/D3D11YCbCrImage.cpp
++++ b/gfx/layers/D3D11YCbCrImage.cpp
+@@ -60,8 +60,7 @@ already_AddRefed<TextureClient> DXGIYCbCrTextureAllocationHelper::Allocate(
+                                     : DXGI_FORMAT_R16_UNORM,
+                                 ySize.width, ySize.height, 1, 1);
+   // Use FenceD3D11 for synchronization.
+-  newDesc.MiscFlags =
+-      D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++  newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+ 
+   RefPtr<ID3D11Texture2D> textureY;
+   HRESULT hr =
+diff --git a/gfx/layers/SyncObject.h b/gfx/layers/SyncObject.h
+index 44ac9cd0060f..f62f1fb0c197 100644
+--- a/gfx/layers/SyncObject.h
++++ b/gfx/layers/SyncObject.h
+@@ -5,7 +5,7 @@
+ #ifndef MOZILLA_GFX_LAYERS_SYNCOBJECT_H
+ #define MOZILLA_GFX_LAYERS_SYNCOBJECT_H
+ 
+-#include "mozilla/gfx/FileHandleWrapper.h"
++#include "mozilla/AlreadyAddRefed.h"
+ #include "mozilla/RefCounted.h"
+ 
+ struct ID3D11Device;
+@@ -14,7 +14,7 @@ namespace mozilla {
+ namespace layers {
+ 
+ #ifdef XP_WIN
+-typedef RefPtr<gfx::FileHandleWrapper> SyncHandle;
++typedef void* SyncHandle;
+ #else
+ typedef uintptr_t SyncHandle;
+ #endif  // XP_WIN
+diff --git a/gfx/layers/d3d11/GpuProcessD3D11TextureMap.cpp b/gfx/layers/d3d11/GpuProcessD3D11TextureMap.cpp
+index 306cb19a6079..58cebfd957af 100644
+--- a/gfx/layers/d3d11/GpuProcessD3D11TextureMap.cpp
++++ b/gfx/layers/d3d11/GpuProcessD3D11TextureMap.cpp
+@@ -46,7 +46,7 @@ void GpuProcessD3D11TextureMap::Register(
+     GpuProcessTextureId aTextureId, ID3D11Texture2D* aTexture,
+     uint32_t aArrayIndex, const gfx::IntSize& aSize,
+     ZeroCopyUsageInfo* aUsageInfo,
+-    RefPtr<gfx::FileHandleWrapper> aSharedHandle) {
++    HANDLE aSharedHandle) {
+   MonitorAutoLock lock(mMonitor);
+   Register(lock, aTextureId, aTexture, aArrayIndex, aSize, aUsageInfo,
+            aSharedHandle);
+@@ -55,7 +55,7 @@ void GpuProcessD3D11TextureMap::Register(
+     const MonitorAutoLock& aProofOfLock, GpuProcessTextureId aTextureId,
+     ID3D11Texture2D* aTexture, uint32_t aArrayIndex, const gfx::IntSize& aSize,
+     ZeroCopyUsageInfo* aUsageInfo,
+-    RefPtr<gfx::FileHandleWrapper> aSharedHandle) {
++    HANDLE aSharedHandle) {
+   MOZ_RELEASE_ASSERT(aTexture);
+ 
+   auto it = mD3D11TexturesById.find(aTextureId);
+@@ -102,11 +102,11 @@ Maybe<HANDLE> GpuProcessD3D11TextureMap::GetSharedHandle(
+     }
+ 
+     if (it->second.mSharedHandle) {
+-      return Some(it->second.mSharedHandle->GetHandle());
++      return Some(it->second.mSharedHandle);
+     }
+ 
+-    if (it->second.mCopiedTextureSharedHandle) {
+-      return Some(it->second.mCopiedTextureSharedHandle->GetHandle());
++    if (it->second.mCopiedTextureSharedHandle.isSome()) {
++      return it->second.mCopiedTextureSharedHandle;
+     }
+ 
+     holder = it->second;
+@@ -130,8 +130,7 @@ Maybe<HANDLE> GpuProcessD3D11TextureMap::GetSharedHandle(
+   CD3D11_TEXTURE2D_DESC newDesc(
+       existingDesc.Format, holder.mSize.width, holder.mSize.height, 1, 1,
+       D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+-  newDesc.MiscFlags =
+-      D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++  newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+ 
+   RefPtr<ID3D11Texture2D> copiedTexture;
+   HRESULT hr =
+@@ -153,23 +152,18 @@ Maybe<HANDLE> GpuProcessD3D11TextureMap::GetSharedHandle(
+   context->CopySubresourceRegion(copiedTexture, 0, 0, 0, 0, holder.mTexture,
+                                  holder.mArrayIndex, &srcBox);
+ 
+-  RefPtr<IDXGIResource1> resource;
+-  copiedTexture->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
++  RefPtr<IDXGIResource> resource;
++  copiedTexture->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
+   if (!resource) {
+     return Nothing();
+   }
+ 
+   HANDLE sharedHandle;
+-  hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
++  hr = resource->GetSharedHandle(&sharedHandle);
+   if (FAILED(hr)) {
+     return Nothing();
+   }
+ 
+-  RefPtr handle =
+-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(sharedHandle));
+-
+   RefPtr<ID3D11Query> query;
+   CD3D11_QUERY_DESC desc(D3D11_QUERY_EVENT);
+   hr = device->CreateQuery(&desc, getter_AddRefs(query));
+@@ -202,10 +196,10 @@ Maybe<HANDLE> GpuProcessD3D11TextureMap::GetSharedHandle(
+     }
+ 
+     it->second.mCopiedTexture = copiedTexture;
+-    it->second.mCopiedTextureSharedHandle = handle;
++    it->second.mCopiedTextureSharedHandle = Some(sharedHandle);
+   }
+ 
+-  return Some(handle->GetHandle());
++  return Some(sharedHandle);
+ }
+ 
+ void GpuProcessD3D11TextureMap::DisableZeroCopyNV12Texture(
+@@ -434,7 +428,7 @@ RefPtr<ID3D11Texture2D> GpuProcessD3D11TextureMap::UpdateTextureData(
+ 
+ GpuProcessD3D11TextureMap::TextureHolder::TextureHolder(
+     ID3D11Texture2D* aTexture, uint32_t aArrayIndex, const gfx::IntSize& aSize,
+-    ZeroCopyUsageInfo* aUsageInfo, RefPtr<gfx::FileHandleWrapper> aSharedHandle)
++    ZeroCopyUsageInfo* aUsageInfo, HANDLE aSharedHandle)
+     : mTexture(aTexture),
+       mArrayIndex(aArrayIndex),
+       mSize(aSize),
+diff --git a/gfx/layers/d3d11/GpuProcessD3D11TextureMap.h b/gfx/layers/d3d11/GpuProcessD3D11TextureMap.h
+index a1acde7f7412..e3a2abac1db6 100644
+--- a/gfx/layers/d3d11/GpuProcessD3D11TextureMap.h
++++ b/gfx/layers/d3d11/GpuProcessD3D11TextureMap.h
+@@ -41,12 +41,12 @@ class GpuProcessD3D11TextureMap {
+   void Register(GpuProcessTextureId aTextureId, ID3D11Texture2D* aTexture,
+                 uint32_t aArrayIndex, const gfx::IntSize& aSize,
+                 ZeroCopyUsageInfo* aUsageInfo,
+-                RefPtr<gfx::FileHandleWrapper> aSharedHandle = nullptr);
++                HANDLE aSharedHandle = nullptr);
+   void Register(const MonitorAutoLock& aProofOfLock,
+                 GpuProcessTextureId aTextureId, ID3D11Texture2D* aTexture,
+                 uint32_t aArrayIndex, const gfx::IntSize& aSize,
+                 ZeroCopyUsageInfo* aUsageInfo,
+-                RefPtr<gfx::FileHandleWrapper> aSharedHandle);
++                HANDLE aSharedHandle);
+   void Unregister(GpuProcessTextureId aTextureId);
+ 
+   RefPtr<ID3D11Texture2D> GetTexture(GpuProcessTextureId aTextureId);
+@@ -68,16 +68,16 @@ class GpuProcessD3D11TextureMap {
+   struct TextureHolder {
+     TextureHolder(ID3D11Texture2D* aTexture, uint32_t aArrayIndex,
+                   const gfx::IntSize& aSize, ZeroCopyUsageInfo* aUsageInfo,
+-                  RefPtr<gfx::FileHandleWrapper> aSharedHandle);
++                  HANDLE aSharedHandle);
+     TextureHolder() = default;
+ 
+     RefPtr<ID3D11Texture2D> mTexture;
+     uint32_t mArrayIndex = 0;
+     gfx::IntSize mSize;
+     RefPtr<ZeroCopyUsageInfo> mZeroCopyUsageInfo;
+-    RefPtr<gfx::FileHandleWrapper> mSharedHandle;
++    HANDLE mSharedHandle = nullptr;
+     RefPtr<ID3D11Texture2D> mCopiedTexture;
+-    RefPtr<gfx::FileHandleWrapper> mCopiedTextureSharedHandle;
++    Maybe<HANDLE> mCopiedTextureSharedHandle;
+   };
+ 
+   struct UpdatingTextureHolder {
+diff --git a/gfx/layers/d3d11/TextureD3D11.cpp b/gfx/layers/d3d11/TextureD3D11.cpp
+index b6994e3b448b..b5244b0b03f6 100644
+--- a/gfx/layers/d3d11/TextureD3D11.cpp
++++ b/gfx/layers/d3d11/TextureD3D11.cpp
+@@ -15,7 +15,6 @@
+ #include "mozilla/StaticPrefs_gfx.h"
+ #include "mozilla/gfx/DataSurfaceHelpers.h"
+ #include "mozilla/gfx/DeviceManagerDx.h"
+-#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/gfx/gfxVars.h"
+ #include "mozilla/gfx/SourceSurfaceD3D11.h"
+@@ -298,8 +297,7 @@ static void UnlockD3DTexture(T* aTexture) {
+ 
+ D3D11TextureData::D3D11TextureData(
+     ID3D11Device* aDevice, ID3D11Texture2D* aTexture, uint32_t aArrayIndex,
+-    RefPtr<gfx::FileHandleWrapper> aSharedHandle, gfx::IntSize aSize,
+-    gfx::SurfaceFormat aFormat,
++    gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
+     const Maybe<CompositeProcessFencesHolderId> aFencesHolderId,
+     const RefPtr<FenceD3D11> aWriteFence, TextureAllocationFlags aFlags)
+     : mSize(aSize),
+@@ -308,8 +306,8 @@ D3D11TextureData::D3D11TextureData(
+       mFencesHolderId(aFencesHolderId),
+       mWriteFence(aWriteFence),
+       mNeedsClear(aFlags & ALLOC_CLEAR_BUFFER),
++      mDevice(aDevice),
+       mTexture(aTexture),
+-      mSharedHandle(std::move(aSharedHandle)),
+       mArrayIndex(aArrayIndex),
+       mAllocationFlags(aFlags) {
+   MOZ_ASSERT(aTexture);
+@@ -381,12 +379,29 @@ void D3D11TextureData::SyncWithObject(RefPtr<SyncObjectClient> aSyncObject) {
+   sync->RegisterTexture(mTexture);
+ }
+ 
++void D3D11TextureData::GetDXGIResource(IDXGIResource** aOutResource) {
++  mTexture->QueryInterface(aOutResource);
++}
++
+ bool D3D11TextureData::SerializeSpecific(
+     SurfaceDescriptorD3D10* const aOutDesc) {
++  RefPtr<IDXGIResource> resource;
++  GetDXGIResource((IDXGIResource**)getter_AddRefs(resource));
++  if (!resource) {
++    return false;
++  }
++  HANDLE sharedHandle = 0;
++  if (mGpuProcessTextureId.isNothing()) {
++    HRESULT hr = resource->GetSharedHandle(&sharedHandle);
++    if (FAILED(hr)) {
++      LOGD3D11("Error getting shared handle for texture.");
++      return false;
++    }
++  }
+-  *aOutDesc = SurfaceDescriptorD3D10(
+-      mSharedHandle, mGpuProcessTextureId, mArrayIndex, mFormat, mSize,
+-      mColorSpace, mColorRange, mTransferFunction, mHDRMetadata, mHasKeyedMutex,
+-      mFencesHolderId);
++  *aOutDesc = SurfaceDescriptorD3D10(
++      (WindowsHandle)sharedHandle, mGpuProcessTextureId, mArrayIndex, mFormat,
++      mSize, mColorSpace, mColorRange, mTransferFunction, mHDRMetadata,
++      mHasKeyedMutex, mFencesHolderId);
+   return true;
+ }
+ 
+@@ -427,7 +442,7 @@ already_AddRefed<TextureClient> D3D11TextureData::CreateTextureClient(
+   }
+ 
+   D3D11TextureData* data = new D3D11TextureData(
+-      device, aTexture, aIndex, nullptr, aSize, aFormat, fencesHolderId,
++      device, aTexture, aIndex, aSize, aFormat, fencesHolderId,
+       aWriteFence, TextureAllocationFlags::ALLOC_MANUAL_SYNCHRONIZATION);
+   data->mColorSpace = aColorSpace;
+   data->SetColorRange(aColorRange);
+@@ -531,8 +546,7 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+       return nullptr;
+   }
+ 
+-  newDesc.MiscFlags =
+-      D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++  newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+   bool useFence = false;
+   bool useKeyedMutex = false;
+   if (!NS_IsMainThread()) {
+@@ -543,8 +557,7 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+         useFence = fencesHolderMap && FenceD3D11::IsSupported(device);
+       }
+       if (!useFence) {
+-        newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+-                            D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++        newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+         useKeyedMutex = true;
+       }
+     }
+@@ -627,8 +640,8 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+     UnlockD3DTexture(texture11.get());
+   }
+ 
+-  RefPtr<IDXGIResource1> resource;
+-  texture11->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
++  RefPtr<IDXGIResource> resource;
++  texture11->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
+   if (!resource) {
+     gfxCriticalNoteOnce << "Failed to get IDXGIResource";
+     return nullptr;
+@@ -636,9 +649,6 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+ 
+   HANDLE sharedHandle;
+   HRESULT hr = resource->GetSharedHandle(&sharedHandle);
+-  hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
+   if (FAILED(hr)) {
+     gfxCriticalNoteOnce << "GetSharedHandle failed: " << gfx::hexa(hr);
+     return nullptr;
+@@ -648,16 +658,13 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+       sD3D11TextureUsage,
+       new TextureMemoryMeasurer(newDesc.Width * newDesc.Height * 4));
+ 
+-  RefPtr handle =
+-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(sharedHandle));
+-
+   if (useFence) {
+     auto* fencesHolderMap = CompositeProcessD3D11FencesHolderMap::Get();
+     fencesHolderMap->Register(fencesHolderId.ref());
+   }
+ 
+   D3D11TextureData* data =
+-      new D3D11TextureData(device, texture11, 0, handle, aSize, aFormat,
++      new D3D11TextureData(device, texture11, 0, aSize, aFormat,
+                            fencesHolderId, fence, aFlags);
+ 
+   texture11->GetDevice(getter_AddRefs(device));
+@@ -668,7 +675,8 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
+     // Register ID3D11Texture2D to GpuProcessD3D11TextureMap
+     auto* textureMap = GpuProcessD3D11TextureMap::Get();
+     if (textureMap) {
+-      textureMap->Register(textureId, texture11, 0, aSize, nullptr, handle);
++      textureMap->Register(textureId, texture11, 0, aSize, nullptr,
++                            sharedHandle);
+     } else {
+       gfxCriticalNoteOnce << "GpuProcessD3D11TextureMap does not exist";
+     }
+@@ -732,42 +740,30 @@ DXGIYCbCrTextureData* DXGIYCbCrTextureData::Create(
+       sD3D11TextureUsage,
+       new TextureMemoryMeasurer(aSizeCbCr.width * aSizeCbCr.height));
+ 
+-  RefPtr<IDXGIResource1> resource;
++  RefPtr<IDXGIResource> resource;
+ 
+-  aTextureY->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
++  aTextureY->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
+ 
+   HANDLE handleY;
+-  HRESULT hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &handleY);
++  HRESULT hr = resource->GetSharedHandle(&handleY);
+   if (FAILED(hr)) {
+     return nullptr;
+   }
+-  const RefPtr sharedHandleY =
+-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(handleY));
+ 
+-  aTextureCb->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
++  aTextureCb->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
+ 
+   HANDLE handleCb;
+-  hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &handleCb);
++  hr = resource->GetSharedHandle(&handleCb);
+   if (FAILED(hr)) {
+     return nullptr;
+   }
+-  const RefPtr sharedHandleCb =
+-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(handleCb));
+ 
+-  aTextureCr->QueryInterface((IDXGIResource1**)getter_AddRefs(resource));
++  aTextureCr->QueryInterface((IDXGIResource**)getter_AddRefs(resource));
+   HANDLE handleCr;
+-  hr = resource->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &handleCr);
++  hr = resource->GetSharedHandle(&handleCr);
+   if (FAILED(hr)) {
+     return nullptr;
+   }
+-  const RefPtr sharedHandleCr =
+-      MakeRefPtr<gfx::FileHandleWrapper>(UniqueFileHandle(handleCr));
+ 
+   auto* fenceHolderMap = CompositeProcessD3D11FencesHolderMap::Get();
+   if (!fenceHolderMap) {
+@@ -790,8 +786,7 @@ DXGIYCbCrTextureData* DXGIYCbCrTextureData::Create(
+   fenceHolderMap->Register(fencesHolderId);
+ 
+   RefPtr<ID3D11Texture2D> textures[3] = {aTextureY, aTextureCb, aTextureCr};
+-  RefPtr<gfx::FileHandleWrapper> handles[3] = {sharedHandleY, sharedHandleCb,
+-                                               sharedHandleCr};
++  HANDLE handles[3] = {handleY, handleCb, handleCr};
+ 
+   DXGIYCbCrTextureData* texture = new DXGIYCbCrTextureData(
+       textures, handles, aSize, aSizeY, aSizeCbCr, aColorDepth, aYUVColorSpace,
+@@ -801,7 +796,7 @@ DXGIYCbCrTextureData* DXGIYCbCrTextureData::Create(
+ 
+ DXGIYCbCrTextureData::DXGIYCbCrTextureData(
+     RefPtr<ID3D11Texture2D> (&aD3D11Textures)[3],
+-    RefPtr<gfx::FileHandleWrapper>(aHandles)[3], const gfx::IntSize& aSize,
++    HANDLE aHandles[3], const gfx::IntSize& aSize,
+     const gfx::IntSize& aSizeY, const gfx::IntSize& aSizeCbCr,
+     const gfx::ColorDepth aColorDepth, const gfx::YUVColorSpace aYUVColorSpace,
+     const gfx::ColorRange aColorRange,
+@@ -838,10 +833,10 @@ void DXGIYCbCrTextureData::FillInfo(TextureData::Info& aInfo) const {
+ 
+ void DXGIYCbCrTextureData::SerializeSpecific(
+     SurfaceDescriptorDXGIYCbCr* const aOutDesc) {
+-  *aOutDesc = SurfaceDescriptorDXGIYCbCr(mHandles[0], mHandles[1], mHandles[2],
+-                                         mSize, mSizeY, mSizeCbCr, mColorDepth,
+-                                         mYUVColorSpace, mColorRange,
+-                                         mTransferFunction, mFencesHolderId);
++  *aOutDesc = SurfaceDescriptorDXGIYCbCr(
++      (WindowsHandle)mHandles[0], (WindowsHandle)mHandles[1],
++      (WindowsHandle)mHandles[2], mSize, mSizeY, mSizeCbCr, mColorDepth,
++      mYUVColorSpace, mColorRange, mTransferFunction, mFencesHolderId);
+ }
+ 
+ bool DXGIYCbCrTextureData::Serialize(SurfaceDescriptor& aOutDescriptor) {
+@@ -916,19 +911,12 @@ static RefPtr<ID3D11Texture2D> OpenSharedD3D11Texture(
+     ID3D11Device* const aDevice, const HANDLE handle) {
+   MOZ_ASSERT(aDevice);
+ 
+-  RefPtr<ID3D11Device1> device1;
+-  aDevice->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return nullptr;
+-  }
+-
+   RefPtr<ID3D11Texture2D> tex;
+-  auto hr = device1->OpenSharedResource1(
++  auto hr = aDevice->OpenSharedResource(
+       (HANDLE)handle, __uuidof(ID3D11Texture2D),
+       (void**)(ID3D11Texture2D**)getter_AddRefs(tex));
+   if (FAILED(hr)) {
+-    gfxCriticalNote << "Error code from OpenSharedResource1: " << gfx::hexa(hr);
++    gfxCriticalNote << "Error code from OpenSharedResource: " << gfx::hexa(hr);
+     return nullptr;
+   }
+ 
+@@ -950,7 +938,7 @@ static RefPtr<ID3D11Texture2D> OpenSharedD3D11Texture(
+       texture = textureMap->GetTexture(gpuProcessTextureId.ref());
+     }
+   } else if (handle) {
+-    texture = OpenSharedD3D11Texture(aDevice, handle->GetHandle());
++    texture = OpenSharedD3D11Texture(aDevice, handle);
+   }
+ 
+   if (!texture) {
+@@ -962,7 +950,7 @@ static RefPtr<ID3D11Texture2D> OpenSharedD3D11Texture(
+ DXGITextureHostD3D11::DXGITextureHostD3D11(
+     TextureFlags aFlags, const SurfaceDescriptorD3D10& aDescriptor)
+     : TextureHost(TextureHostType::DXGI, aFlags),
+-      mHandle(aDescriptor.handle()),
++      mHandle((HANDLE)aDescriptor.handle()),
+       mGpuProcessTextureId(aDescriptor.gpuProcessTextureId()),
+       mArrayIndex(aDescriptor.arrayIndex()),
+       mSize(aDescriptor.size()),
+@@ -1383,8 +1371,8 @@ void DXGITextureHostD3D11::SetReadFence(Fence* aReadFence) {
+ DXGIYCbCrTextureHostD3D11::DXGIYCbCrTextureHostD3D11(
+     TextureFlags aFlags, const SurfaceDescriptorDXGIYCbCr& aDescriptor)
+     : TextureHost(TextureHostType::DXGIYCbCr, aFlags),
+-      mHandles{aDescriptor.handleY(), aDescriptor.handleCb(),
+-               aDescriptor.handleCr()},
++      mHandles{(HANDLE)aDescriptor.handleY(), (HANDLE)aDescriptor.handleCb(),
++               (HANDLE)aDescriptor.handleCr()},
+       mSize(aDescriptor.size()),
+       mSizeY(aDescriptor.sizeY()),
+       mSizeCbCr(aDescriptor.sizeCbCr()),
+@@ -1778,8 +1766,7 @@ bool SyncObjectD3D11Host::Init() {
+   CD3D11_TEXTURE2D_DESC desc(
+       DXGI_FORMAT_B8G8R8A8_UNORM, 1, 1, 1, 1,
+       D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
+-  desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+-                   D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++  desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+ 
+   RefPtr<ID3D11Texture2D> texture;
+   HRESULT hr =
+@@ -1789,7 +1776,7 @@ bool SyncObjectD3D11Host::Init() {
+     return false;
+   }
+ 
+-  hr = texture->QueryInterface((IDXGIResource1**)getter_AddRefs(mSyncTexture));
++  hr = texture->QueryInterface((IDXGIResource**)getter_AddRefs(mSyncTexture));
+   if (FAILED(hr) || !mSyncTexture) {
+     gfxWarning() << "Could not QI sync texture: " << gfx::hexa(hr);
+     return false;
+@@ -1802,16 +1789,12 @@ bool SyncObjectD3D11Host::Init() {
+     return false;
+   }
+ 
+-  HANDLE sharedHandle;
+-  hr = mSyncTexture->CreateSharedHandle(
+-      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+-      &sharedHandle);
+-  if (FAILED(hr)) {
++  hr = mSyncTexture->GetSharedHandle(&mSyncHandle);
++  if (FAILED(hr) || !mSyncHandle) {
+     gfxWarning() << "Could not get sync texture shared handle: "
+                  << gfx::hexa(hr);
+     return false;
+   }
+-  mSyncHandle = new gfx::FileHandleWrapper(UniqueFileHandle(sharedHandle));
+ 
+   return true;
+ }
+@@ -1863,18 +1846,11 @@ bool SyncObjectD3D11Client::Init(ID3D11Device* aDevice, bool aFallible) {
+     return false;
+   }
+ 
+-  RefPtr<ID3D11Device1> device1;
+-  aDevice->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return 0;
+-  }
+-
+-  HRESULT hr = device1->OpenSharedResource1(
+-      mSyncHandle->GetHandle(), __uuidof(ID3D11Texture2D),
++  HRESULT hr = aDevice->OpenSharedResource(
++      mSyncHandle, __uuidof(ID3D11Texture2D),
+       (void**)(ID3D11Texture2D**)getter_AddRefs(mSyncTexture));
+   if (FAILED(hr) || !mSyncTexture) {
+-    gfxCriticalNote << "Failed to OpenSharedResource1 for SyncObjectD3D11: "
++    gfxCriticalNote << "Failed to OpenSharedResource for SyncObjectD3D11: "
+                     << hexa(hr);
+     if (!aFallible && ShouldDevCrashOnSyncInitFailure()) {
+       gfxDevCrash(LogReason::D3D11FinalizeFrame)
+diff --git a/gfx/layers/d3d11/TextureD3D11.h b/gfx/layers/d3d11/TextureD3D11.h
+index 6963ed59b38d..61d727b19b77 100644
+--- a/gfx/layers/d3d11/TextureD3D11.h
++++ b/gfx/layers/d3d11/TextureD3D11.h
+@@ -6,7 +6,7 @@
+ #define MOZILLA_GFX_TEXTURED3D11_H
+ 
+ #include <d3d11.h>
+-#include <d3d11_1.h>
++
+ #include <vector>
+ 
+ #include "d3d9.h"
+@@ -23,8 +23,8 @@
+ namespace mozilla {
+ 
+ namespace gfx {
+-class FileHandleWrapper;
+-}  // namespace gfx
++struct FenceInfo;
++}
+ 
+ namespace gl {
+ class GLBlitHelper;
+@@ -134,15 +134,15 @@ class D3D11TextureData final : public TextureData {
+ 
+  private:
+   D3D11TextureData(ID3D11Device* aDevice, ID3D11Texture2D* aTexture,
+-                   uint32_t aArrayIndex,
+-                   RefPtr<gfx::FileHandleWrapper> aSharedHandle,
+-                   gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
++                   uint32_t aArrayIndex, gfx::IntSize aSize,
++                   gfx::SurfaceFormat aFormat,
+                    const Maybe<CompositeProcessFencesHolderId> aFencesHolderId,
+                    const RefPtr<FenceD3D11> aWriteFence,
+                    TextureAllocationFlags aFlags);
+ 
+   friend class gl::GLBlitHelper;
+   bool SerializeSpecific(SurfaceDescriptorD3D10* aOutDesc);
++  void GetDXGIResource(IDXGIResource** aOutResource);
+ 
+   static D3D11TextureData* Create(gfx::IntSize aSize,
+                                   gfx::SurfaceFormat aFormat,
+@@ -166,7 +166,6 @@ class D3D11TextureData final : public TextureData {
+ 
+   const RefPtr<ID3D11Device> mDevice;
+   RefPtr<ID3D11Texture2D> mTexture;
+-  const RefPtr<gfx::FileHandleWrapper> mSharedHandle;
+   Maybe<GpuProcessTextureId> mGpuProcessTextureId;
+   uint32_t mArrayIndex = 0;
+   const TextureAllocationFlags mAllocationFlags;
+@@ -223,7 +222,7 @@ class DXGIYCbCrTextureData : public TextureData {
+ 
+  protected:
+   DXGIYCbCrTextureData(RefPtr<ID3D11Texture2D> (&aD3D11Textures)[3],
+-                       RefPtr<gfx::FileHandleWrapper>(aHandles)[3],
++                       HANDLE aHandles[3],
+                        const gfx::IntSize& aSize, const gfx::IntSize& aSizeY,
+                        const gfx::IntSize& aSizeCbCr,
+                        const gfx::ColorDepth aColorDepth,
+@@ -235,7 +234,7 @@ class DXGIYCbCrTextureData : public TextureData {
+   virtual ~DXGIYCbCrTextureData();
+ 
+   RefPtr<ID3D11Texture2D> mD3D11Textures[3];
+-  RefPtr<gfx::FileHandleWrapper> mHandles[3];
++  HANDLE mHandles[3];
+ };
+ 
+ /**
+@@ -407,7 +406,7 @@ class DXGITextureHostD3D11 : public TextureHost {
+ 
+   void SetReadFence(Fence* aReadFence) override;
+ 
+-  const RefPtr<gfx::FileHandleWrapper> mHandle;
++  const HANDLE mHandle;
+   const Maybe<GpuProcessTextureId> mGpuProcessTextureId;
+   const uint32_t mArrayIndex;
+   const gfx::IntSize mSize;
+@@ -477,9 +476,7 @@ class DXGIYCbCrTextureHostD3D11 : public TextureHost {
+ 
+   void SetReadFence(Fence* aReadFence) override;
+ 
+-  // Handles will be closed automatically when `UniqueFileHandle` gets
+-  // destroyed.
+-  const RefPtr<gfx::FileHandleWrapper> mHandles[3];
++  HANDLE mHandles[3];
+   const gfx::IntSize mSize;
+   const gfx::IntSize mSizeY;
+   const gfx::IntSize mSizeCbCr;
+@@ -533,7 +530,7 @@ class SyncObjectD3D11Host : public SyncObjectHost {
+ 
+   SyncHandle mSyncHandle;
+   RefPtr<ID3D11Device> mDevice;
+-  RefPtr<IDXGIResource1> mSyncTexture;
++  RefPtr<IDXGIResource> mSyncTexture;
+   RefPtr<IDXGIKeyedMutex> mKeyedMutex;
+ };
+ 
+diff --git a/gfx/layers/d3d11/TextureHostWrapperD3D11.cpp b/gfx/layers/d3d11/TextureHostWrapperD3D11.cpp
+index 3fb1a89694ec..3ca8b42da8ed 100644
+--- a/gfx/layers/d3d11/TextureHostWrapperD3D11.cpp
++++ b/gfx/layers/d3d11/TextureHostWrapperD3D11.cpp
+@@ -267,7 +267,7 @@ RefPtr<TextureHost> TextureHostWrapperD3D11::CreateFromBufferTexture(
+   auto colorSpace = ToColorSpace2(bufferTexture->GetYUVColorSpace());
+ 
+   auto descD3D10 = SurfaceDescriptorD3D10(
+-      nullptr, Some(id),
++      WindowsHandle(nullptr), Some(id),
+       /* arrayIndex */ 0, outputFormat, size, colorSpace, colorRange,
+       transferFunction, /* hdrMetadata */ Nothing(),
+       /* hasKeyedMutex */ false,
+diff --git a/gfx/layers/ipc/LayersMessageUtils.h b/gfx/layers/ipc/LayersMessageUtils.h
+index 76d81b256e3b..4663494859ba 100644
+--- a/gfx/layers/ipc/LayersMessageUtils.h
++++ b/gfx/layers/ipc/LayersMessageUtils.h
+@@ -20,7 +20,6 @@
+ #include "mozilla/ServoBindings.h"
+ #include "mozilla/ParamTraits_TiedFields.h"
+ #include "mozilla/ipc/ByteBuf.h"
+-#include "mozilla/ipc/ProtocolMessageUtils.h"
+ #include "mozilla/ipc/RustMessageUtils.h"
+ #include "mozilla/layers/APZInputBridge.h"
+ #include "mozilla/layers/AsyncDragMetrics.h"
+diff --git a/gfx/layers/ipc/LayersSurfaces.ipdlh b/gfx/layers/ipc/LayersSurfaces.ipdlh
+index 897b97d1c824..05e4859a416b 100644
+--- a/gfx/layers/ipc/LayersSurfaces.ipdlh
++++ b/gfx/layers/ipc/LayersSurfaces.ipdlh
+@@ -41,7 +41,7 @@ namespace mozilla {
+ namespace layers {
+ 
+ [Comparable] struct SurfaceDescriptorD3D10 {
+-  nullable FileHandleWrapper handle;
++  WindowsHandle handle;
+   GpuProcessTextureId? gpuProcessTextureId;
+   uint32_t arrayIndex;
+   SurfaceFormat format;
+@@ -55,9 +55,9 @@ namespace layers {
+ };
+ 
+ [Comparable] struct SurfaceDescriptorDXGIYCbCr {
+-  nullable FileHandleWrapper handleY;
+-  nullable FileHandleWrapper handleCb;
+-  nullable FileHandleWrapper handleCr;
++  WindowsHandle handleY;
++  WindowsHandle handleCb;
++  WindowsHandle handleCr;
+   IntSize size;
+   IntSize sizeY;
+   IntSize sizeCbCr;
+diff --git a/gfx/thebes/D3D11Checks.cpp b/gfx/thebes/D3D11Checks.cpp
+index 9f624c15e640..30a4a3ece408 100644
+--- a/gfx/thebes/D3D11Checks.cpp
++++ b/gfx/thebes/D3D11Checks.cpp
+@@ -56,8 +56,7 @@ bool D3D11Checks::DoesRenderTargetViewNeedRecreating(ID3D11Device* aDevice) {
+   offscreenTextureDesc.BindFlags =
+       D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+   offscreenTextureDesc.CPUAccessFlags = 0;
+-  offscreenTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+-                                   D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++  offscreenTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+ 
+   HRESULT hr = aDevice->CreateTexture2D(&offscreenTextureDesc, NULL,
+                                         getter_AddRefs(offscreenTexture));
+@@ -235,8 +234,7 @@ static bool DoesTextureSharingWorkInternal(ID3D11Device* device,
+   desc.SampleDesc.Quality = 0;
+   desc.Usage = D3D11_USAGE_DEFAULT;
+   desc.CPUAccessFlags = 0;
+-  desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+-                   D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++  desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+   desc.BindFlags = bindflags;
+ 
+   uint32_t color[texture_size * texture_size];
+@@ -273,35 +271,23 @@ static bool DoesTextureSharingWorkInternal(ID3D11Device* device,
+     return false;
+   }
+ 
+-  RefPtr<IDXGIResource1> otherResource;
+-  if (FAILED(texture->QueryInterface(__uuidof(IDXGIResource1),
++  HANDLE shareHandle;
++  RefPtr<IDXGIResource> otherResource;
++  if (FAILED(texture->QueryInterface(__uuidof(IDXGIResource),
+                                      getter_AddRefs(otherResource)))) {
+     gfxCriticalError() << "DoesD3D11TextureSharingWork_GetResourceFailure";
+     return false;
+   }
+ 
+-  HANDLE sharedHandle;
+-  if (FAILED(otherResource->CreateSharedHandle(
+-          nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+-          nullptr, &sharedHandle))) {
++  if (FAILED(otherResource->GetSharedHandle(&shareHandle))) {
+     gfxCriticalError() << "DoesD3D11TextureSharingWork_GetSharedTextureFailure";
+     return false;
+   }
+ 
+-  auto handle = ipc::FileDescriptor(UniqueFileHandle(sharedHandle));
+-
+-  RefPtr<ID3D11Device1> device1;
+-  device->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return false;
+-  }
+-
+   RefPtr<ID3D11Resource> sharedResource;
+   RefPtr<ID3D11Texture2D> sharedTexture;
+-  auto raw = handle.TakePlatformHandle();
+-  if (FAILED(device1->OpenSharedResource1(raw.get(), __uuidof(ID3D11Resource),
+-                                          getter_AddRefs(sharedResource)))) {
++  if (FAILED(device->OpenSharedResource(shareHandle, __uuidof(ID3D11Resource),
++                                        getter_AddRefs(sharedResource)))) {
+     gfxCriticalError(CriticalLog::DefaultOptions(false))
+         << "OpenSharedResource failed for format " << format;
+     return false;
+diff --git a/gfx/vr/FxROutputHandler.cpp b/gfx/vr/FxROutputHandler.cpp
+index 7101090bc8ac..8a0c46d51491 100644
+--- a/gfx/vr/FxROutputHandler.cpp
++++ b/gfx/vr/FxROutputHandler.cpp
+@@ -26,8 +26,7 @@ bool FxROutputHandler::TryInitialize(IDXGISwapChain* aSwapChain,
+     // Create shareable texture, which will be copied to
+     D3D11_TEXTURE2D_DESC descOrig = {0};
+     texOrig->GetDesc(&descOrig);
+-    descOrig.MiscFlags |=
+-        D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED;
++    descOrig.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
+     hr = aDevice->CreateTexture2D(&descOrig, nullptr,
+                                   mTexCopy.StartAssignment());
+     if (hr != S_OK) {
+@@ -37,16 +36,14 @@ bool FxROutputHandler::TryInitialize(IDXGISwapChain* aSwapChain,
+     // Now, share the texture to a handle that can be marshaled to another
+     // process
+     HANDLE hCopy = nullptr;
+-    RefPtr<IDXGIResource1> texResource;
+-    hr = mTexCopy->QueryInterface(IID_IDXGIResource1,
++    RefPtr<IDXGIResource> texResource;
++    hr = mTexCopy->QueryInterface(IID_IDXGIResource,
+                                   getter_AddRefs(texResource));
+     if (hr != S_OK) {
+       return false;
+     }
+ 
+-    hr = texResource->CreateSharedHandle(
+-        nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+-        nullptr, &hCopy);
++    hr = texResource->GetSharedHandle(&hCopy);
+     if (hr != S_OK) {
+       return false;
+     }
+diff --git a/gfx/vr/VRManager.cpp b/gfx/vr/VRManager.cpp
+index a8fedc1720ad..915513db426c 100644
+--- a/gfx/vr/VRManager.cpp
++++ b/gfx/vr/VRManager.cpp
+@@ -1348,10 +1348,9 @@ bool VRManager::SubmitFrame(const layers::SurfaceDescriptor& aTexture,
+     case SurfaceDescriptor::TSurfaceDescriptorD3D10: {
+       const SurfaceDescriptorD3D10& surf =
+           aTexture.get_SurfaceDescriptorD3D10();
+-      auto handle = surf.handle()->ClonePlatformHandle();
+       layer.textureType =
+           VRLayerTextureType::LayerTextureType_D3D10SurfaceDescriptor;
+-      layer.textureHandle = (void*)handle.release();
++      layer.textureHandle = (void*)surf.handle();
+       layer.textureSize.width = surf.size().width;
+       layer.textureSize.height = surf.size().height;
+     } break;
+diff --git a/gfx/vr/service/VRSession.cpp b/gfx/vr/service/VRSession.cpp
+index bbd207086b3b..f8bf420aaf12 100644
+--- a/gfx/vr/service/VRSession.cpp
++++ b/gfx/vr/service/VRSession.cpp
+@@ -6,8 +6,6 @@
+ 
+ #include "moz_external_vr.h"
+ 
+-#include "mozilla/ipc/FileDescriptor.h"
+-
+ #if defined(XP_WIN)
+ #  include <d3d11.h>
+ #endif  // defined(XP_WIN)
+@@ -104,10 +102,8 @@ bool VRSession::SubmitFrame(
+   if (aLayer.textureType ==
+       VRLayerTextureType::LayerTextureType_D3D10SurfaceDescriptor) {
+     ID3D11Texture2D* dxTexture = nullptr;
+-    mozilla::ipc::FileDescriptor::UniquePlatformHandle handle(
+-        aLayer.textureHandle);
+-    HRESULT hr =
+-        mDevice->OpenSharedResource1(handle.get(), IID_PPV_ARGS(&dxTexture));
++    HRESULT hr = mDevice->OpenSharedResource((HANDLE)aLayer.textureHandle,
++                                             IID_PPV_ARGS(&dxTexture));
+     if (SUCCEEDED(hr) && dxTexture != nullptr) {
+       // Similar to LockD3DTexture in TextureD3D11.cpp
+       IDXGIKeyedMutex* mutex = nullptr;
+diff --git a/gfx/webrender_bindings/RenderD3D11TextureHost.cpp b/gfx/webrender_bindings/RenderD3D11TextureHost.cpp
+index 76c1f0f4ad14..5eb02dcc236e 100644
+--- a/gfx/webrender_bindings/RenderD3D11TextureHost.cpp
++++ b/gfx/webrender_bindings/RenderD3D11TextureHost.cpp
+@@ -25,7 +25,7 @@ namespace mozilla {
+ namespace wr {
+ 
+ RenderDXGITextureHost::RenderDXGITextureHost(
+-    const RefPtr<gfx::FileHandleWrapper> aHandle,
++    const HANDLE aHandle,
+     const Maybe<layers::GpuProcessTextureId>& aGpuProcessTextureId,
+     const uint32_t aArrayIndex, const gfx::SurfaceFormat aFormat,
+     const gfx::ColorSpace2 aColorSpace, const gfx::ColorRange aColorRange,
+@@ -319,16 +319,9 @@ bool RenderDXGITextureHost::EnsureD3D11Texture2D(ID3D11Device* aDevice) {
+     return false;
+   }
+ 
+-  RefPtr<ID3D11Device1> device1;
+-  aDevice->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return 0;
+-  }
+-
+   // Get the D3D11 texture from shared handle.
+-  HRESULT hr = device1->OpenSharedResource1(
+-      (HANDLE)mHandle->GetHandle(), __uuidof(ID3D11Texture2D),
++  HRESULT hr = aDevice->OpenSharedResource(
++      (HANDLE)mHandle, __uuidof(ID3D11Texture2D),
+       (void**)(ID3D11Texture2D**)getter_AddRefs(mTexture));
+   if (FAILED(hr)) {
+     MOZ_ASSERT(false,
+@@ -577,7 +570,7 @@ bool RenderDXGITextureHost::SyncObjectNeeded() {
+ }
+ 
+ RenderDXGIYCbCrTextureHost::RenderDXGIYCbCrTextureHost(
+-    const RefPtr<gfx::FileHandleWrapper> (&aHandles)[3],
++    HANDLE (&aHandles)[3],
+     const gfx::YUVColorSpace aYUVColorSpace, const gfx::ColorDepth aColorDepth,
+     const gfx::ColorRange aColorRange,
+     const gfx::TransferFunction aTransferFunction, const gfx::IntSize aSizeY,
+@@ -704,13 +697,6 @@ bool RenderDXGIYCbCrTextureHost::EnsureLockable() {
+ }
+ 
+ bool RenderDXGIYCbCrTextureHost::EnsureD3D11Texture2D(ID3D11Device* aDevice) {
+-  RefPtr<ID3D11Device1> device1;
+-  aDevice->QueryInterface((ID3D11Device1**)getter_AddRefs(device1));
+-  if (!device1) {
+-    gfxCriticalNoteOnce << "Failed to get ID3D11Device1";
+-    return false;
+-  }
+-
+   if (mTextures[0]) {
+     RefPtr<ID3D11Device> device;
+     mTextures[0]->GetDevice(getter_AddRefs(device));
+@@ -726,8 +712,8 @@ bool RenderDXGIYCbCrTextureHost::EnsureD3D11Texture2D(ID3D11Device* aDevice) {
+ 
+   for (int i = 0; i < 3; ++i) {
+     // Get the R8 D3D11 texture from shared handle.
+-    HRESULT hr = device1->OpenSharedResource1(
+-        (HANDLE)mHandles[i]->GetHandle(), __uuidof(ID3D11Texture2D),
++    HRESULT hr = aDevice->OpenSharedResource(
++        (HANDLE)mHandles[i], __uuidof(ID3D11Texture2D),
+         (void**)(ID3D11Texture2D**)getter_AddRefs(mTextures[i]));
+     if (FAILED(hr)) {
+       NS_WARNING(
+diff --git a/gfx/webrender_bindings/RenderD3D11TextureHost.h b/gfx/webrender_bindings/RenderD3D11TextureHost.h
+index 65f2ea6a6da5..011e99e1d847 100644
+--- a/gfx/webrender_bindings/RenderD3D11TextureHost.h
++++ b/gfx/webrender_bindings/RenderD3D11TextureHost.h
+@@ -8,7 +8,6 @@
+ #include <d3d11.h>
+ 
+ #include "GLTypes.h"
+-#include "mozilla/gfx/FileHandleWrapper.h"
+ #include "RenderTextureHostSWGL.h"
+ 
+ struct ID3D11Texture2D;
+@@ -26,8 +25,7 @@ namespace wr {
+ class RenderDXGITextureHost final : public RenderTextureHostSWGL {
+  public:
+   RenderDXGITextureHost(
+-      const RefPtr<gfx::FileHandleWrapper> aHandle,
+-      const Maybe<layers::GpuProcessTextureId>& aGpuProcessTextureId,
++      const HANDLE aHandle, const Maybe<layers::GpuProcessTextureId>& aGpuProcessTextureId,
+       const uint32_t aArrayIndex, const gfx::SurfaceFormat aFormat,
+       const gfx::ColorSpace2 aColorSpace, const gfx::ColorRange aColorRange,
+       const gfx::TransferFunction aTransferFunction,
+@@ -111,7 +109,7 @@ class RenderDXGITextureHost final : public RenderTextureHostSWGL {
+ 
+   RefPtr<gl::GLContext> mGL;
+ 
+-  const RefPtr<gfx::FileHandleWrapper> mHandle;
++  const HANDLE mHandle;
+   const Maybe<layers::GpuProcessTextureId> mGpuProcessTextureId;
+   RefPtr<ID3D11Texture2D> mTexture;
+   const uint32_t mArrayIndex;
+@@ -149,7 +147,7 @@ class RenderDXGITextureHost final : public RenderTextureHostSWGL {
+ class RenderDXGIYCbCrTextureHost final : public RenderTextureHostSWGL {
+  public:
+   explicit RenderDXGIYCbCrTextureHost(
+-      const RefPtr<gfx::FileHandleWrapper> (&aHandles)[3],
++      HANDLE (&aHandles)[3],
+       const gfx::YUVColorSpace aYUVColorSpace,
+       const gfx::ColorDepth aColorDepth, const gfx::ColorRange aColorRange,
+       const gfx::TransferFunction aTransferFunction, const gfx::IntSize aSizeY,
+@@ -216,7 +214,7 @@ class RenderDXGIYCbCrTextureHost final : public RenderTextureHostSWGL {
+ 
+   RefPtr<gl::GLContext> mGL;
+ 
+-  RefPtr<gfx::FileHandleWrapper> mHandles[3];
++  HANDLE mHandles[3];
+   RefPtr<ID3D11Texture2D> mTextures[3];
+   RefPtr<ID3D11Device> mDevice;
+ 
+diff --git a/gfx/webrender_bindings/WebRenderAPI.cpp b/gfx/webrender_bindings/WebRenderAPI.cpp
+index 6bd622df2720..d6cc2c0a610b 100644
+--- a/gfx/webrender_bindings/WebRenderAPI.cpp
++++ b/gfx/webrender_bindings/WebRenderAPI.cpp
+@@ -224,7 +224,7 @@ RefPtr<WebRenderAPI::CreatePromise> WebRenderAPI::Create(
+ 
+         wr::DocumentHandle* docHandle = nullptr;
+         int32_t maxTextureSize = 0;
+-        layers::SyncHandle syncHandle = {};
++        layers::SyncHandle syncHandle = 0;
+ 
+         // Only allow the panic on GL error functionality in nightly builds,
+         // since it (deliberately) crashes the GPU process if any GL call

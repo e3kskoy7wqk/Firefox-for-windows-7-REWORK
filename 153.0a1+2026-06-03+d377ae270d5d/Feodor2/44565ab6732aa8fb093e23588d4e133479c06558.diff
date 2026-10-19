@@ -1,0 +1,232 @@
+diff --git a/dom/ipc/ContentProcess.h b/dom/ipc/ContentProcess.h
+index 946fc84..1c9f9e0 100644
+--- a/dom/ipc/ContentProcess.h
++++ b/dom/ipc/ContentProcess.h
+@@ -37,6 +37,14 @@ class ContentProcess : public mozilla::ipc::ProcessChild {
+ 
+   ContentChild mContent;
+ #if defined(XP_WIN)
++  // ole32.dll is delay-loaded from xul.dll. On Windows XP, the first
++  // CoInitializeEx call can otherwise fail while the COM MTA is created.
++  struct Ole32Preloader {
++    Ole32Preloader() { ::LoadLibraryW(L"ole32.dll"); }
++  };
++
++  Ole32Preloader mOle32Preloader;
++
+   // This object initializes and configures COM. This must happen prior to
+   // constructing mXREEmbed.
+   mozilla::mscom::ProcessRuntime mCOMRuntime;
+diff --git a/dom/media/ipc/RemoteMediaManagerChild.cpp b/dom/media/ipc/RemoteMediaManagerChild.cpp
+index f6bd70e..024f392 100644
+--- a/dom/media/ipc/RemoteMediaManagerChild.cpp
++++ b/dom/media/ipc/RemoteMediaManagerChild.cpp
+@@ -343,16 +343,8 @@ RemoteMediaManagerChild::CreateAudioDecoder(const CreateDecoderParams& aParams,
+     launchPromise = LaunchUtilityProcessIfNeeded(aLocation);
+   } else if (aLocation == RemoteMediaIn::UtilityProcess_MFMediaEngineCDM) {
+     launchPromise = LaunchUtilityProcessIfNeeded(aLocation);
+-  } else if (StaticPrefs::media_allow_audio_non_utility() || aParams.mCDM) {
+-    launchPromise = LaunchRDDProcessIfNeeded();
+   } else {
+-    return PlatformDecoderModule::CreateDecoderPromise::CreateAndReject(
+-        MediaResult(
+-            NS_ERROR_DOM_MEDIA_DENIED_IN_NON_UTILITY,
+-            nsPrintfCString("%s is not allowed to perform audio decoding",
+-                            RemoteMediaInToStr(aLocation))
+-                .get()),
+-        __func__);
++    launchPromise = LaunchRDDProcessIfNeeded();
+   }
+   LOG("Create audio decoder in %s", RemoteMediaInToStr(aLocation));
+ 
+diff --git a/dom/media/platforms/PDMFactory.cpp b/dom/media/platforms/PDMFactory.cpp
+index b5275d3..9d32a7e 100644
+--- a/dom/media/platforms/PDMFactory.cpp
++++ b/dom/media/platforms/PDMFactory.cpp
+@@ -148,32 +148,26 @@ class PDMInitializer final {
+   }
+ 
+   static void InitContentPDMs() {
+-#if !defined(MOZ_WIDGET_ANDROID)  // Still required for video?
+-    if (StaticPrefs::media_allow_audio_non_utility()) {
+-#endif  // !defined(MOZ_WIDGET_ANDROID)
+ #ifdef XP_WIN
+-      if (!IsWin7AndPre2000Compatible()) {
++    if (!IsWin7AndPre2000Compatible()) {
+ #  ifdef MOZ_WMF
+-        if (!StaticPrefs::media_rdd_process_enabled() ||
+-            !StaticPrefs::media_rdd_wmf_enabled()) {
+-          WMFDecoderModule::Init();
+-        }
+-#  endif
++      if (!StaticPrefs::media_rdd_process_enabled() ||
++          !StaticPrefs::media_rdd_wmf_enabled()) {
++        WMFDecoderModule::Init();
+       }
++#  endif
++    }
+ #endif
+ #ifdef MOZ_APPLEMEDIA
+-      AppleDecoderModule::Init();
++    AppleDecoderModule::Init();
+ #endif
+ #ifdef MOZ_OMX
+-      OmxDecoderModule::Init();
++    OmxDecoderModule::Init();
+ #endif
+-      FFVPXRuntimeLinker::Init();
++    FFVPXRuntimeLinker::Init();
+ #ifdef MOZ_FFMPEG
+-      FFmpegRuntimeLinker::Init();
++    FFmpegRuntimeLinker::Init();
+ #endif
+-#if !defined(MOZ_WIDGET_ANDROID)  // Still required for video?
+-    }
+-#endif  // !defined(MOZ_WIDGET_ANDROID)
+ 
+     RemoteMediaManagerChild::Init();
+   }
+@@ -672,46 +666,40 @@ void PDMFactory::CreateContentPDMs() {
+   }
+ #endif
+ 
+-#if !defined(MOZ_WIDGET_ANDROID)  // Still required for video?
+-  if (StaticPrefs::media_allow_audio_non_utility()) {
+-#endif  // !defined(MOZ_WIDGET_ANDROID)
+ #ifdef XP_WIN
+-    if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
++  if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
+ #  ifdef MOZ_WMF
+-      if (!StaticPrefs::media_rdd_process_enabled() ||
+-          !StaticPrefs::media_rdd_wmf_enabled()) {
+-        if (!StartupPDM(WMFDecoderModule::Create())) {
+-          mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
+-        }
++    if (!StaticPrefs::media_rdd_process_enabled() ||
++        !StaticPrefs::media_rdd_wmf_enabled()) {
++      if (!StartupPDM(WMFDecoderModule::Create())) {
++        mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
+       }
+-#  endif
+-    } else if (StaticPrefs::media_decoder_doctor_wmf_disabled_is_failure()) {
+-      mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
+     }
++#  endif
++  } else if (StaticPrefs::media_decoder_doctor_wmf_disabled_is_failure()) {
++    mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
++  }
+ #endif
+ 
+ #ifdef MOZ_APPLEMEDIA
+-    StartupPDM(AppleDecoderModule::Create());
++  StartupPDM(AppleDecoderModule::Create());
+ #endif
+ #ifdef MOZ_OMX
+-    if (StaticPrefs::media_omx_enabled()) {
+-      StartupPDM(OmxDecoderModule::Create());
+-    }
++  if (StaticPrefs::media_omx_enabled()) {
++    StartupPDM(OmxDecoderModule::Create());
++  }
+ #endif
+-    StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
++  StartupPDM(FFVPXRuntimeLinker::CreateDecoder());
+ #ifdef MOZ_FFMPEG
+-    if (StaticPrefs::media_ffmpeg_enabled() &&
+-        !StartupPDM(FFmpegRuntimeLinker::CreateDecoder())) {
+-      mFailureFlags += GetFailureFlagBasedOnFFmpegStatus(
+-          FFmpegRuntimeLinker::LinkStatusCode());
+-    }
++  if (StaticPrefs::media_ffmpeg_enabled() &&
++      !StartupPDM(FFmpegRuntimeLinker::CreateDecoder())) {
++    mFailureFlags += GetFailureFlagBasedOnFFmpegStatus(
++        FFmpegRuntimeLinker::LinkStatusCode());
++  }
+ #endif
+ 
+-    StartupPDM(AgnosticDecoderModule::Create(),
+-               StaticPrefs::media_prefer_non_ffvpx());
+-#if !defined(MOZ_WIDGET_ANDROID)  // Still required for video?
+-  }
+-#endif  // !defined(MOZ_WIDGET_ANDROID)
++  StartupPDM(AgnosticDecoderModule::Create(),
++             StaticPrefs::media_prefer_non_ffvpx());
+ 
+   // Android still needs this, the actual decoder is remoted on java side
+ #ifdef MOZ_WIDGET_ANDROID
+diff --git a/ipc/glue/UtilityProcessImpl.h b/ipc/glue/UtilityProcessImpl.h
+index 9b42cd5..32a6cd8 100644
+--- a/ipc/glue/UtilityProcessImpl.h
++++ b/ipc/glue/UtilityProcessImpl.h
+@@ -34,6 +34,19 @@ class UtilityProcessImpl final : public ipc::ProcessChild {
+   RefPtr<UtilityProcessChild> mUtility = UtilityProcessChild::GetSingleton();
+ 
+ #if defined(XP_WIN)
++  // ole32.dll is delay-loaded from xul.dll. In the Utility process the
++  // mscom::ProcessRuntime member below initializes COM (and thus delay-loads
++  // ole32) in its constructor, before Init() runs and before the sandbox is
++  // lowered. On Windows XP the Generic Utility process had not loaded ole32
++  // by that point, and the very first delay-load resolved a bogus module
++  // handle (0x1B), failing GetProcAddress(CoInitializeEx) and crashing with
++  // 0xC06D007F. Preload ole32.dll (a required system DLL) first so that the
++  // subsequent delay-load is a no-op against the already-loaded module.
++  // Mirrors WMFPreloadForSandbox's LoadLibraryOrCrash(L"ole32.dll").
++  struct Ole32Preloader {
++    Ole32Preloader() { ::LoadLibraryW(L"ole32.dll"); }
++  };
++  Ole32Preloader mOle32Preloader;
+   mozilla::mscom::ProcessRuntime mCOMRuntime;
+ #endif
+ };
+diff --git a/ipc/glue/UtilityProcessManager.cpp b/ipc/glue/UtilityProcessManager.cpp
+index 115e422..fe0b6b1 100644
+--- a/ipc/glue/UtilityProcessManager.cpp
++++ b/ipc/glue/UtilityProcessManager.cpp
+@@ -278,6 +278,17 @@ UtilityProcessManager::StartUtility(RefPtr<Actor> aActor,
+               LaunchError("UPM::GetProcessParent"), __func__);
+         }
+ 
++        // The Utility process can die between LaunchProcess() resolving and
++        // this continuation running.  If the top-level actor is no longer able
++        // to send, endpoint creation / BindToUtilityProcess() below would fail
++        // or (worse) silently no-op.  Reject early so the caller can retry or
++        // surface a clear error instead of binding an actor to a dead channel.
++        if (!utilityParent->CanSend()) {
++          NS_WARNING("Utility parent not ready to send in StartUtility");
++          return RetPromise::CreateAndReject(LaunchError("BindToUtilityProcess", NS_ERROR_FAILURE),
++                                                             __func__);
++        }
++
+         // It is possible if multiple processes concurrently request a utility
+         // actor that the previous CanSend() check returned false for both but
+         // that by the time we have started our process for real, one of them
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+index 5c67792..eb8e37a 100644
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -11581,13 +11581,6 @@
+     mirror: always
+ #endif  # ANDROID
+ 
+-# Now we will completely disable the ability to perform audio decoding outside
+-# of Utility.
+--   name: media.allow-audio-non-utility
+-    type: RelaxedAtomicBool
+-    value: @IS_IOS@
+-    mirror: always
+-
+ #ifdef MOZ_OMX
+ -   name: media.omx.enabled
+     type: bool
+diff --git a/netwerk/ipc/SocketProcessImpl.cpp b/netwerk/ipc/SocketProcessImpl.cpp
+index b3df8f47f7cd..0b63fc86e0cb 100644
+--- a/netwerk/ipc/SocketProcessImpl.cpp
++++ b/netwerk/ipc/SocketProcessImpl.cpp
+@@ -43,6 +44,7 @@ bool SocketProcessImpl::Init(int aArgc, char* aArgv[]) {
+   LoadLibraryW(L"softokn3.dll");
+   LoadLibraryW(L"freebl3.dll");
+   LoadLibraryW(L"winmm.dll");
++  LoadLibraryW(L"oleaut32.dll");
+   mozilla::SandboxTarget::Instance()->StartSandbox();
+ #elif defined(__OpenBSD__) && defined(MOZ_SANDBOX)
+   PR_LoadLibrary("libnss3.so");

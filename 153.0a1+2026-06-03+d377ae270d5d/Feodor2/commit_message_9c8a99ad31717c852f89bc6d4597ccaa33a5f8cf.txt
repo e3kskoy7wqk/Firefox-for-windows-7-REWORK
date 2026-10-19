@@ -1,0 +1,1 @@
+Bug 1990905 - chore(rust): update to `windows` 0.62 r=glandium,supply-chain-reviewers    2025-11-19 03:58:36    9c8a99ad31717c852f89bc6d4597ccaa33a5f8cf

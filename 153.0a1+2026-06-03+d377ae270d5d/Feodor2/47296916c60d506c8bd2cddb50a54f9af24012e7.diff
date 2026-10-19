@@ -1,0 +1,24 @@
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index 466df9ffef9e..04a7d35863cd 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -1032,10 +1032,6 @@ static void ScaleForFrameDPI(LayoutDeviceIntSize* aSize, nsIFrame* aFrame) {
+ 
+ LayoutDeviceIntMargin nsNativeThemeWin::GetWidgetBorder(
+     nsDeviceContext* aContext, nsIFrame* aFrame, StyleAppearance aAppearance) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
+-    return Theme::GetWidgetBorder(aContext, aFrame, aAppearance);
+-  }
+-
+   LayoutDeviceIntMargin result;
+   mozilla::Maybe<UXThemeClass> themeClass = GetThemeClass(aAppearance);
+   HTHEME theme = nullptr;
+@@ -1092,7 +1088,7 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
+                                         nsIFrame* aFrame,
+                                         StyleAppearance aAppearance,
+                                         LayoutDeviceIntMargin* aResult) {
+-  if (IsWidgetAlwaysNonNative(aFrame, aAppearance)) {
++  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+     return Theme::GetWidgetPadding(aContext, aFrame, aAppearance, aResult);
+   }
+ 

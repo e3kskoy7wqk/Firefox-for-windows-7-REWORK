@@ -1,0 +1,1 @@
+Bug 2022767 - Use UIA to access the set default browser button in Windows Settings r=cdupuis,Gijs,accessibility-platform-reviewers,Jamie    2026-04-10 14:49:40    2b3326e9c1c73c248ac9741f4a586b96cd5e7fb1

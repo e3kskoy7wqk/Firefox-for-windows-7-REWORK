@@ -1,0 +1,27 @@
+diff --git a/toolkit/system/windowsproxy/WindowsInternetFunctionsWrapper.cpp b/toolkit/system/windowsproxy/WindowsInternetFunctionsWrapper.cpp
+index 6fe4804..af26bdd 100644
+--- a/toolkit/system/windowsproxy/WindowsInternetFunctionsWrapper.cpp
++++ b/toolkit/system/windowsproxy/WindowsInternetFunctionsWrapper.cpp
+@@ -146,8 +146,20 @@ nsresult WindowsInternetFunctionsWrapper::ReadAllOptionsLocked(
+     MutexAutoUnlock unlock(mMutex);
+   if (!InternetQueryOptionW(nullptr, INTERNET_OPTION_PER_CONNECTION_OPTION,
+                             &list, &size)) {
+-    LOG(("ReadAllOptionsLocked: InternetQueryOptionW failed"));
+-    return NS_ERROR_FAILURE;
++    if (GetLastError() != ERROR_INVALID_PARAMETER) {
++      LOG(("ReadAllOptionsLocked: InternetQueryOptionW failed"));
++      return NS_ERROR_FAILURE;
++    }
++    options[0].dwOption = INTERNET_PER_CONN_FLAGS;
++    size = sizeof(INTERNET_PER_CONN_OPTION_LISTW);
++    MOZ_SEH_TRY {
++      if (!InternetQueryOptionW(nullptr, INTERNET_OPTION_PER_CONNECTION_OPTION,
++                                &list, &size)) {
++        return NS_ERROR_FAILURE;
++      }
++    } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
++      return NS_ERROR_FAILURE;
++    }
+     }
+   }
+ 

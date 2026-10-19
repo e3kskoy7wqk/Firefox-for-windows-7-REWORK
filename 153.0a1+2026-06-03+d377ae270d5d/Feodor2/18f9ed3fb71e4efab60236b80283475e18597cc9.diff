@@ -1,0 +1,391 @@
+diff --git a/js/src/jit/ProcessExecutableMemory.cpp b/js/src/jit/ProcessExecutableMemory.cpp
+index cea7d764ca9627554514a12dd74101651f166188..de2516f0a0abb260f2d32489ae9821988fb1cf67 100644
+--- a/js/src/jit/ProcessExecutableMemory.cpp
++++ b/js/src/jit/ProcessExecutableMemory.cpp
+@@ -189,8 +189,10 @@ static DWORD ExceptionHandler(PEXCEPTION_RECORD exceptionRecord,
+   return ExceptionContinueSearch;
+ }
+ 
++PRUNTIME_FUNCTION RuntimeFunctionCallback(DWORD64 ControlPc, PVOID Context);
++
+ // Required for enabling Stackwalking on windows using external tools.
+-extern "C" NTSYSAPI DWORD NTAPI RtlAddGrowableFunctionTable(
++NTSYSAPI DWORD NTAPI RtlAddGrowableFunctionTable(
+     PVOID* DynamicTable, PRUNTIME_FUNCTION FunctionTable, DWORD EntryCount,
+     DWORD MaximumEntryCount, ULONG_PTR RangeBase, ULONG_PTR RangeEnd);
+ 
+@@ -273,28 +275,47 @@ static bool RegisterExecutableMemory(void* p, size_t bytes, size_t pageSize) {
+   r->thunk[11] = 0xe0;
+ #    endif
+ 
+-  // RtlAddGrowableFunctionTable will write into the region. We must therefore
+-  // only write-protect is after this has been called.
++  BOOLEAN result = false;
+ 
+-  // XXX NB: The profiler believes this function is only called from the main
+-  // thread. If that ever becomes untrue, the profiler must be updated
+-  // immediately.
+-  {
++  // RtlAddGrowableFunctionTable is only available in Windows 8.1 and higher.
++  // This can be simplified if our compile target changes.
++  HMODULE ntdll_module =
++      LoadLibraryExW(L"ntdll.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
++
++  static decltype(&::RtlAddGrowableFunctionTable) addGrowableFunctionTable =
++      reinterpret_cast<decltype(&::RtlAddGrowableFunctionTable)>(
++          ::GetProcAddress(ntdll_module, "RtlAddGrowableFunctionTable"));
++
++  // AddGrowableFunctionTable will write into the region. We must therefore
++  // only write-protect is after this has been called.
++  if (addGrowableFunctionTable) {
++    // XXX NB: The profiler believes this function is only called from the main
++    // thread. If that ever becomes untrue, the profiler must be updated
++    // immediately.
+     AutoSuppressStackWalking suppress;
+-    DWORD result = RtlAddGrowableFunctionTable(
+-        &r->dynamicTable, &r->runtimeFunction, 1, 1, (ULONG_PTR)p,
+-        (ULONG_PTR)p + bytes - pageSize);
+-    if (result != S_OK) {
++    result = addGrowableFunctionTable(&r->dynamicTable, &r->runtimeFunction, 1,
++                                      1, (ULONG_PTR)p,
++                                      (ULONG_PTR)p + bytes - pageSize) == S_OK;
++  } else {
++    if (!sJitExceptionHandler) {
++      // No point installing this.
+       return false;
+     }
++    // XXX NB: The profiler believes this function is only called from the main
++    // thread. If that ever becomes untrue, the profiler must be updated
++    // immediately.
++    AutoSuppressStackWalking suppress;
++    result =
++        RtlInstallFunctionTableCallback((DWORD64)p | 0x3, (DWORD64)p, bytes,
++                                        RuntimeFunctionCallback, NULL, NULL);
+   }
+ 
+   DWORD oldProtect;
+-  if (!VirtualProtect(p, pageSize, PAGE_EXECUTE_READ, &oldProtect)) {
++  if (result && !VirtualProtect(p, pageSize, PAGE_EXECUTE_READ, &oldProtect)) {
+     MOZ_CRASH();
+   }
+ 
+-  return true;
++  return result;
+ }
+ 
+ static void UnregisterExecutableMemory(void* p, size_t bytes, size_t pageSize) {
+@@ -992,6 +1013,22 @@ bool js::jit::ReprotectRegion(void* start, size_t size,
+   return true;
+ }
+ 
++#if defined(XP_WIN) && defined(NEED_JIT_UNWIND_HANDLING)
++static PRUNTIME_FUNCTION RuntimeFunctionCallback(DWORD64 ControlPc,
++                                                 PVOID Context) {
++  MOZ_ASSERT(sJitExceptionHandler);
++
++  // RegisterExecutableMemory already set up the runtime function in the
++  // exception-data page preceding the allocation.
++  uint8_t* p = execMemory.base();
++  if (!p) {
++    return nullptr;
++  }
++  return (PRUNTIME_FUNCTION)(p - gc::SystemPageSize() +
++                             offsetof(ExceptionHandlerRecord, runtimeFunction));
++}
++#endif
++
+ #if defined(JS_USE_APPLE_FAST_WX) && !defined(XP_IOS)
+ void js::jit::AutoMarkJitCodeWritableForThread::markExecutable(
+     bool executable) {
+diff --git a/js/src/jit/ProcessExecutableMemory.h b/js/src/jit/ProcessExecutableMemory.h
+index 4a08d4a6238f6faaccd725ce2f6f6ffe1156c5d1..7e5757d96478c5778884a0b73d1efeba2be811b7 100644
+--- a/js/src/jit/ProcessExecutableMemory.h
++++ b/js/src/jit/ProcessExecutableMemory.h
+@@ -20,9 +20,9 @@ namespace jit {
+ static const size_t MaxCodeBytesPerProcess = 140 * 1024 * 1024;
+ #else
+ // This is the largest number which satisfies various alignment static
+-// asserts that is <= INT32_MAX. If we ever want to increase this, we need to
+-// ensure RtlAddGrowableFunctionTable does the right thing because
+-// RUNTIME_FUNCTION::EndAddress is a (32-bit) DWORD.
++// asserts that is <= INT32_MAX. The INT32_MAX limit is required for making a
++// single call to RtlInstallFunctionTableCallback(). (This limit could be
++// relaxed in the future by making multiple calls.)
+ static const size_t MaxCodeBytesPerProcess = 2044 * 1024 * 1024;
+ #endif
+ 
+diff --git a/js/src/threading/moz.build b/js/src/threading/moz.build
+index 3e8713e4a07020f997d46c8b48275d58f885b6e0..2f605c0fb0ff0d80689ac72b3cb11946d8f3f6eb 100644
+--- a/js/src/threading/moz.build
++++ b/js/src/threading/moz.build
+@@ -20,6 +20,7 @@
+ if CONFIG["OS_ARCH"] == "WINNT":
+     OS_LIBS += [
+         "advapi32",
++        "winmm",
+     ]
+     UNIFIED_SOURCES += [
+         "windows/CpuCount.cpp",
+diff --git a/js/src/vm/Initialization.cpp b/js/src/vm/Initialization.cpp
+index 32f135baac1aaf648ccc1c749e87167c54fd7213..8fa7ab4d979333b37da14b20a600ce309ac0cb49 100644
+--- a/js/src/vm/Initialization.cpp
++++ b/js/src/vm/Initialization.cpp
+@@ -127,6 +127,8 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
+   install_rust_hooks();
+ #endif
+ 
++  js::PRMJ_NowInit();
++
+   if (frontendOnly == FrontendOnly::No) {
+     // The first invocation of `ProcessCreation` creates a temporary thread
+     // and crashes if that fails, i.e. because we're out of memory. To prevent
+@@ -269,6 +271,17 @@ static void ShutdownImpl(JS::detail::FrontendOnly frontendOnly) {
+ 
+   js::wasm::ShutDown();
+ 
++  // The only difficult-to-address reason for the restriction that you can't
++  // call JS_Init/stuff/JS_ShutDown multiple times is the Windows PRMJ
++  // NowInit initialization code, which uses PR_CallOnce to initialize the
++  // PRMJ_Now subsystem.  (For reinitialization to be permitted, we'd need to
++  // "reset" the called-once status -- doable, but more trouble than it's
++  // worth now.)  Initializing that subsystem from JS_Init eliminates the
++  // problem, but initialization can take a comparatively long time (15ms or
++  // so), so we really don't want to do it in JS_Init, and we really do want
++  // to do it only when PRMJ_Now is eventually called.
++  js::PRMJ_NowShutdown();
++
+ #if JS_HAS_INTL_API
+   mozilla::intl::ICU4CLibrary::Cleanup();
+ #endif  // JS_HAS_INTL_API
+diff --git a/js/src/vm/Time.cpp b/js/src/vm/Time.cpp
+index 39d5bdbf4bc487546fcffac899afaa27d9d884da..3f80e914ac5bd8a12309cd6d17275ed6c7f2917d 100644
+--- a/js/src/vm/Time.cpp
++++ b/js/src/vm/Time.cpp
+@@ -6,6 +6,9 @@
+ 
+ #include "vm/Time.h"
+ 
++#include "mozilla/DebugOnly.h"
++#include "mozilla/MathAlgorithms.h"
++
+ #ifdef SOLARIS
+ #  define _REENTRANT 1
+ #endif
+@@ -16,8 +19,9 @@
+ 
+ #ifdef XP_WIN
+ #  include "util/WindowsWrapper.h"
+-#  include <crtdbg.h> /* for _CrtSetReportMode */
+-#  include <stdlib.h> /* for _set_invalid_parameter_handler */
++#  include <crtdbg.h>   /* for _CrtSetReportMode */
++#  include <mmsystem.h> /* for timeBegin/EndPeriod */
++#  include <stdlib.h>   /* for _set_invalid_parameter_handler */
+ #endif
+ 
+ #if defined(XP_UNIX)
+@@ -35,6 +39,8 @@
+ 
+ #elif defined(XP_WIN)
+ 
++using mozilla::DebugOnly;
++
+ // Returns the number of microseconds since the Unix epoch.
+ static int64_t FileTimeToUnixMicroseconds(const FILETIME& ft) {
+   // Get the time in 100ns intervals.
+@@ -49,10 +55,167 @@ static int64_t FileTimeToUnixMicroseconds(const FILETIME& ft) {
+   return t / 10;
+ }
+ 
+-int64_t js::PRMJ_Now() {
+-  FILETIME ft;
+-  GetSystemTimePreciseAsFileTime(&ft);
+-  return FileTimeToUnixMicroseconds(ft);
++struct CalibrationData {
++  double freq;         /* The performance counter frequency */
++  double offset;       /* The low res 'epoch' */
++  double timer_offset; /* The high res 'epoch' */
++
++  bool calibrated;
++
++  CRITICAL_SECTION data_lock;
++};
++
++static CalibrationData calibration = {0};
++
++static void NowCalibrate() {
++  MOZ_ASSERT(calibration.freq > 0);
++
++  // By wrapping a timeBegin/EndPeriod pair of calls around this loop,
++  // the loop seems to take much less time (1 ms vs 15ms) on Vista.
++  timeBeginPeriod(1);
++  FILETIME ft, ftStart;
++  GetSystemTimeAsFileTime(&ftStart);
++  do {
++    GetSystemTimeAsFileTime(&ft);
++  } while (memcmp(&ftStart, &ft, sizeof(ft)) == 0);
++  timeEndPeriod(1);
++
++  LARGE_INTEGER now;
++  QueryPerformanceCounter(&now);
++
++  calibration.offset = FileTimeToUnixMicroseconds(ft);
++  calibration.timer_offset = double(now.QuadPart);
++  calibration.calibrated = true;
++}
++
++static const unsigned DataLockSpinCount = 4096;
++
++static void(WINAPI* pGetSystemTimePreciseAsFileTime)(LPFILETIME) = nullptr;
++
++void js::PRMJ_NowInit() {
++  memset(&calibration, 0, sizeof(calibration));
++
++  // According to the documentation, QueryPerformanceFrequency will never
++  // return false or return a non-zero frequency on systems that run
++  // Windows XP or later. Also, the frequency is fixed so we only have to
++  // query it once.
++  LARGE_INTEGER liFreq;
++  DebugOnly<BOOL> res = QueryPerformanceFrequency(&liFreq);
++  MOZ_ASSERT(res);
++  calibration.freq = double(liFreq.QuadPart);
++  MOZ_ASSERT(calibration.freq > 0.0);
++
++  InitializeCriticalSectionAndSpinCount(&calibration.data_lock,
++                                        DataLockSpinCount);
++
++  // Windows 8 has a new API function we can use.
++  if (HMODULE h = GetModuleHandleW(L"kernel32.dll")) {
++    pGetSystemTimePreciseAsFileTime = (void(WINAPI*)(LPFILETIME))GetProcAddress(
++        h, "GetSystemTimePreciseAsFileTime");
++  }
++}
++
++void js::PRMJ_NowShutdown() { DeleteCriticalSection(&calibration.data_lock); }
++
++#  define MUTEX_LOCK(m) EnterCriticalSection(m)
++#  define MUTEX_UNLOCK(m) LeaveCriticalSection(m)
++#  define MUTEX_SETSPINCOUNT(m, c) SetCriticalSectionSpinCount((m), (c))
++
++// Please see bug 363258 for why the win32 timing code is so complex.
++int64_t js::PRMJ_Now() {
++  if (pGetSystemTimePreciseAsFileTime) {
++    // Windows 8 has a new API function that does all the work.
++    FILETIME ft;
++    pGetSystemTimePreciseAsFileTime(&ft);
++    return int64_t(FileTimeToUnixMicroseconds(ft));
++  }
++
++  bool calibrated = false;
++  bool needsCalibration = !calibration.calibrated;
++  double cachedOffset = 0.0;
++  while (true) {
++    if (needsCalibration) {
++      MUTEX_LOCK(&calibration.data_lock);
++
++      // Recalibrate only if no one else did before us.
++      if (calibration.offset == cachedOffset) {
++        // Since calibration can take a while, make any other
++        // threads immediately wait.
++        MUTEX_SETSPINCOUNT(&calibration.data_lock, 0);
++
++        NowCalibrate();
++
++        calibrated = true;
++
++        // Restore spin count.
++        MUTEX_SETSPINCOUNT(&calibration.data_lock, DataLockSpinCount);
++      }
++
++      MUTEX_UNLOCK(&calibration.data_lock);
++    }
++
++    // Calculate a low resolution time.
++    FILETIME ft;
++    GetSystemTimeAsFileTime(&ft);
++    double lowresTime = FileTimeToUnixMicroseconds(ft);
++
++    // Grab high resolution time.
++    LARGE_INTEGER now;
++    QueryPerformanceCounter(&now);
++    double highresTimerValue = double(now.QuadPart);
++
++    MUTEX_LOCK(&calibration.data_lock);
++    double highresTime = calibration.offset +
++                         PRMJ_USEC_PER_SEC *
++                             (highresTimerValue - calibration.timer_offset) /
++                             calibration.freq;
++    cachedOffset = calibration.offset;
++    MUTEX_UNLOCK(&calibration.data_lock);
++
++    // Assume the NT kernel ticks every 15.6 ms. Unfortunately there's no
++    // good way to determine this (NtQueryTimerResolution is an undocumented
++    // API), but 15.6 ms seems to be the max possible value. Hardcoding 15.6
++    // means we'll recalibrate if the highres and lowres timers diverge by
++    // more than 30 ms.
++    static const double KernelTickInMicroseconds = 15625.25;
++
++    // Check for clock skew.
++    double diff = lowresTime - highresTime;
++
++    // For some reason that I have not determined, the skew can be
++    // up to twice a kernel tick. This does not seem to happen by
++    // itself, but I have only seen it triggered by another program
++    // doing some kind of file I/O. The symptoms are a negative diff
++    // followed by an equally large positive diff.
++    if (mozilla::Abs(diff) <= 2 * KernelTickInMicroseconds) {
++      // No detectable clock skew.
++      return int64_t(highresTime);
++    }
++
++    if (calibrated) {
++      // If we already calibrated once this instance, and the
++      // clock is still skewed, then either the processor(s) are
++      // wildly changing clockspeed or the system is so busy that
++      // we get switched out for long periods of time. In either
++      // case, it would be infeasible to make use of high
++      // resolution results for anything, so let's resort to old
++      // behavior for this call. It's possible that in the
++      // future, the user will want the high resolution timer, so
++      // we don't disable it entirely.
++      return int64_t(lowresTime);
++    }
++
++    // It is possible that when we recalibrate, we will return a
++    // value less than what we have returned before; this is
++    // unavoidable. We cannot tell the different between a
++    // faulty QueryPerformanceCounter implementation and user
++    // changes to the operating system time. Since we must
++    // respect user changes to the operating system time, we
++    // cannot maintain the invariant that Date.now() never
++    // decreases; the old implementation has this behavior as
++    // well.
++    needsCalibration = true;
++  }
+ }
+ #endif
+ 
+diff --git a/js/src/vm/Time.h b/js/src/vm/Time.h
+index 488d4284058bf34a47f0cb6056d73a51faf77e29..2ddc46e488c597d35ea59afc0a5278a55893d8a7 100644
+--- a/js/src/vm/Time.h
++++ b/js/src/vm/Time.h
+@@ -38,6 +38,20 @@ struct PRMJTime {
+ /* Return the current local time in micro-seconds */
+ extern int64_t PRMJ_Now();
+ 
++/* Initialize the resources associated with PRMJ_Now. */
++#if defined(XP_WIN)
++extern void PRMJ_NowInit();
++#else
++inline void PRMJ_NowInit() {}
++#endif
++
++/* Release the resources associated with PRMJ_Now; don't call PRMJ_Now again */
++#ifdef XP_WIN
++extern void PRMJ_NowShutdown();
++#else
++inline void PRMJ_NowShutdown() {}
++#endif
++
+ #if !JS_HAS_INTL_API
+ /* Format a time value into a buffer. Same semantics as strftime() */
+ extern size_t PRMJ_FormatTime(char* buf, size_t buflen, const char* fmt,

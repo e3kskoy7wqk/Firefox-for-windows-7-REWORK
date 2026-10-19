@@ -1,0 +1,68 @@
+diff --git a/toolkit/profile/ProfileUnlockerWin.cpp b/toolkit/profile/ProfileUnlockerWin.cpp
+index d7ab5e0a307f..681b27c5ebb2 100644
+--- a/toolkit/profile/ProfileUnlockerWin.cpp
++++ b/toolkit/profile/ProfileUnlockerWin.cpp
+@@ -53,6 +53,7 @@ ProfileUnlockerWin::ProfileUnlockerWin(const nsAString& aFileName)
+       mRmRegisterResources(nullptr),
+       mRmGetList(nullptr),
+       mRmEndSession(nullptr),
++      mQueryFullProcessImageName(nullptr),
+       mFileName(aFileName) {}
+ 
+ ProfileUnlockerWin::~ProfileUnlockerWin() {}
+@@ -90,6 +91,13 @@ nsresult ProfileUnlockerWin::Init() {
+     return NS_ERROR_UNEXPECTED;
+   }
+ 
++  mQueryFullProcessImageName =
++      reinterpret_cast<QUERYFULLPROCESSIMAGENAME>(::GetProcAddress(
++          ::GetModuleHandleW(L"kernel32.dll"), "QueryFullProcessImageNameW"));
++  if (!mQueryFullProcessImageName) {
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
+   mRestartMgrModule.steal(module);
+   return NS_OK;
+ }
+@@ -182,8 +190,7 @@ nsresult ProfileUnlockerWin::TryToTerminate(RM_UNIQUE_PROCESS& aProcess) {
+ 
+   WCHAR imageName[MAX_PATH];
+   DWORD imageNameLen = MAX_PATH;
+-  if (!::QueryFullProcessImageNameW(otherProcess, 0, imageName,
+-                                    &imageNameLen)) {
++  if (!mQueryFullProcessImageName(otherProcess, 0, imageName, &imageNameLen)) {
+     // The error codes for this function are not very descriptive. There are
+     // actually two failure cases here: Either the call failed because the
+     // process is no longer running, or it failed for some other reason. We
+@@ -210,8 +217,8 @@ nsresult ProfileUnlockerWin::TryToTerminate(RM_UNIQUE_PROCESS& aProcess) {
+   }
+ 
+   imageNameLen = MAX_PATH;
+-  if (!::QueryFullProcessImageNameW(::GetCurrentProcess(), 0, imageName,
+-                                    &imageNameLen)) {
++  if (!mQueryFullProcessImageName(::GetCurrentProcess(), 0, imageName,
++                                  &imageNameLen)) {
+     return NS_ERROR_FAILURE;
+   }
+   nsCOMPtr<nsIFile> thisProcessImageName;
+diff --git a/toolkit/profile/ProfileUnlockerWin.h b/toolkit/profile/ProfileUnlockerWin.h
+index 6429301394c8..1a3e13029453 100644
+--- a/toolkit/profile/ProfileUnlockerWin.h
++++ b/toolkit/profile/ProfileUnlockerWin.h
+@@ -40,6 +40,8 @@ class ProfileUnlockerWin final : public nsIProfileUnlocker {
+   typedef DWORD(WINAPI* RMGETLIST)(DWORD, UINT*, UINT*, RM_PROCESS_INFO[],
+                                    LPDWORD);
+   typedef DWORD(WINAPI* RMENDSESSION)(DWORD);
++  typedef BOOL(WINAPI* QUERYFULLPROCESSIMAGENAME)(HANDLE, DWORD, LPWSTR,
++                                                  PDWORD);
+ 
+  private:
+   nsModuleHandle mRestartMgrModule;
+@@ -47,6 +49,7 @@ class ProfileUnlockerWin final : public nsIProfileUnlocker {
+   RMREGISTERRESOURCES mRmRegisterResources;
+   RMGETLIST mRmGetList;
+   RMENDSESSION mRmEndSession;
++  QUERYFULLPROCESSIMAGENAME mQueryFullProcessImageName;
+ 
+   nsString mFileName;
+ };

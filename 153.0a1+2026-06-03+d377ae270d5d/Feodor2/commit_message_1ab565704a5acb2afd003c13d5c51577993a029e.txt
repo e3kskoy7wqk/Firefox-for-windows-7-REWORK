@@ -1,0 +1,1 @@
+Bug 1880929 - Drop support for VS 2017. r=firefox-build-system-reviewers,sergesanspaille    2024-02-22 08:53:52    1ab565704a5acb2afd003c13d5c51577993a029e

@@ -1,0 +1,3 @@
+Bug 1974356 - Replace SpecialSystemDirectory usage of `SHGetSpecialFolderPathW` with `SHGetKnownFolderPath`. r=emk    2025-07-01 14:43:06    c2bbb044910a3ce9fe38898f1f269bf743350dfb
+Bug 1974356 - Pre: Remove unnecessary special casing for Windows XP Downloads folder, and modify `GetKnownFolder` to use the same types passed through to WINAPI's `SHGetKnownFolderPath`. r=emk    2025-07-01 14:43:06    7f99c2c786cea9cfffe7dbf1f7e9626c69348c5f
+Bug 1948976 - Retrieve the Windows Documents folder via `SHGetKnownFolderPath` to avoid generating desktop.ini files, and retrieve it directly instead of routing through the Documents virtual folder. r=emk    2025-07-01 14:43:05    4429d47b712aa2cd3fabe62761eed18ba6c9b348

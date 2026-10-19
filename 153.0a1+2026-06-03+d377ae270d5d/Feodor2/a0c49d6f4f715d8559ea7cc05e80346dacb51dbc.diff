@@ -1,0 +1,970 @@
+diff --git a/js/src/gc/LightLock.cpp b/js/src/gc/LightLock.cpp
+index 68f487993d61..a7d88a180f32 100644
+--- a/js/src/gc/LightLock.cpp
++++ b/js/src/gc/LightLock.cpp
+@@ -5,7 +5,6 @@
+ 
+ #include "gc/LightLock.h"
+ 
+-#include "mozilla/Atomics.h"
+ #include "mozilla/TimeStamp.h"
+ 
+ #include <thread>
+@@ -125,10 +124,23 @@ bool js::LightLock::spin(uint32_t& counter) {
+   counter++;
+ 
+   if (counter <= 3) {
+-    mozilla::cpu_pause();
++    pause();
+   } else {
+     std::this_thread::yield();
+   }
+ 
+   return true;
+ }
++
++/* static */
++void js::LightLock::pause() {
++#if defined(_MSC_VER)
++  YieldProcessor();
++#elif defined(__x86_64__) || defined(__i386__)
++  __asm__ __volatile__("pause");
++#elif defined(__aarch64__) || defined(__arm__)
++  __asm__ __volatile__("yield");
++#else
++  __asm__ __volatile__("" ::: "memory");
++#endif
++}
+diff --git a/js/src/gc/LightLock.h b/js/src/gc/LightLock.h
+index 1b702f1c586b..196945014d31 100644
+--- a/js/src/gc/LightLock.h
++++ b/js/src/gc/LightLock.h
+@@ -120,6 +120,8 @@ class LightLock {
+     TSANMemoryReleaseFence(runtime);
+ #endif
+   }
++
++  static void pause();
+ };
+ 
+ class LightLockRuntime {
+diff --git a/layout/style/ServoBindings.toml b/layout/style/ServoBindings.toml
+index 95aa5db64428..4faa5d00f0d8 100644
+--- a/layout/style/ServoBindings.toml
++++ b/layout/style/ServoBindings.toml
+@@ -295,7 +295,6 @@ opaque-types = [
+     "mozilla::TouchManager",
+     "mozilla::UniquePtr",
+     "mozilla::CanvasUsage",
+-    "mozilla::FutexImpl",
+     "std::pair__PCCP",
+     "std::namespace::atomic___base", "std::atomic__My_base",
+     "std::atomic",
+diff --git a/mfbt/Atomics.h b/mfbt/Atomics.h
+index 76b428b094ae..40b557a11bf7 100644
+--- a/mfbt/Atomics.h
++++ b/mfbt/Atomics.h
+@@ -539,12 +539,6 @@ inline void cpu_pause() {
+ #if defined(__i386) || defined(_M_IX86) || defined(__x86_64__) || \
+     defined(_M_X64)
+   _mm_pause();
+-#elif defined(__aarch64__) || defined(__arm__)
+-  // TODO: Rust uses isb rather than yield on aarch64, see
+-  // https://github.com/rust-lang/rust/pull/84725
+-  __asm__ __volatile__("yield");
+-#else
+-  __asm__ __volatile__("" ::: "memory");
+ #endif
+ }
+ 
+diff --git a/mozglue/misc/ConditionVariable_futex.cpp b/mozglue/misc/ConditionVariable_futex.cpp
+deleted file mode 100644
+index feddc4d888ff..000000000000
+--- a/mozglue/misc/ConditionVariable_futex.cpp
++++ /dev/null
+@@ -1,41 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#include "mozilla/PlatformConditionVariable.h"
+-#include "mozilla/PlatformMutex.h"
+-#include "mozilla/Futex.h"
+-
+-// All the memory orderings here are relaxed, because synchronization is done
+-// by unlocking and locking the mutex.
+-
+-mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() = default;
+-mozilla::detail::ConditionVariableImpl::~ConditionVariableImpl() = default;
+-
+-void mozilla::detail::ConditionVariableImpl::notify_one() {
+-  mFutex.mValue.fetch_add(1, std::memory_order_relaxed);
+-  mFutex.wake();
+-}
+-
+-void mozilla::detail::ConditionVariableImpl::notify_all() {
+-  mFutex.mValue.fetch_add(1, std::memory_order_relaxed);
+-  mFutex.wakeAll();
+-}
+-
+-void mozilla::detail::ConditionVariableImpl::wait(MutexImpl& lock) {
+-  wait_for(lock, TimeDuration::Forever());
+-}
+-
+-mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
+-    MutexImpl& lock, const mozilla::TimeDuration& rel_time) {
+-  // Examine the notification counter _before_ we unlock the mutex.
+-  uint32_t value = mFutex.mValue.load(std::memory_order_relaxed);
+-  // Unlock the mutex before going to sleep.
+-  lock.unlock();
+-  // Wait, but only if there hasn't been any notification since we unlocked the
+-  // mutex.
+-  bool r = mFutex.wait(value, &rel_time);
+-  // Lock the mutex again.
+-  lock.lock();
+-  return r ? CVStatus::NoTimeout : CVStatus::Timeout;
+-}
+diff --git a/mozglue/misc/ConditionVariable_noop.cpp b/mozglue/misc/ConditionVariable_noop.cpp
+index cddd39186826..369da79a4680 100644
+--- a/mozglue/misc/ConditionVariable_noop.cpp
++++ b/mozglue/misc/ConditionVariable_noop.cpp
+@@ -4,9 +4,12 @@
+ 
+ #include "mozilla/PlatformConditionVariable.h"
+ #include "mozilla/PlatformMutex.h"
++#include "MutexPlatformData_noop.h"
+ 
+ using mozilla::TimeDuration;
+ 
++struct mozilla::detail::ConditionVariableImpl::PlatformData {};
++
+ mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {}
+ 
+ mozilla::detail::ConditionVariableImpl::~ConditionVariableImpl() {}
+@@ -24,3 +27,10 @@ mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
+     MutexImpl&, const TimeDuration&) {
+   return CVStatus::NoTimeout;
+ }
++
++mozilla::detail::ConditionVariableImpl::PlatformData*
++mozilla::detail::ConditionVariableImpl::platformData() {
++  static_assert(sizeof platformData_ >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/ConditionVariable_posix.cpp b/mozglue/misc/ConditionVariable_posix.cpp
+index 6e25c0227c90..e7cb151b166b 100644
+--- a/mozglue/misc/ConditionVariable_posix.cpp
++++ b/mozglue/misc/ConditionVariable_posix.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "mozilla/PlatformConditionVariable.h"
+ #include "mozilla/PlatformMutex.h"
++#include "MutexPlatformData_posix.h"
+ 
+ using mozilla::CheckedInt;
+ using mozilla::TimeDuration;
+@@ -53,7 +54,13 @@ static void moz_timespecadd(struct timespec* lhs, struct timespec* rhs,
+ }
+ #endif
+ 
++struct mozilla::detail::ConditionVariableImpl::PlatformData {
++  pthread_cond_t ptCond;
++};
++
+ mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {
++  pthread_cond_t* ptCond = &platformData()->ptCond;
++
+ #ifdef CV_USE_CLOCK_API
+   pthread_condattr_t attr;
+   int r0 = pthread_condattr_init(&attr);
+@@ -62,34 +69,37 @@ mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {
+   int r1 = pthread_condattr_setclock(&attr, WhichClock);
+   MOZ_RELEASE_ASSERT(!r1);
+ 
+-  int r2 = pthread_cond_init(&mCond, &attr);
++  int r2 = pthread_cond_init(ptCond, &attr);
+   MOZ_RELEASE_ASSERT(!r2);
+ 
+   int r3 = pthread_condattr_destroy(&attr);
+   MOZ_RELEASE_ASSERT(!r3);
+ #else
+-  int r = pthread_cond_init(&mCond, NULL);
++  int r = pthread_cond_init(ptCond, NULL);
+   MOZ_RELEASE_ASSERT(!r);
+ #endif
+ }
+ 
+ mozilla::detail::ConditionVariableImpl::~ConditionVariableImpl() {
+-  int r = pthread_cond_destroy(&mCond);
++  int r = pthread_cond_destroy(&platformData()->ptCond);
+   MOZ_RELEASE_ASSERT(r == 0);
+ }
+ 
+ void mozilla::detail::ConditionVariableImpl::notify_one() {
+-  int r = pthread_cond_signal(&mCond);
++  int r = pthread_cond_signal(&platformData()->ptCond);
+   MOZ_RELEASE_ASSERT(r == 0);
+ }
+ 
+ void mozilla::detail::ConditionVariableImpl::notify_all() {
+-  int r = pthread_cond_broadcast(&mCond);
++  int r = pthread_cond_broadcast(&platformData()->ptCond);
+   MOZ_RELEASE_ASSERT(r == 0);
+ }
+ 
+ void mozilla::detail::ConditionVariableImpl::wait(MutexImpl& lock) {
+-  int r = pthread_cond_wait(&mCond, &lock.mMutex);
++  pthread_cond_t* ptCond = &platformData()->ptCond;
++  pthread_mutex_t* ptMutex = &lock.platformData()->ptMutex;
++
++  int r = pthread_cond_wait(ptCond, ptMutex);
+   MOZ_RELEASE_ASSERT(r == 0);
+ }
+ 
+@@ -100,6 +110,8 @@ mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
+     return CVStatus::NoTimeout;
+   }
+ 
++  pthread_cond_t* ptCond = &platformData()->ptCond;
++  pthread_mutex_t* ptMutex = &lock.platformData()->ptMutex;
+   int r;
+ 
+   // Clamp to 0, as time_t is unsigned.
+@@ -121,11 +133,11 @@ mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
+   struct timespec abs_ts;
+   moz_timespecadd(&now_ts, &rel_ts, &abs_ts);
+ 
+-  r = pthread_cond_timedwait(&mCond, &lock.mMutex, &abs_ts);
++  r = pthread_cond_timedwait(ptCond, ptMutex, &abs_ts);
+ #else
+   // Our non-clock-supporting platforms, OS X and Android, do support waiting
+   // on a condition variable with a relative timeout.
+-  r = pthread_cond_timedwait_relative_np(&mCond, &lock.mMutex, &rel_ts);
++  r = pthread_cond_timedwait_relative_np(ptCond, ptMutex, &rel_ts);
+ #endif
+ 
+   if (r == 0) {
+@@ -134,3 +146,10 @@ mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
+   MOZ_RELEASE_ASSERT(r == ETIMEDOUT);
+   return CVStatus::Timeout;
+ }
++
++mozilla::detail::ConditionVariableImpl::PlatformData*
++mozilla::detail::ConditionVariableImpl::platformData() {
++  static_assert(sizeof platformData_ >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/ConditionVariable_windows.cpp b/mozglue/misc/ConditionVariable_windows.cpp
+new file mode 100644
+index 000000000000..1aae17c0cd2c
+--- /dev/null
++++ b/mozglue/misc/ConditionVariable_windows.cpp
+@@ -0,0 +1,95 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "mozilla/Assertions.h"
++
++#include <float.h>
++#include <intrin.h>
++#include <windows.h>
++
++#include "mozilla/PlatformConditionVariable.h"
++#include "mozilla/PlatformMutex.h"
++#include "MutexPlatformData_windows.h"
++
++// Some versions of the Windows SDK have a bug where some interlocked functions
++// are not redefined as compiler intrinsics. Fix that for the interlocked
++// functions that are used in this file.
++#if defined(_MSC_VER) && !defined(InterlockedExchangeAdd)
++#  define InterlockedExchangeAdd(addend, value) \
++    _InterlockedExchangeAdd((volatile long*)(addend), (long)(value))
++#endif
++
++#if defined(_MSC_VER) && !defined(InterlockedIncrement)
++#  define InterlockedIncrement(addend) \
++    _InterlockedIncrement((volatile long*)(addend))
++#endif
++
++// Wrapper for native condition variable APIs.
++struct mozilla::detail::ConditionVariableImpl::PlatformData {
++  CONDITION_VARIABLE cv_;
++};
++
++mozilla::detail::ConditionVariableImpl::ConditionVariableImpl() {
++  InitializeConditionVariable(&platformData()->cv_);
++}
++
++void mozilla::detail::ConditionVariableImpl::notify_one() {
++  WakeConditionVariable(&platformData()->cv_);
++}
++
++void mozilla::detail::ConditionVariableImpl::notify_all() {
++  WakeAllConditionVariable(&platformData()->cv_);
++}
++
++void mozilla::detail::ConditionVariableImpl::wait(MutexImpl& lock) {
++  SRWLOCK* srwlock = &lock.platformData()->lock;
++  bool r =
++      SleepConditionVariableSRW(&platformData()->cv_, srwlock, INFINITE, 0);
++  MOZ_RELEASE_ASSERT(r);
++}
++
++mozilla::CVStatus mozilla::detail::ConditionVariableImpl::wait_for(
++    MutexImpl& lock, const mozilla::TimeDuration& rel_time) {
++  if (rel_time == mozilla::TimeDuration::Forever()) {
++    wait(lock);
++    return CVStatus::NoTimeout;
++  }
++
++  SRWLOCK* srwlock = &lock.platformData()->lock;
++
++  // Note that DWORD is unsigned, so we have to be careful to clamp at 0. If
++  // rel_time is Forever, then ToMilliseconds is +inf, which evaluates as
++  // greater than UINT32_MAX, resulting in the correct INFINITE wait. We also
++  // don't want to round sub-millisecond waits to 0, as that wastes energy (see
++  // bug 1437167 comment 6), so we instead round submillisecond waits to 1ms.
++  double msecd = rel_time.ToMilliseconds();
++  DWORD msec;
++  if (msecd < 0.0) {
++    msec = 0;
++  } else if (msecd > UINT32_MAX) {
++    msec = INFINITE;
++  } else {
++    msec = static_cast<DWORD>(msecd);
++    // Round submillisecond waits to 1ms.
++    if (msec == 0 && !rel_time.IsZero()) {
++      msec = 1;
++    }
++  }
++
++  BOOL r = SleepConditionVariableSRW(&platformData()->cv_, srwlock, msec, 0);
++  if (r) return CVStatus::NoTimeout;
++  MOZ_RELEASE_ASSERT(GetLastError() == ERROR_TIMEOUT);
++  return CVStatus::Timeout;
++}
++
++mozilla::detail::ConditionVariableImpl::~ConditionVariableImpl() {
++  // Native condition variables don't require cleanup.
++}
++
++inline mozilla::detail::ConditionVariableImpl::PlatformData*
++mozilla::detail::ConditionVariableImpl::platformData() {
++  static_assert(sizeof platformData_ >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/Futex.h b/mozglue/misc/Futex.h
+deleted file mode 100644
+index 6fce47233a6f..000000000000
+--- a/mozglue/misc/Futex.h
++++ /dev/null
+@@ -1,39 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#ifndef mozilla_Futex_h
+-#define mozilla_Futex_h
+-
+-#include <atomic>
+-#include <cstdint>
+-
+-#include "mozilla/TimeStamp.h"
+-
+-namespace mozilla {
+-
+-template <typename T>
+-struct FutexImpl {
+-  using ValueType = T;
+-
+-  std::atomic<T> mValue{0};
+-
+-  // Waits until the value changes from aExpected, the futex is woken, or
+-  // (when aTimeout is non-null) the timeout elapses. Returns false on timeout,
+-  // true otherwise (including spurious wake-ups!).
+-  [[nodiscard]] bool wait(T aExpected, const TimeDuration* aTimeout = nullptr);
+-  void wake();
+-  void wakeAll();
+-};
+-
+-using Futex = FutexImpl<uint32_t>;
+-#ifdef XP_WIN
+-using SmallFutex = FutexImpl<uint8_t>;
+-#else
+-// On Linux the futex word must be a 32-bit value.
+-using SmallFutex = Futex;
+-#endif
+-
+-}  // namespace mozilla
+-
+-#endif
+diff --git a/mozglue/misc/Futex_linux.cpp b/mozglue/misc/Futex_linux.cpp
+deleted file mode 100644
+index c16a50dc86e7..000000000000
+--- a/mozglue/misc/Futex_linux.cpp
++++ /dev/null
+@@ -1,95 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#include "mozilla/Futex.h"
+-#include "mozilla/Assertions.h"
+-#include "mozilla/CheckedInt.h"
+-
+-#include <errno.h>
+-#include <linux/futex.h>
+-#include <sys/syscall.h>
+-#include <time.h>
+-#include <unistd.h>
+-
+-namespace mozilla {
+-
+-// TODO: Maybe share some of this with ConditionVariable_posix?
+-static const long NanoSecPerSec = 1000000000;
+-static void AddDurationToTimeSpec(struct timespec* ts,
+-                                  const TimeDuration& aDuration) {
+-  MOZ_DIAGNOSTIC_ASSERT(ts->tv_nsec < NanoSecPerSec);
+-  struct timespec duration;
+-  // Clamp to zero as time_t is unsigned.
+-  duration.tv_sec = static_cast<time_t>(std::max(aDuration.ToSeconds(), 0.0));
+-  duration.tv_nsec = static_cast<uint64_t>(
+-                         std::max(aDuration.ToMicroseconds(), 0.0) * 1000.0) %
+-                     NanoSecPerSec;
+-
+-  // Add nanoseconds. This may wrap, but not above 2 billion.
+-  ts->tv_nsec += duration.tv_nsec;
+-
+-  // Add seconds, checking for overflow in the platform specific time_t type.
+-  CheckedInt<time_t> sec = CheckedInt<time_t>(ts->tv_sec) + duration.tv_sec;
+-
+-  // If nanoseconds overflowed, carry the result over into seconds.
+-  if (ts->tv_nsec >= NanoSecPerSec) {
+-    MOZ_DIAGNOSTIC_ASSERT(ts->tv_nsec < 2 * NanoSecPerSec);
+-    ts->tv_nsec -= NanoSecPerSec;
+-    sec += 1;
+-  }
+-
+-  // Extracting the value asserts that there was no overflow.
+-  ts->tv_sec = sec.value();
+-}
+-
+-template <>
+-bool Futex::wait(uint32_t aExpected, const TimeDuration* aTimeout) {
+-  struct timespec ts;
+-  struct timespec* tsp = nullptr;
+-  if (aTimeout && *aTimeout != TimeDuration::Forever()) {
+-    // FUTEX_WAIT_BITSET takes an absolute timeout measured against
+-    // CLOCK_MONOTONIC (unless FUTEX_CLOCK_REALTIME is set, which we don't do).
+-    clock_gettime(CLOCK_MONOTONIC, &ts);
+-    AddDurationToTimeSpec(&ts, *aTimeout);
+-    tsp = &ts;
+-  }
+-  while (true) {
+-    // No need to wait if the value already changed.
+-    if (mValue.load(std::memory_order_relaxed) != aExpected) {
+-      return true;
+-    }
+-
+-    int r = syscall(SYS_futex, &mValue, FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG,
+-                    aExpected, tsp,
+-                    /* unused for WAIT_BITSET */ nullptr,
+-                    /* All bits */ ~0u);
+-    if (r >= 0) {
+-      return true;
+-    }
+-    if (errno == ETIMEDOUT) {
+-      return false;
+-    }
+-    if (errno == EINTR) {
+-      continue;
+-    }
+-    // EAGAIN means the value already differs from aExpected, which is a valid
+-    // (non-timeout) wake-up. Any other error is unexpected; treat it as a
+-    // (spurious) wake-up to avoid hanging.
+-    return true;
+-  }
+-}
+-
+-template <>
+-void Futex::wake() {
+-  syscall(SYS_futex, &mValue, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1);
+-}
+-
+-template <>
+-void Futex::wakeAll() {
+-  syscall(SYS_futex, &mValue, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, INT32_MAX);
+-}
+-
+-template struct FutexImpl<uint32_t>;
+-
+-}  // namespace mozilla
+diff --git a/mozglue/misc/Futex_windows.cpp b/mozglue/misc/Futex_windows.cpp
+deleted file mode 100644
+index 8b0c618052e3..000000000000
+--- a/mozglue/misc/Futex_windows.cpp
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#include "mozilla/Futex.h"
+-
+-#include <windows.h>
+-
+-namespace mozilla {
+-
+-static DWORD ConvertTimeout(const TimeDuration* aTimeout) {
+-  if (!aTimeout || *aTimeout == TimeDuration::Forever()) {
+-    return INFINITE;
+-  }
+-  double msecd = aTimeout->ToMilliseconds();
+-  if (msecd < 0.0) {
+-    return 0;
+-  }
+-  if (msecd > UINT32_MAX) {
+-    return INFINITE;
+-  }
+-  DWORD msec = static_cast<DWORD>(msecd);
+-  // Round sub-millisecond waits up to 1ms (bug 1437167 comment 6).
+-  if (msec == 0 && !aTimeout->IsZero()) {
+-    msec = 1;
+-  }
+-  return msec;
+-}
+-
+-template <typename T>
+-bool FutexImpl<T>::wait(T aExpected, const TimeDuration* aTimeout) {
+-  return ::WaitOnAddress(reinterpret_cast<volatile void*>(&mValue), &aExpected,
+-                         sizeof(aExpected), ConvertTimeout(aTimeout));
+-}
+-
+-template <typename T>
+-void FutexImpl<T>::wake() {
+-  ::WakeByAddressSingle(reinterpret_cast<void*>(&mValue));
+-}
+-
+-template <typename T>
+-void FutexImpl<T>::wakeAll() {
+-  ::WakeByAddressAll(reinterpret_cast<void*>(&mValue));
+-}
+-
+-template struct FutexImpl<uint32_t>;
+-template struct FutexImpl<uint8_t>;
+-
+-}  // namespace mozilla
+diff --git a/mozglue/misc/MutexPlatformData_noop.h b/mozglue/misc/MutexPlatformData_noop.h
+new file mode 100644
+index 000000000000..511b13e04fe3
+--- /dev/null
++++ b/mozglue/misc/MutexPlatformData_noop.h
+@@ -0,0 +1,16 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef MutexPlatformData_noop_h
++#define MutexPlatformData_noop_h
++
++#if !defined(__wasi__)
++#  error This code is for WASI only.
++#endif
++
++#include "mozilla/PlatformMutex.h"
++
++struct mozilla::detail::MutexImpl::PlatformData {};
++
++#endif  // MutexPlatformData_noop_h
+diff --git a/mozglue/misc/MutexPlatformData_posix.h b/mozglue/misc/MutexPlatformData_posix.h
+new file mode 100644
+index 000000000000..287e16a9c60a
+--- /dev/null
++++ b/mozglue/misc/MutexPlatformData_posix.h
+@@ -0,0 +1,16 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef MutexPlatformData_posix_h
++#define MutexPlatformData_posix_h
++
++#include <pthread.h>
++
++#include "mozilla/PlatformMutex.h"
++
++struct mozilla::detail::MutexImpl::PlatformData {
++  pthread_mutex_t ptMutex;
++};
++
++#endif  // MutexPlatformData_posix_h
+diff --git a/mozglue/misc/MutexPlatformData_windows.h b/mozglue/misc/MutexPlatformData_windows.h
+new file mode 100644
+index 000000000000..e4d2824dd134
+--- /dev/null
++++ b/mozglue/misc/MutexPlatformData_windows.h
+@@ -0,0 +1,16 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef MutexPlatformData_windows_h
++#define MutexPlatformData_windows_h
++
++#include <windows.h>
++
++#include "mozilla/PlatformMutex.h"
++
++struct mozilla::detail::MutexImpl::PlatformData {
++  SRWLOCK lock;
++};
++
++#endif  // MutexPlatformData_windows_h
+diff --git a/mozglue/misc/Mutex_futex.cpp b/mozglue/misc/Mutex_futex.cpp
+deleted file mode 100644
+index f1f34e003c0c..000000000000
+--- a/mozglue/misc/Mutex_futex.cpp
++++ /dev/null
+@@ -1,98 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#include "mozilla/PlatformMutex.h"
+-
+-#include <cstdint>
+-
+-#include "mozilla/Attributes.h"
+-#include "mozilla/Futex.h"
+-#include "mozilla/Atomics.h"
+-
+-namespace {
+-
+-using State = mozilla::SmallFutex::ValueType;
+-
+-constexpr State UNLOCKED = 0;
+-constexpr State LOCKED = 1;     // locked, no other threads waiting.
+-constexpr State CONTENDED = 2;  // locked, and other threads waiting.
+-
+-// We only use `load` (and not `swap` or `compare_exchange`) while spinning, to
+-// be easier on the caches.
+-State Spin(mozilla::SmallFutex& aFutex) {
+-  uint32_t spinCount = 100;
+-  while (true) {
+-    State state = aFutex.mValue.load(std::memory_order_relaxed);
+-    // We stop spinning when the mutex is UNLOCKED, but also when it's
+-    // CONTENDED.
+-    if (state != LOCKED || spinCount == 0) {
+-      return state;
+-    }
+-    mozilla::cpu_pause();
+-    --spinCount;
+-  }
+-}
+-
+-MOZ_COLD void LockContended(mozilla::SmallFutex& aFutex) {
+-  // Spin first to speed things up if the lock is released quickly.
+-  State state = Spin(aFutex);
+-
+-  // If it's unlocked now, attempt to take the lock without marking it as
+-  // contended.
+-  if (state == UNLOCKED && aFutex.mValue.compare_exchange_strong(
+-                               state, LOCKED, std::memory_order_acquire,
+-                               std::memory_order_relaxed)) {
+-    return;
+-  }
+-
+-  while (true) {
+-    // Put the lock in contended state. We avoid an unnecessary write if it is
+-    // already CONTENDED, to be friendlier for the caches.
+-    if (state != CONTENDED &&
+-        aFutex.mValue.exchange(CONTENDED, std::memory_order_acquire) ==
+-            UNLOCKED) {
+-      // We changed it from UNLOCKED to CONTENDED, so we just successfully
+-      // locked it.
+-      return;
+-    }
+-
+-    // Wait for the futex to change state, assuming it is still CONTENDED.
+-    (void)aFutex.wait(CONTENDED);
+-
+-    // Spin again after waking up.
+-    state = Spin(aFutex);
+-  }
+-}
+-
+-}  // namespace
+-
+-mozilla::detail::MutexImpl::MutexImpl() = default;
+-mozilla::detail::MutexImpl::~MutexImpl() = default;
+-
+-void mozilla::detail::MutexImpl::lock() {
+-  State expected = UNLOCKED;
+-  if (!mFutex.mValue.compare_exchange_strong(expected, LOCKED,
+-                                             std::memory_order_acquire,
+-                                             std::memory_order_relaxed)) {
+-    LockContended(mFutex);
+-  }
+-}
+-
+-bool mozilla::detail::MutexImpl::tryLock() { return mutexTryLock(); }
+-
+-bool mozilla::detail::MutexImpl::mutexTryLock() {
+-  State expected = UNLOCKED;
+-  return mFutex.mValue.compare_exchange_strong(
+-      expected, LOCKED, std::memory_order_acquire, std::memory_order_relaxed);
+-}
+-
+-void mozilla::detail::MutexImpl::unlock() {
+-  if (mFutex.mValue.exchange(UNLOCKED, std::memory_order_release) ==
+-      CONTENDED) {
+-    // We only wake up one thread. When that thread locks the mutex, it will
+-    // mark the mutex as CONTENDED (see LockContended above), which makes sure
+-    // that any other waiting threads will also be woken up eventually.
+-    mFutex.wake();
+-  }
+-}
+diff --git a/mozglue/misc/Mutex_noop.cpp b/mozglue/misc/Mutex_noop.cpp
+index 8b5e8af8aa65..6728f259adec 100644
+--- a/mozglue/misc/Mutex_noop.cpp
++++ b/mozglue/misc/Mutex_noop.cpp
+@@ -5,10 +5,11 @@
+ #include <errno.h>
+ 
+ #include "mozilla/PlatformMutex.h"
++#include "MutexPlatformData_noop.h"
+ 
+-mozilla::detail::MutexImpl::MutexImpl() = default;
++mozilla::detail::MutexImpl::MutexImpl() {}
+ 
+-mozilla::detail::MutexImpl::~MutexImpl() = default;
++mozilla::detail::MutexImpl::~MutexImpl() {}
+ 
+ inline void mozilla::detail::MutexImpl::mutexLock() {}
+ 
+@@ -19,3 +20,10 @@ bool mozilla::detail::MutexImpl::mutexTryLock() { return true; }
+ void mozilla::detail::MutexImpl::lock() { mutexLock(); }
+ 
+ void mozilla::detail::MutexImpl::unlock() {}
++
++mozilla::detail::MutexImpl::PlatformData*
++mozilla::detail::MutexImpl::platformData() {
++  static_assert(sizeof(platformData_) >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/Mutex_posix.cpp b/mozglue/misc/Mutex_posix.cpp
+index 6ca4ca75cf47..ca93f5a70a56 100644
+--- a/mozglue/misc/Mutex_posix.cpp
++++ b/mozglue/misc/Mutex_posix.cpp
+@@ -13,6 +13,7 @@
+ #endif
+ 
+ #include "mozilla/PlatformMutex.h"
++#include "MutexPlatformData_posix.h"
+ 
+ #define REPORT_PTHREADS_ERROR(result, msg) \
+   {                                        \
+@@ -71,7 +72,7 @@ mozilla::detail::MutexImpl::MutexImpl() {
+ #endif
+ 
+   TRY_CALL_PTHREADS(
+-      pthread_mutex_init(&mMutex, attrp),
++      pthread_mutex_init(&platformData()->ptMutex, attrp),
+       "mozilla::detail::MutexImpl::MutexImpl: pthread_mutex_init failed");
+ 
+ #if defined(ATTR_REQUIRED)
+@@ -83,20 +84,20 @@ mozilla::detail::MutexImpl::MutexImpl() {
+ 
+ mozilla::detail::MutexImpl::~MutexImpl() {
+   TRY_CALL_PTHREADS(
+-      pthread_mutex_destroy(&mMutex),
++      pthread_mutex_destroy(&platformData()->ptMutex),
+       "mozilla::detail::MutexImpl::~MutexImpl: pthread_mutex_destroy failed");
+ }
+ 
+ inline void mozilla::detail::MutexImpl::mutexLock() {
+   TRY_CALL_PTHREADS(
+-      pthread_mutex_lock(&mMutex),
++      pthread_mutex_lock(&platformData()->ptMutex),
+       "mozilla::detail::MutexImpl::mutexLock: pthread_mutex_lock failed");
+ }
+ 
+ bool mozilla::detail::MutexImpl::tryLock() { return mutexTryLock(); }
+ 
+ bool mozilla::detail::MutexImpl::mutexTryLock() {
+-  int result = pthread_mutex_trylock(&mMutex);
++  int result = pthread_mutex_trylock(&platformData()->ptMutex);
+   if (result == 0) {
+     return true;
+   }
+@@ -114,8 +115,15 @@ void mozilla::detail::MutexImpl::lock() { mutexLock(); }
+ 
+ void mozilla::detail::MutexImpl::unlock() {
+   TRY_CALL_PTHREADS(
+-      pthread_mutex_unlock(&mMutex),
++      pthread_mutex_unlock(&platformData()->ptMutex),
+       "mozilla::detail::MutexImpl::unlock: pthread_mutex_unlock failed");
+ }
+ 
+ #undef TRY_CALL_PTHREADS
++
++mozilla::detail::MutexImpl::PlatformData*
++mozilla::detail::MutexImpl::platformData() {
++  static_assert(sizeof(platformData_) >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/Mutex_windows.cpp b/mozglue/misc/Mutex_windows.cpp
+new file mode 100644
+index 000000000000..6ced44246aed
+--- /dev/null
++++ b/mozglue/misc/Mutex_windows.cpp
+@@ -0,0 +1,36 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "mozilla/PlatformMutex.h"
++
++#include <windows.h>
++
++#include "MutexPlatformData_windows.h"
++
++mozilla::detail::MutexImpl::MutexImpl() {
++  InitializeSRWLock(&platformData()->lock);
++}
++
++mozilla::detail::MutexImpl::~MutexImpl() {}
++
++void mozilla::detail::MutexImpl::lock() {
++  AcquireSRWLockExclusive(&platformData()->lock);
++}
++
++bool mozilla::detail::MutexImpl::tryLock() { return mutexTryLock(); }
++
++bool mozilla::detail::MutexImpl::mutexTryLock() {
++  return !!TryAcquireSRWLockExclusive(&platformData()->lock);
++}
++
++void mozilla::detail::MutexImpl::unlock() {
++  ReleaseSRWLockExclusive(&platformData()->lock);
++}
++
++mozilla::detail::MutexImpl::PlatformData*
++mozilla::detail::MutexImpl::platformData() {
++  static_assert(sizeof(platformData_) >= sizeof(PlatformData),
++                "platformData_ is too small");
++  return reinterpret_cast<PlatformData*>(platformData_);
++}
+diff --git a/mozglue/misc/PlatformConditionVariable.h b/mozglue/misc/PlatformConditionVariable.h
+index 3cb363bf37e4..dfcaa3a72920 100644
+--- a/mozglue/misc/PlatformConditionVariable.h
++++ b/mozglue/misc/PlatformConditionVariable.h
+@@ -7,10 +7,7 @@
+ 
+ #include "mozilla/PlatformMutex.h"
+ #include "mozilla/TimeStamp.h"
+-
+-#if defined(XP_WIN)
+-#  include "mozilla/Futex.h"
+-#elif !defined(__wasi__)
++#if !defined(XP_WIN) && !defined(__wasi__)
+ #  include <pthread.h>
+ #endif
+ 
+@@ -22,6 +19,8 @@ namespace detail {
+ 
+ class ConditionVariableImpl {
+  public:
++  struct PlatformData;
++
+   MFBT_API ConditionVariableImpl();
+   MFBT_API ~ConditionVariableImpl();
+ 
+@@ -46,10 +45,12 @@ class ConditionVariableImpl {
+   ConditionVariableImpl(const ConditionVariableImpl&) = delete;
+   ConditionVariableImpl& operator=(const ConditionVariableImpl&) = delete;
+ 
+-#if defined(XP_WIN)
+-  Futex mFutex;
+-#elif !defined(__wasi__)
+-  pthread_cond_t mCond;
++  PlatformData* platformData();
++
++#if !defined(XP_WIN) && !defined(__wasi__)
++  pthread_cond_t platformData_[1];
++#else
++  void* platformData_[4];
+ #endif
+ };
+ 
+diff --git a/mozglue/misc/PlatformMutex.h b/mozglue/misc/PlatformMutex.h
+index 0e4aef7e0127..ba5940369006 100644
+--- a/mozglue/misc/PlatformMutex.h
++++ b/mozglue/misc/PlatformMutex.h
+@@ -7,9 +7,7 @@
+ 
+ #include "mozilla/Types.h"
+ 
+-#if defined(XP_WIN)
+-#  include "mozilla/Futex.h"
+-#elif !defined(__wasi__)
++#if !defined(XP_WIN) && !defined(__wasi__)
+ #  include <pthread.h>
+ #endif
+ 
+@@ -21,6 +19,8 @@ class ConditionVariableImpl;
+ 
+ class MutexImpl {
+  public:
++  struct PlatformData;
++
+   explicit MFBT_API MutexImpl();
+   MFBT_API ~MutexImpl();
+ 
+@@ -41,10 +41,12 @@ class MutexImpl {
+   void mutexLock();
+   bool mutexTryLock();
+ 
+-#if defined(XP_WIN)
+-  SmallFutex mFutex;
+-#elif !defined(__wasi__)
+-  pthread_mutex_t mMutex;
++  PlatformData* platformData();
++
++#if !defined(XP_WIN) && !defined(__wasi__)
++  pthread_mutex_t platformData_[1];
++#else
++  void* platformData_[6];
+ #endif
+ 
+   friend class mozilla::detail::ConditionVariableImpl;
+diff --git a/mozglue/misc/moz.build b/mozglue/misc/moz.build
+index 2099a46a24e0..841e70d5b67e 100644
+--- a/mozglue/misc/moz.build
++++ b/mozglue/misc/moz.build
+@@ -8,7 +8,6 @@ EXPORTS.mozilla += [
+     "AwakeTimeStamp.h",
+     "decimal/Decimal.h",
+     "decimal/DoubleConversion.h",
+-    "Futex.h",
+     "IntegerPrintfMacros.h",
+     "LoggingCore.h",
+     "MmapFaultHandler.h",
+@@ -108,9 +107,8 @@ if CONFIG["OS_ARCH"] == "WINNT":
+ 
+ if CONFIG["OS_ARCH"] == "WINNT":
+     SOURCES += [
+-        "ConditionVariable_futex.cpp",
+-        "Futex_windows.cpp",
+-        "Mutex_futex.cpp",
++        "ConditionVariable_windows.cpp",
++        "Mutex_windows.cpp",
+         "RWLock_windows.cpp",
+     ]
+ # WASI hasn't supported cond vars and mutexes yet so noop implementation is used.

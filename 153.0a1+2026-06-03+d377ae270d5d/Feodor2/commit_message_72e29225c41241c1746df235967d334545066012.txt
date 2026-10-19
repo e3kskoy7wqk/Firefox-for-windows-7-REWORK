@@ -1,0 +1,1 @@
+Bug 1946323 - Remove DeviceManagerDx::mDirectDraw r=gfx-reviewers,lsalzman    2025-02-06 19:07:52    72e29225c41241c1746df235967d334545066012
