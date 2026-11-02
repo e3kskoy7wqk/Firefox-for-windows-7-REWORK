@@ -1,0 +1,13 @@
+diff --git a/browser/app/winlauncher/freestanding/SharedSection.cpp b/browser/app/winlauncher/freestanding/SharedSection.cpp
+index 19b2f94f7447..cb0815cd3e9e 100644
+--- a/browser/app/winlauncher/freestanding/SharedSection.cpp
++++ b/browser/app/winlauncher/freestanding/SharedSection.cpp
+@@ -118,7 +118,7 @@ void SharedSection::Reset(HANDLE aNewSectionObject) {
+   if (sWriteCopyView) {
+     nt::AutoMappedView view(sWriteCopyView);
+     sWriteCopyView = nullptr;
+-    ::RtlRunOnceInitialize(&sEnsureOnce);
++    sEnsureOnce = RTL_RUN_ONCE_INIT;
+   }
+ 
+   if (sSectionHandle != aNewSectionObject) {

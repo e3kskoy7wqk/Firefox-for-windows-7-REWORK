@@ -1,0 +1,1 @@
+Bug 1331170 - Part 2: Remove gfx/thebes checks for Windows 7+. r=jrmuizel    2017-01-10 13:21:40    505e95276b6e29f5e904bcfd1b1c0138c055d4f0

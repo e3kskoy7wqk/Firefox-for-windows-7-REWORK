@@ -1,0 +1,1 @@
+Bug 1637092 - Change WR capture path to point to the home folder r=Bert,webdriver-reviewers,whimboo    2020-05-12 21:41:31    d53cb2d848fd031d89fac26cf4e4f56f0049963b

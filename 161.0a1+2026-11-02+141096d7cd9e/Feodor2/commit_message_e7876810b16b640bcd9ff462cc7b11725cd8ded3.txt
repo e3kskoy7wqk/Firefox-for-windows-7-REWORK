@@ -1,0 +1,1 @@
+Bug 1841425 - Hard code UA string's Windows version as 10.0. r=necko-reviewers,kershaw    2023-07-07 17:40:04    e7876810b16b640bcd9ff462cc7b11725cd8ded3

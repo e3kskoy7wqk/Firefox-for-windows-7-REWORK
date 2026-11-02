@@ -1,0 +1,35 @@
+diff --git a/mozglue/misc/AwakeTimeStamp.cpp b/mozglue/misc/AwakeTimeStamp.cpp
+index ca7d2a75cdf76..a5c8ed4abd6a6 100644
+--- a/mozglue/misc/AwakeTimeStamp.cpp
++++ b/mozglue/misc/AwakeTimeStamp.cpp
+@@ -91,12 +91,7 @@ AwakeTimeStamp AwakeTimeStamp::NowLoRes() {
+   return AwakeTimeStamp(interrupt_time / kHNSperUS);
+ }
+ 
+-AwakeTimeStamp AwakeTimeStamp::Now() {
+-  ULONGLONG interrupt_time;
+-  QueryUnbiasedInterruptTimePrecise(&interrupt_time);
+-
+-  return AwakeTimeStamp(interrupt_time / kHNSperUS);
+-}
++AwakeTimeStamp AwakeTimeStamp::Now() { return NowLoRes(); }
+ 
+ #else  // Linux and other POSIX but not macOS
+ #  include <time.h>
+diff --git a/mozglue/misc/moz.build b/mozglue/misc/moz.build
+index b7a2d88d42389..585a435699a89 100644
+--- a/mozglue/misc/moz.build
++++ b/mozglue/misc/moz.build
+@@ -101,7 +101,11 @@ if CONFIG["OS_ARCH"] == "WINNT":
+         "WindowsUnicode.cpp",
+     ]
+ 
+-    OS_LIBS += ["dbghelp", "oleaut32", "ole32", "mincore"]
++    OS_LIBS += [
++        "dbghelp",
++        "oleaut32",
++        "ole32",
++    ]
+ 
+     if not CONFIG["JS_STANDALONE"]:
+         SOURCES += [

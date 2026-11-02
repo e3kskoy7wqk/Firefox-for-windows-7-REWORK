@@ -1,0 +1,27 @@
+diff --git a/mozglue/misc/RuntimeExceptionModule.cpp b/mozglue/misc/RuntimeExceptionModule.cpp
+index b8a41cd7cf9e..0df1f7666ab1 100644
+--- a/mozglue/misc/RuntimeExceptionModule.cpp
++++ b/mozglue/misc/RuntimeExceptionModule.cpp
+@@ -83,13 +83,9 @@ void RegisterRuntimeExceptionModule() {
+     return;
+   }
+ 
+-  if (FAILED(::WerRegisterRuntimeExceptionModule(
+-          sModulePath,
+-          reinterpret_cast<PVOID>(mozilla::GetGeckoProcessType())))) {
+     // The registration failed null out sModulePath to record this.
+     *sModulePath = L'\0';
+     return;
+-  }
+ #endif  // XP_WIN
+ }
+ 
+@@ -97,8 +93,6 @@ void UnregisterRuntimeExceptionModule() {
+ #ifdef XP_WIN
+   // If sModulePath is set then we have registered the module.
+   if (*sModulePath) {
+-    (void)::WerUnregisterRuntimeExceptionModule(
+-        sModulePath, reinterpret_cast<PVOID>(mozilla::GetGeckoProcessType()));
+     *sModulePath = L'\0';
+   }
+ #endif  // XP_WIN

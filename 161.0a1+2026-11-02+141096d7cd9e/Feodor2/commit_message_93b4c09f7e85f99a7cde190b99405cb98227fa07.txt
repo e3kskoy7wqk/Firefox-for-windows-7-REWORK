@@ -1,0 +1,1 @@
+Bug 1933181 - Stop using nsView for popups. r=layout-reviewers,tnikkel    2025-10-14 20:00:34    93b4c09f7e85f99a7cde190b99405cb98227fa07

@@ -1,0 +1,1 @@
+Bug 1357791 - require mAppAssoc (Vista+) API for extension lookup from nsOSHelperAppService.cpp, r=gijs    2018-02-01 01:00:56    cef4efeddbaeeb8a96a27e6057f9e9a1eda128d4

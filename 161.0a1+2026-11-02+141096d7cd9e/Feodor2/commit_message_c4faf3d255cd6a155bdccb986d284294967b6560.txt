@@ -1,0 +1,1 @@
+Bug 1322646 - Bump subsystem version to 6.01 to block Firefox from running on Windows XP/2003/Vista. r=glandium    2016-12-09 21:32:03    c4faf3d255cd6a155bdccb986d284294967b6560

@@ -1,0 +1,26 @@
+diff --git a/browser/components/shell/WindowsUserChoice.cpp b/browser/components/shell/WindowsUserChoice.cpp
+index 520677e20f5c..c0faa7067f7a 100644
+--- a/browser/components/shell/WindowsUserChoice.cpp
++++ b/browser/components/shell/WindowsUserChoice.cpp
+@@ -448,8 +448,9 @@ bool CanRenameUserChoiceAssociationKey(const wchar_t* aExt) {
+ 
+   nsAutoString tempName =
+       NS_ConvertASCIItoUTF16(nsID::GenerateUUID().ToString().get());
+-  if (::RegRenameKey(assocKey.get(), nullptr, tempName.get()) !=
+-      ERROR_SUCCESS) {
++  UNICODE_STRING keyName;
++  ::RtlInitUnicodeString(&keyName, tempName.get());
++  if (!NT_SUCCESS(::NtRenameKey(assocKey.get(), &keyName))) {
+     return false;
+   }
+ 
+@@ -457,7 +458,8 @@ bool CanRenameUserChoiceAssociationKey(const wchar_t* aExt) {
+   // so return false even though the rename we were probing for worked. With
+   // no key named aExt, a UserChoice write has nothing to open so one-click is
+   // effectively disabled.
+-  return ::RegRenameKey(assocKey.get(), nullptr, aExt) == ERROR_SUCCESS;
++  ::RtlInitUnicodeString(&keyName, aExt);
++  return NT_SUCCESS(::NtRenameKey(assocKey.get(), &keyName));
+ }
+ 
+ UniquePtr<wchar_t[]> FormatProgID(const wchar_t* aProgIDBase,

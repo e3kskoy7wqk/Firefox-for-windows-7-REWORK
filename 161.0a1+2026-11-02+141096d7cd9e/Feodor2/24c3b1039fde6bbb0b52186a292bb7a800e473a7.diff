@@ -1,0 +1,73 @@
+diff --git a/toolkit/xre/nsEmbedFunctions.cpp b/toolkit/xre/nsEmbedFunctions.cpp
+index 22939d60120c02e68fa6792b1428289d89a89ab5..0e6f02d72a5aebd0757d6cfe1280a7c409487a83 100644
+--- a/toolkit/xre/nsEmbedFunctions.cpp
++++ b/toolkit/xre/nsEmbedFunctions.cpp
+@@ -24,6 +24,7 @@
+ #  endif
+ #  include "mozilla/ScopeExit.h"
+ #  include "mozilla/WinDllServices.h"
++#  include "mozilla/RandomNum.h"
+ #  include "WinUtils.h"
+ #endif
+ 
+@@ -485,6 +486,13 @@
+       uiLoopType = MessageLoop::TYPE_UI;
+       break;
+   }
++
++#if defined(XP_WIN)
++  // Call RandomUint64 to pre-load bcryptPrimitives.dll while the current
++  // thread still has an unrestricted impersonation token.
++  LoadLibraryW(L"bcryptprimitives");
++  mozilla::RandomUint64OrDie();
++#endif  // defined(XP_WIN)
+ 
+   {
+     // This is a lexical scope for the MessageLoop below.  We want it
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 68fa9a74fcc0417690c7d4ae97326da0f02b9cbd..2039f9e9a6efafa89f2360bf73f3b356af0eee28 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -117,6 +117,7 @@
+ #  include "cairo/cairo-features.h"
+ #  include "mozilla/PreXULSkeletonUI.h"
+ #  include "mozilla/DllPrefetchExperimentRegistryInfo.h"
++#  include "mozilla/RandomNum.h"
+ #  include "mozilla/WindowsDllBlocklist.h"
+ #  include "mozilla/WindowsMsctfInitialization.h"
+ #  include "mozilla/WindowsOleAut32Initialization.h"
+@@ -6515,6 +6516,11 @@
+   mAppData->sandboxBrokerServices = aConfig.sandboxBrokerServices;
+ #  endif  // defined(MOZ_SANDBOX)
+ 
++  // Call RandomUint64 to pre-load bcryptPrimitives.dll while the current
++  // thread still has an unrestricted impersonation token.
++  LoadLibraryW(L"bcryptprimitives");
++  mozilla::RandomUint64OrDie();
++
+ #  if defined(_M_IX86) || defined(_M_X64)
+   {
+     DebugOnly<bool> result = WindowsMsctfInitialization();
+diff --git a/js/xpconnect/src/XPCShellImpl.cpp b/js/xpconnect/src/XPCShellImpl.cpp
+index 10e9e990da622f9a516014ccef787d04740262be..3d4bf701192e9b4f28a154a110690ecb7968f64e 100644
+--- a/js/xpconnect/src/XPCShellImpl.cpp
++++ b/js/xpconnect/src/XPCShellImpl.cpp
+@@ -62,6 +62,7 @@
+ #  include "mozilla/mscom/ProcessRuntime.h"
+ #  include "mozilla/ScopeExit.h"
+ #  include "mozilla/WinDllServices.h"
++#  include "mozilla/RandomNum.h"
+ 
+ #  include <windows.h>
+ #  if defined(MOZ_SANDBOX)
+@@ -1306,6 +1307,10 @@
+     }
+ #  endif  // defined(MOZ_SANDBOX)
+ 
++    // Call RandomUint64 to pre-load bcryptPrimitives.dll while the current
++    // thread still has an unrestricted impersonation token.
++    LoadLibraryW(L"bcryptprimitives");
++    mozilla::RandomUint64OrDie();
+ #endif  // defined(XP_WIN)
+ 
+ #ifdef MOZ_CODE_COVERAGE

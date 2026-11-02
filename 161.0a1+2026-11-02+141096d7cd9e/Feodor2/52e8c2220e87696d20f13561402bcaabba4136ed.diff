@@ -1,0 +1,22 @@
+diff --git a/third_party/rust/mio/src/sys/windows/named_pipe.rs b/third_party/rust/mio/src/sys/windows/named_pipe.rs
+index adda51f23c26..d2ad4b6d0b33 100644
+--- a/third_party/rust/mio/src/sys/windows/named_pipe.rs
++++ b/third_party/rust/mio/src/sys/windows/named_pipe.rs
+@@ -9,7 +9,7 @@ use std::{fmt, mem, slice};
+     PIPE_UNLIMITED_INSTANCES,
+ };
+ use windows_sys::Win32::System::IO::{
+-    CancelIoEx, GetOverlappedResult, OVERLAPPED, OVERLAPPED_ENTRY,
++    CancelIo, GetOverlappedResult, OVERLAPPED, OVERLAPPED_ENTRY,
+ };
+ 
+ use crate::event::Source;
+@@ -601,7 +601,7 @@ impl Inner {
+ }
+ 
+ unsafe fn cancel(handle: &Handle, overlapped: &Overlapped) -> io::Result<()> {
+-    let ret = CancelIoEx(handle.raw(), overlapped.as_ptr());
++    let ret = CancelIo(handle.raw());
+     // `CancelIoEx` returns 0 on error:
+     // https://docs.microsoft.com/en-us/windows/win32/fileio/cancelioex-func
+     if ret == 0 {

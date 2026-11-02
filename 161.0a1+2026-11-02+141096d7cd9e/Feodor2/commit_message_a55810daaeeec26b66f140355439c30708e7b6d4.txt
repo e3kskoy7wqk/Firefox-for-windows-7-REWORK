@@ -1,0 +1,1 @@
+Bug 1366133 - Part 0: remove support for Windows Vista and earlier versions; r=bagder    2017-05-24 11:06:07    a55810daaeeec26b66f140355439c30708e7b6d4

@@ -1,0 +1,1 @@
+Bug 1458314 - Move the update directory to an installation specific location r=rstrong    2018-10-24 05:41:04    17776ee2d5831a0f84b7f5e92cd683459f2c3d5d

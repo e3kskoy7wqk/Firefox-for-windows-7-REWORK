@@ -1,0 +1,1 @@
+Bug 1836225 - Prevent stack walking deadlock with MOZ_PROFILER_STARTUP=1. r=handyman    2023-09-13 22:32:51    596ecf12e97e8dcda1e4abe6de1d391279ec0edf

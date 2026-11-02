@@ -1,0 +1,1 @@
+Bug 1859432 - Disable uploading software decoded video to ID3D11Texture2D in RDD process on Windows r=media-playback-reviewers,gfx-reviewers,lsalzman,padenot    2023-11-06 09:39:39    136368050c7b640f1185575b994e78a20bc43d85

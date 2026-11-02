@@ -1,0 +1,1 @@
+Bug 1346620 - Resolve symlinks and junction points in path to GMP dir when loading GMP process. r=bobowen, a=gchang    2017-08-01 05:08:35    92024ec486c2c55e2a9a22faec0f2d1a78773cbe

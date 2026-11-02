@@ -1,0 +1,1 @@
+Bug 1573679: Add IsCurrentThread(Explicit|Implicit)MTA utility functions to mscom; r=Jamie    2019-08-27 09:48:08    44f671f66b55f940cc9f9e03479a8364dc3d0a15

@@ -1,0 +1,9 @@
+# Auto-generated file. Do not edit!
+
+with Files("**"):
+    BUG_COMPONENT = ("Core", "Audio/Video: Playback")
+
+DIRS += [
+    'libavutil',
+    'libavcodec'
+]

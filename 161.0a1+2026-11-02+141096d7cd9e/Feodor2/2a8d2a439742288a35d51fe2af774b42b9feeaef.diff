@@ -1,0 +1,516 @@
+diff --git a/browser/base/content/browser.xhtml b/browser/base/content/browser.xhtml
+index 042a88dd68b3477a875f039e314f7cd132938687..85278a6b547258cb224b7e1d897222682cfa6f05 100644
+--- a/browser/base/content/browser.xhtml
++++ b/browser/base/content/browser.xhtml
+@@ -39,6 +39,9 @@
+     href="chrome://browser/content/usercontext/usercontext.css"
+   />
+   <link rel="stylesheet" href="chrome://browser/skin/" />
++#ifdef XP_WIN
++  <link rel="stylesheet" href="chrome://browser/skin/browser-aero.css" />
++#endif
+ 
+   <link rel="stylesheet" href="chrome://browser/skin/controlcenter/panel.css" />
+   <link
+diff --git a/browser/components/uitour/UITourUtils.sys.mjs b/browser/components/uitour/UITourUtils.sys.mjs
+index b390b2b53dcaa3b37e0cbe387b0b3b41eb4f7efd..364372d12bb4f37e879bf2eb3e2c9b48427d1b17 100644
+--- a/browser/components/uitour/UITourUtils.sys.mjs
++++ b/browser/components/uitour/UITourUtils.sys.mjs
+@@ -79,6 +79,16 @@ export let UITourUtils = {
+       return true;
+     }
+ 
+-    return uri && this.isTestingOrigin(uri);
++    // Bug 1557153: To allow Skyline messaging, workaround for UNKNOWN_ACTION
++    // overriding browser/app/permissions default
++    // Bug 1837407: Do a similar thing for support.mozilla.org for the same
++    // underlying issue (bug 1579517).
++    return (
++      uri &&
++      ((uri.schemeIs("https") &&
++        (uri.host == "www.mozilla.org" ||
++          uri.host == "support.mozilla.org")) ||
++        this.isTestingOrigin(uri))
++    );
+   },
+ };
+diff --git a/browser/themes/shared/places/sidebar.css b/browser/themes/shared/places/sidebar.css
+index b954e4bd333fbc1727e1663f28b39a235e683804..45362cac480da6ceb69bf1db1caaa3320056284d 100644
+--- a/browser/themes/shared/places/sidebar.css
++++ b/browser/themes/shared/places/sidebar.css
+@@ -117,7 +117,7 @@
+     cursor: default;
+   }
+ 
+-  @media not (prefers-contrast) {
++  @media (-moz-windows-default-theme) {
+     .sidebar-placesTreechildren::-moz-tree-cell-text(leaf, hover) {
+       text-decoration: none;
+     }
+diff --git a/browser/themes/shared/tabbrowser/content-area.css b/browser/themes/shared/tabbrowser/content-area.css
+index 83e1d5755a5ff029a0d8ffd7394aff5db1b0e077..4d39c8fcdb69093b52fafbe64b7091b68e62b2b7 100644
+--- a/browser/themes/shared/tabbrowser/content-area.css
++++ b/browser/themes/shared/tabbrowser/content-area.css
+@@ -743,7 +743,7 @@ split-view-footer {
+   color: -moz-dialogText;
+   text-shadow: none;
+ 
+-  @media (not (prefers-contrast)) and (not (-moz-platform: linux)) {
++  @media (-moz-windows-default-theme) {
+     background-color: light-dark(#f9f9fa, hsl(240, 1%, 20%));
+     border-color: light-dark(#ddd, hsl(240, 1%, 40%));
+     color: light-dark(#444, rgb(249, 249, 250));
+diff --git a/browser/themes/shared/urlbar/urlbar.tokens.css b/browser/themes/shared/urlbar/urlbar.tokens.css
+index 6a1976424b0039cd5645466315bddf994a23b93e..c683488b688ac1e1ebabb5a25dc669aa8e43a207 100644
+--- a/browser/themes/shared/urlbar/urlbar.tokens.css
++++ b/browser/themes/shared/urlbar/urlbar.tokens.css
+@@ -52,7 +52,7 @@
+     }
+ 
+     @layer tokens-forced-colors-nova {
+-      @media (forced-colors) {
++      @media ((-moz-platform: windows) and (not (-moz-windows-default-theme))) or ((not (-moz-platform: windows)) and (forced-colors)) {
+         --urlbar-box-background-color: var(--button-background-color-ghost);
+         --urlbar-box-background-color-hover: var(--button-background-color-ghost-hover);
+         --urlbar-box-background-color-active: var(--button-background-color-ghost-active);
+diff --git a/browser/themes/shared/webRTC-indicator.css b/browser/themes/shared/webRTC-indicator.css
+index e8e7126ae63bd2615746dbb0d3b1da97158802d7..01f9109ded2473866a07b856cabcc3837d2bffd2 100644
+--- a/browser/themes/shared/webRTC-indicator.css
++++ b/browser/themes/shared/webRTC-indicator.css
+@@ -284,7 +284,7 @@ xul|menu {
+ }
+ 
+ @media (-moz-platform: windows) {
+-  @media (prefers-contrast) {
++  @media (-moz-windows-default-theme: 0) {
+     :root {
+       --indicator-background-color: -moz-Dialog;
+       --indicator-color: -moz-DialogText;
+diff --git a/browser/themes/windows/browser-aero.css b/browser/themes/windows/browser-aero.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..d79689478a35b04aeaf99501c82a11ce77879921
+--- /dev/null
++++ b/browser/themes/windows/browser-aero.css
+@@ -0,0 +1,42 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++@media (-moz-windows-default-theme) {
++  @media (-moz-windows-accent-color-in-titlebar) {
++    :root[sizemode=normal][customtitlebar] #navigator-toolbox {
++      border-top: .5px solid ActiveBorder;
++    }
++  }
++
++  :root[sizemode=normal][customtitlebar]:-moz-window-inactive #navigator-toolbox {
++    border-top-color: InactiveBorder;
++  }
++
++  :root[customtitlebar] .tab-label:-moz-window-inactive {
++    /* Calculated to match the opacity change of Windows Explorer
++       titlebar text change for inactive windows. */
++    opacity: .6;
++  }
++
++  :root[customtitlebar] .tab-secondary-label:-moz-window-inactive {
++    opacity: .6;
++  }
++}
++
++/* See bug 1715990 about why we do this ourselves on HCM */
++@media (prefers-contrast) {
++  :root[customtitlebar]:not([lwtheme]) {
++    background-color: ActiveCaption;
++    color: CaptionText;
++  }
++
++  :root[customtitlebar]:not([lwtheme]):-moz-window-inactive {
++    background-color: InactiveCaption;
++    color: InactiveCaptionText;
++  }
++
++  :root:not([lwtheme]) #appcontent {
++    background-color: -moz-dialog;
++  }
++}
+diff --git a/browser/themes/windows/browser.css b/browser/themes/windows/browser.css
+index 7a7024090ae24be5a32ce42f38c6256cb7d1d3c2..c351b644ee1e11e3b8bd952077ac4dd1089c85dd 100644
+--- a/browser/themes/windows/browser.css
++++ b/browser/themes/windows/browser.css
+@@ -19,7 +19,7 @@
+     background-color: light-dark(var(--color-black-alpha-10), var(--color-white-alpha-20));
+     color: inherit;
+ 
+-    @media (prefers-contrast) {
++    @media not (-moz-windows-default-theme) {
+       background-color: -moz-menuhover;
+       color: -moz-menuhovertext;
+     }
+@@ -140,7 +140,7 @@
+     }
+   }
+ 
+-  @media not (prefers-contrast) {
++  @media (-moz-windows-default-theme) {
+     &:hover {
+       background-color: var(--toolbarbutton-background-color-hover);
+ 
+@@ -162,7 +162,7 @@
+     }
+   }
+ 
+-  @media (prefers-contrast) {
++  @media not (-moz-windows-default-theme) {
+     background-color: Field;
+     color: ButtonText; /* FIXME: shouldn't it be FieldText? */
+ 
+@@ -179,7 +179,7 @@
+    * DealWithWindowsAppearanceHacks */
+   -moz-default-appearance: -moz-window-button-minimize;
+   content: "\e921"; /* ChromeMinimize */
+-  @media (prefers-contrast) {
++  @media not (-moz-windows-default-theme) {
+     content: "\ef2d"; /* ChromeMinimizeContrast */
+   }
+ }
+@@ -187,7 +187,7 @@
+ .titlebar-max {
+   -moz-default-appearance: -moz-window-button-maximize;
+   content: "\e922"; /* ChromeMaximize */
+-  @media (prefers-contrast) {
++  @media not (-moz-windows-default-theme) {
+     content: "\ef2e"; /* ChromeMaximizeContrast */
+   }
+ }
+@@ -195,7 +195,7 @@
+ .titlebar-restore {
+   -moz-default-appearance: -moz-window-button-restore;
+   content: "\e923"; /* ChromeRestore */
+-  @media (prefers-contrast) {
++  @media not (-moz-windows-default-theme) {
+     content: "\ef2f"; /* ChromeRestoreContrast */
+   }
+ }
+@@ -203,7 +203,7 @@
+ .titlebar-close {
+   -moz-default-appearance: -moz-window-button-close;
+   content: "\e8bb"; /* ChromeClose */
+-  @media (prefers-contrast) {
++  @media not (-moz-windows-default-theme) {
+     content: "\ef2c"; /* ChromeCloseContrast */
+   }
+ }
+@@ -237,7 +237,7 @@
+   font-size: 1.15em;
+ }
+ 
+-@media (prefers-contrast) {
++@media not (-moz-windows-default-theme) {
+   :root:not([lwtheme]) {
+     #searchbar:not(:focus-within),
+     .findbar-textbox:not(:focus) {
+@@ -254,6 +254,14 @@
+ 
+ /* Autocomplete */
+ 
++/* Address bar results view */
++
++@media not (-moz-windows-default-theme) {
++  :root:not([lwtheme]) {
++    --urlbar-popup-action-color: LinkText;
++  }
++}
++
+ #PopupAutoComplete > richlistbox > richlistitem[originaltype~="datalist-first"] {
+   border-top: 1px solid ThreeDShadow;
+ }
+@@ -265,8 +273,8 @@
+   padding: 0;
+ }
+ 
+-@media (prefers-contrast) {
+-  /* For high contrast themes. XXX is this needed anymore? */
++@media not (-moz-windows-default-theme) {
++  /* For high contrast themes. */
+   #tabbrowser-tabpanels,
+   :root[privatebrowsingmode="temporary"] #tabbrowser-tabpanels {
+     background-color: -moz-default-background-color;
+diff --git a/browser/themes/windows/downloads/allDownloadsView.css b/browser/themes/windows/downloads/allDownloadsView.css
+index d8609e3cdc55bd8343aa7e9426b1d61b1e3db374..3ee8b2d4ebfcbac67a3b0aa2d39672df62f20451 100644
+--- a/browser/themes/windows/downloads/allDownloadsView.css
++++ b/browser/themes/windows/downloads/allDownloadsView.css
+@@ -6,9 +6,9 @@
+ 
+ /*** List items ***/
+ 
+-@media not (prefers-contrast) {
+-  /*** Highlighted list items ***/
++/*** Highlighted list items ***/
+ 
++@media (-moz-windows-default-theme) {
+   /*
+   -moz-default-appearance: menuitem is almost right, but the hover effect is not
+   transparent and is lighter than desired.
+diff --git a/browser/themes/windows/jar.mn b/browser/themes/windows/jar.mn
+index 7d44c52adf89a1a91e3a351d02f117f6d2dd24eb..2ca0a6ea38af1bac5cbb956403e3ff83318c39b4 100644
+--- a/browser/themes/windows/jar.mn
++++ b/browser/themes/windows/jar.mn
+@@ -6,6 +6,7 @@ browser.jar:
+ % skin browser classic/1.0 %skin/classic/browser/
+ #include ../shared/jar.inc.mn
+   skin/classic/browser/browser.css
++  skin/classic/browser/browser-aero.css
+   skin/classic/browser/contextmenu.css            (../shared/contextmenu.css)
+   skin/classic/browser/monitor-base.png
+   skin/classic/browser/monitor-border.png
+diff --git a/servo/components/style/gecko/media_features.rs b/servo/components/style/gecko/media_features.rs
+index 199216dbc108836d24780c976f21883c336040da..297b31bcfd628b67e18facf2fa73461b2a081767 100644
+--- a/servo/components/style/gecko/media_features.rs
++++ b/servo/components/style/gecko/media_features.rs
+@@ -659,7 +659,7 @@ macro_rules! lnf_int_feature {
+ /// to support new types in these entries and (2) ensuring that either
+ /// nsPresContext::MediaFeatureValuesChanged is called when the value that
+ /// would be returned by the evaluator function could change.
+-pub static MEDIA_FEATURES: [QueryFeatureDescription; 60] = [
++pub static MEDIA_FEATURES: [QueryFeatureDescription; 62] = [
+     feature!(
+         atom!("width"),
+         AllowsRanges::Yes,
+@@ -931,6 +931,8 @@ pub static MEDIA_FEATURES: [QueryFeatureDescription; 60] = [
+         FeatureFlags::CHROME_AND_UA_ONLY,
+     ),
+     lnf_int_feature!(atom!("-moz-menubar-drag"), MenuBarDrag),
++    lnf_int_feature!(atom!("-moz-windows-default-theme"), WindowsDefaultTheme),
++    lnf_int_feature!(atom!("-moz-mac-graphite-theme"), MacGraphiteTheme),
+     lnf_int_feature!(atom!("-moz-mac-big-sur-theme"), MacBigSurTheme),
+     lnf_int_feature!(atom!("-moz-mac-tahoe-theme"), MacTahoeTheme),
+     feature!(
+diff --git a/toolkit/content/xul.css b/toolkit/content/xul.css
+index 689ba62d8474c24aa1728dfe9e6173f4b2e1a9b4..f5e482db1ba2d8eb14cf151d54f84922855b9807 100644
+--- a/toolkit/content/xul.css
++++ b/toolkit/content/xul.css
+@@ -389,9 +389,7 @@ tooltip {
+     appearance: none;
+     border: 1px solid;
+ 
+-    /* TODO(emilio): Probably make InfoText/InfoBackground do the right thing and
+-     * remove this? */
+-    @media not (prefers-contrast) {
++    @media (-moz-windows-default-theme) {
+       background-color: light-dark(#f9f9fb, #2b2a33);
+       color: light-dark(black, white);
+       border-color: light-dark(#67676c, #f9f9fb);
+diff --git a/toolkit/themes/shared/alert.css b/toolkit/themes/shared/alert.css
+index 137a7f0a1e9e3071b5b6e766aec6e64fc7949874..899a7fac3c70260c9c09e6a08b1d6c1afb0a3c6a 100644
+--- a/toolkit/themes/shared/alert.css
++++ b/toolkit/themes/shared/alert.css
+@@ -24,7 +24,7 @@
+     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.59);
+   }
+ 
+-  @media (not (prefers-contrast)) and (prefers-color-scheme: light) {
++  @media (-moz-windows-default-theme) and (prefers-color-scheme: light) {
+     #alertBox {
+       border-color: rgba(107, 107, 107, 0.3);
+       background-color: rgba(255, 255, 255, 0.9);
+diff --git a/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs b/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
+index f6bf67342b23f78912b91bb4a2ea07a8ebf3f0fd..4175cc39e95c3af0b947a60a0d9f217506f4d46c 100644
+--- a/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
++++ b/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
+@@ -37,7 +37,11 @@ export const getTokenCSS = ({
+ 
+   if (forcedColors.length) {
+     sharedLayers += `\n\n  @layer tokens-forced-colors${overrideIdentifier ? `-${overrideIdentifier}` : ""} {
+-    @media (forced-colors) {
++    @media ${
++      componentName === "urlbar" && overrideIdentifier === "nova"
++        ? "((-moz-platform: windows) and (not (-moz-windows-default-theme))) or ((not (-moz-platform: windows)) and (forced-colors))"
++        : "(forced-colors)"
++    } {
+       ${forcedColors.join("\n      ")}
+     }
+   }
+diff --git a/toolkit/themes/shared/media/videocontrols.css b/toolkit/themes/shared/media/videocontrols.css
+index eff7017062a46c1b205482a8857e0d7e8cea1c8e..e79257897c78a39558667dd27a1c50f4a24663f6 100644
+--- a/toolkit/themes/shared/media/videocontrols.css
++++ b/toolkit/themes/shared/media/videocontrols.css
+@@ -567,7 +567,7 @@
+   display: inline;
+ }
+ 
+-@media (-moz-platform: windows) and (prefers-contrast) {
++@media (-moz-platform: windows) and (-moz-windows-default-theme: 0) {
+   .controlsSpacer,
+   .clickToPlay {
+     background-color: transparent;
+diff --git a/toolkit/themes/shared/toolbarbutton.css b/toolkit/themes/shared/toolbarbutton.css
+index 7b52af7ffd23e95c334fa8f37d65c70197643022..6cd069647d5491e57821219054cd9cb9ddc478f7 100644
+--- a/toolkit/themes/shared/toolbarbutton.css
++++ b/toolkit/themes/shared/toolbarbutton.css
+@@ -14,6 +14,22 @@ toolbarbutton {
+     outline: auto;
+   }
+ 
++  @media (-moz-windows-default-theme) {
++    :root[lwtheme-image] & {
++      text-shadow: none;
++    }
++
++    :root[lwtheme-image] &:not([disabled]) {
++      text-shadow: inherit;
++    }
++  }
++
++  @media (-moz-windows-default-theme: 0) {
++    :root[lwtheme-image] &:not([disabled]) {
++      text-shadow: inherit;
++    }
++  }
++
+   @media not (-moz-platform: macos) {
+     &:where(:hover) {
+       color: -moz-buttonhovertext;
+diff --git a/toolkit/themes/windows/global/richlistbox.css b/toolkit/themes/windows/global/richlistbox.css
+index 421a71fa4907434b21f95175cae1c1c2952401c1..eb9ec42fc87ced07b94641e1837f34b7f4c8af99 100644
+--- a/toolkit/themes/windows/global/richlistbox.css
++++ b/toolkit/themes/windows/global/richlistbox.css
+@@ -58,7 +58,7 @@ richlistbox.theme-listbox > richlistitem > label {
+   white-space: nowrap;
+ }
+ 
+-@media not (prefers-contrast) {
++@media (-moz-windows-default-theme) {
+   richlistbox.theme-listbox > richlistitem {
+     --listitem-selectedTextColor: rgb(0, 0, 0);
+     --listitem-selectedColor: rgb(217, 217, 217);
+diff --git a/widget/LookAndFeel.h b/widget/LookAndFeel.h
+index ae911763ed21ba7293e50fcfa471e900230d0260..d389af245f10af606cd3f26f2112f00802084e15 100644
+--- a/widget/LookAndFeel.h
++++ b/widget/LookAndFeel.h
+@@ -107,6 +107,21 @@ class LookAndFeel {
+     /* Whether Windows mica effect is enabled and available */
+     WindowsMica,
+ 
++    /*
++     * A Boolean value to determine whether the Windows default theme is
++     * being used.
++     *
++     * The value of this metric is not used on other platforms. These platforms
++     * should return NS_ERROR_NOT_IMPLEMENTED when queried for this metric.
++     */
++    WindowsDefaultTheme,
++
++    /*
++     * A Boolean value to determine whether the Mac graphite theme is
++     * being used.
++     */
++    MacGraphiteTheme,
++
+     /* Whether Windows mica effect is enabled and available on popups */
+     WindowsMicaPopups,
+ 
+diff --git a/widget/cocoa/nsLookAndFeel.mm b/widget/cocoa/nsLookAndFeel.mm
+index 30d68468c1ca72397c5e4c83f0df0c19aa2cdc4d..38efa7ca060734e977f68d70f2891e374c4910f7 100644
+--- a/widget/cocoa/nsLookAndFeel.mm
++++ b/widget/cocoa/nsLookAndFeel.mm
+@@ -454,6 +454,9 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+     case IntID::TreeScrollLinesMax:
+       aResult = 3;
+       break;
++    case IntID::MacGraphiteTheme:
++      aResult = NSColor.currentControlTint == NSGraphiteControlTint;
++      break;
+     case IntID::MacBigSurTheme:
+       aResult = nsCocoaFeatures::OnBigSurOrLater();
+       break;
+diff --git a/widget/headless/HeadlessLookAndFeelGTK.cpp b/widget/headless/HeadlessLookAndFeelGTK.cpp
+index d6e94f053c22d9ed5df36b1c20cd408c2605bdc5..a1aedbfbe453c0f9f25266a2a57999ab380b85c2 100644
+--- a/widget/headless/HeadlessLookAndFeelGTK.cpp
++++ b/widget/headless/HeadlessLookAndFeelGTK.cpp
+@@ -85,6 +85,7 @@ nsresult HeadlessLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+       aResult = 1;
+       break;
+     case IntID::WindowsAccentColorInTitlebar:
++    case IntID::WindowsDefaultTheme:
+       aResult = 0;
+       res = NS_ERROR_NOT_IMPLEMENTED;
+       break;
+diff --git a/widget/nsXPLookAndFeel.cpp b/widget/nsXPLookAndFeel.cpp
+index 0dfe9551507db956fc1df605951620a88d97b261..4c51cbbfb193b3b04f1333cc9a22631f5168846a 100644
+--- a/widget/nsXPLookAndFeel.cpp
++++ b/widget/nsXPLookAndFeel.cpp
+@@ -114,6 +114,8 @@ static const char sIntPrefs[][45] = {
+     "ui.chosenMenuItemsShouldBlink",
+     "ui.windowsAccentColorInTitlebar",
+     "ui.windowsMica",
++    "ui.windowsDefaultTheme",
++    "ui.macGraphiteTheme",
+     "ui.windowsMicaPopups",
+     "ui.macBigSurTheme",
+     "ui.macTahoeTheme",
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+index b40e7ab71e2d9720d016ab94394a97802b1f7512..c3c1bf097a8ef3b1f40a1f736b8f98f9311ce0f6 100644
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -139,7 +139,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+   BOOL is_enabled;
+ 
+   auto UseNonNativeMenuColors = [&]() -> bool {
+-    return !mHighContrastOn || aScheme == ColorScheme::Dark;
++    return LookAndFeel::GetInt(LookAndFeel::IntID::WindowsDefaultTheme) || aScheme == ColorScheme::Dark;
+   };
+ 
+   auto IsHighlightColor = [&] {
+@@ -590,6 +590,9 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+     case IntID::TreeScrollLinesMax:
+       aResult = 3;
+       break;
++    case IntID::WindowsDefaultTheme:
++      aResult = IsDefaultWindowTheme();
++      break;
+     case IntID::WindowsAccentColorInTitlebar:
+       aResult = mTitlebarColors.mUseAccent;
+       break;
+@@ -1034,6 +1037,7 @@ void nsLookAndFeel::EnsureInit() {
+     return ::SystemParametersInfo(SPI_GETHIGHCONTRAST, 0, &hc, 0) &&
+            hc.dwFlags & HCF_HIGHCONTRASTON;
+   }();
++  mIsDefaultWindowsTheme = !mHighContrastOn;
+ 
+   const bool neededMicaWorkaround = NeedsMicaWorkaround();
+ 
+diff --git a/widget/windows/nsLookAndFeel.h b/widget/windows/nsLookAndFeel.h
+index 9cec3b6d43d9ac99c29238b1165d3c0b418b34ee..a96f10dc817f1946f0467780d25e3d8949704840 100644
+--- a/widget/windows/nsLookAndFeel.h
++++ b/widget/windows/nsLookAndFeel.h
+@@ -90,6 +90,8 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
+ 
+   static HANDLE GetTheme(UXThemeClass);
+ 
++  bool IsDefaultWindowTheme() const { return mIsDefaultWindowsTheme; }
++
+   void NativeInit() final;
+   void RefreshImpl() override;
+   nsresult NativeGetInt(IntID, int32_t& aResult) override;
+@@ -165,6 +167,7 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
+ 
+   nscolor mSysColorTable[SYS_COLOR_COUNT]{0};
+   bool mHighContrastOn = false;
++  bool mIsDefaultWindowsTheme = false;
+ 
+   mozilla::EnumeratedArray<UXThemeClass, UXThemeHandle,
+                            size_t(UXThemeClass::NumClasses)>
+diff --git a/xpcom/ds/StaticAtoms.py b/xpcom/ds/StaticAtoms.py
+index 544de3713a5f0a69c421eb29ddc189adaab34eb3..251f060b6f5ede8f3c0bd8d1569067e726e8d75b 100644
+--- a/xpcom/ds/StaticAtoms.py
++++ b/xpcom/ds/StaticAtoms.py
+@@ -2329,6 +2329,8 @@ STATIC_ATOMS = [
+     Atom("_moz_windows_accent_color_in_titlebar", "-moz-windows-accent-color-in-titlebar"),
+     Atom("_moz_windows_accent_color_in_tabs", "-moz-windows-accent-color-in-tabs"),
+     Atom("_moz_windows_mica", "-moz-windows-mica"),
++    Atom("_moz_windows_default_theme", "-moz-windows-default-theme"),
++    Atom("_moz_mac_graphite_theme", "-moz-mac-graphite-theme"),
+     Atom("_moz_windows_mica_popups", "-moz-windows-mica-popups"),
+     Atom("_moz_mac_big_sur_theme", "-moz-mac-big-sur-theme"),
+     Atom("_moz_mac_tahoe_theme", "-moz-mac-tahoe-theme"),

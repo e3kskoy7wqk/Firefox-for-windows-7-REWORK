@@ -1,0 +1,1 @@
+Bug 1873663 - Remove legacy audio decoders (vorbis, opus, pcm). r=media-playback-reviewers,alwu    2024-01-12 17:18:35    0e19e2057870a057c004202b0fa4d4c4e9b5f78e

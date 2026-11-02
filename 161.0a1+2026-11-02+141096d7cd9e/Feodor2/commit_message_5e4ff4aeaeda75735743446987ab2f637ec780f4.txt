@@ -1,0 +1,1 @@
+Bug 1861605 - Use IDXGIResource1::CreateSharedHandle() instead of IDXGIResource::GetSharedHandle() r=gfx-reviewers,lsalzman    2023-12-19 17:23:21    5e4ff4aeaeda75735743446987ab2f637ec780f4

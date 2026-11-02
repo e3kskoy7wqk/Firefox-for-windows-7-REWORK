@@ -1,0 +1,1 @@
+Bug 1322546 - Cannot compile nrappkit with WINVER=0x0600 or later. r=drno    2016-12-15 15:37:51    3e5c2826ed7b753bf865dd43a36da10fed812ba6

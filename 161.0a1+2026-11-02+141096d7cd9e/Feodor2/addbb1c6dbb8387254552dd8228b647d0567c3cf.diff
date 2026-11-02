@@ -1,0 +1,13 @@
+diff --git a/mozglue/misc/StackWalk.cpp b/mozglue/misc/StackWalk.cpp
+index 647533804f086321fbf4e8ee34142febb68f9400..6e30d13f794a667f4f045a179b54e39b719ae265 100644
+--- a/mozglue/misc/StackWalk.cpp
++++ b/mozglue/misc/StackWalk.cpp
+@@ -205,7 +205,7 @@ bool IsStackWalkingSafe() {
+     return false;
+   }
+ 
+-  if (sStackWalkLocksInitialized) {
++  if (0) {
+     bool isSafe = false;
+     if (::TryAcquireSRWLockShared(sStackWalkLocks[0])) {
+       if (::TryAcquireSRWLockShared(sStackWalkLocks[1])) {

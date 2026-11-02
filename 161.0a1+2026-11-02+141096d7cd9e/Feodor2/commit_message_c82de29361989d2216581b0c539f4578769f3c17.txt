@@ -1,0 +1,1 @@
+Bug 2082760 - Use a high-resolution waitable timer in the Gecko profiler sampler loop on Windows. r=profiler-reviewers,jlink,mstange    2026-10-29 00:44:29    c82de29361989d2216581b0c539f4578769f3c17

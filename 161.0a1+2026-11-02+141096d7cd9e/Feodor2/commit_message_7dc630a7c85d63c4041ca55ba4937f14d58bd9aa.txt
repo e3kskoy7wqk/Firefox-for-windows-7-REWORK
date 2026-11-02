@@ -1,0 +1,1 @@
+Bug 2053812 - Add message targeting for Windows users where one-click default is enabled r=omc-reviewers,nrishel,hanna_a,aborondo,hsohaney    2026-08-06 20:16:47    7dc630a7c85d63c4041ca55ba4937f14d58bd9aa

@@ -1,0 +1,26 @@
+diff --git a/browser/app/winlauncher/LauncherProcessWin.cpp b/browser/app/winlauncher/LauncherProcessWin.cpp
+index 3734e1d3eba2..0ee17a1d6b15 100644
+--- a/browser/app/winlauncher/LauncherProcessWin.cpp
++++ b/browser/app/winlauncher/LauncherProcessWin.cpp
+@@ -416,7 +416,20 @@ static bool IsPackagedAppAutostarted() {
+ #ifndef __MINGW32__
+   UINT32 length = 0;
+ 
+-  LONG rc = GetCurrentPackageFullName(&length, NULL);
++typedef LONG(WINAPI *GetCurrentPackageFullName_t)(UINT32 *packageFullNameLength, PWSTR packageFullName);
++
++static GetCurrentPackageFullName_t WIN_GetCurrentPackageFullName;
++
++    if (!WIN_GetCurrentPackageFullName) {
++        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
++        WIN_GetCurrentPackageFullName = (GetCurrentPackageFullName_t)GetProcAddress(kernel32, "GetCurrentPackageFullName");
++    }
++
++    if (!WIN_GetCurrentPackageFullName) {
++        return false;
++    }
++
++  LONG rc = WIN_GetCurrentPackageFullName(&length, NULL);
+   if (rc == ERROR_INSUFFICIENT_BUFFER) {
+     // There is a package name, so this is a packaged app. Check
+     // to see if it was a startup task.

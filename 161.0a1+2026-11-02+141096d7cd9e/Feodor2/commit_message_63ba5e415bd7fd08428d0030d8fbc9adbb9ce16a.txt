@@ -1,0 +1,1 @@
+Bug 1460210 - Don't use GetProcAddress on Parental Control code. r=dmajor    2018-05-14 09:58:53    63ba5e415bd7fd08428d0030d8fbc9adbb9ce16a

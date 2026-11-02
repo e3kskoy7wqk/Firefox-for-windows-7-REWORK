@@ -1,0 +1,1 @@
+Bug 2004809 - Remove support for clear rects from webrender and gecko r=gfx-reviewers,lsalzman    2025-12-10 07:31:57    299d001bc4ad58fe8c9ddcb4dbe17d79c806d876

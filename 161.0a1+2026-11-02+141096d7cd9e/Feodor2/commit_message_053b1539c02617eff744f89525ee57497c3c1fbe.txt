@@ -1,0 +1,1 @@
+threading: support for GGML_SCHED_PRIO_LOW, update thread info on Windows to avoid throttling (#12995)    2025-06-01 06:39:19    053b1539c02617eff744f89525ee57497c3c1fbe

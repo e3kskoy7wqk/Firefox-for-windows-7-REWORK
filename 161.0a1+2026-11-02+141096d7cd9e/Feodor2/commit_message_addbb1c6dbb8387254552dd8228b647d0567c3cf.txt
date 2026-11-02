@@ -1,0 +1,1 @@
+Bug 1839299 - Use a finer-grained strategy to protect RtlLookupFunctionEntry against deadlocks. r=win-reviewers,rkraesig    2024-10-17 21:47:04    addbb1c6dbb8387254552dd8228b647d0567c3cf

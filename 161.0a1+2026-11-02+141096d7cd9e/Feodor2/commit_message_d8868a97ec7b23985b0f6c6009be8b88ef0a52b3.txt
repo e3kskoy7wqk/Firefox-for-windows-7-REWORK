@@ -1,0 +1,1 @@
+Bug 1944724 - Stub SetThreadInformation on Windows 7 for Widevine in the GMP process. r=bobowen,yjuglaret,media-playback-reviewers,padenot a=pascalc    2025-03-06 23:52:16    d8868a97ec7b23985b0f6c6009be8b88ef0a52b3

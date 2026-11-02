@@ -1,0 +1,1 @@
+Bug 1881627: Implemented HiResWindowsMonitor and used it in TimerThread (on Windows) r=smaug    2026-03-05 02:31:08    01c7c012c986be7f175b8d8ca35687cd2f03f380

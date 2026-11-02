@@ -1,0 +1,80 @@
+diff --git a/toolkit/components/extensions/test/browser/browser_ext_themes_dynamic_updates.js b/toolkit/components/extensions/test/browser/browser_ext_themes_dynamic_updates.js
+index c69b6677348b..1b79771f2090 100644
+--- a/toolkit/components/extensions/test/browser/browser_ext_themes_dynamic_updates.js
++++ b/toolkit/components/extensions/test/browser/browser_ext_themes_dynamic_updates.js
+@@ -63,7 +63,7 @@ function validateTheme(
+     textColor = hexToRGB(textColor);
+   }
+ 
+-  const expectThemeImageInToolbox = isLWT && hasVerticalAlign;
++  const expectThemeImageInToolbox = isLWT ? hasVerticalAlign : novaEnabled;
+ 
+   Assert.equal(
+     expectThemeImageInToolbox,
+@@ -113,8 +113,9 @@ add_task(async function test_dynamic_theme_updates() {
+   });
+ 
+   let rootCS = window.getComputedStyle(window.document.documentElement);
+-  let bodyCS = window.getComputedStyle(window.document.body);
+-
++  let toolboxCS = window.getComputedStyle(
++    window.document.documentElement.querySelector("#navigator-toolbox")
++  );
+   await extension.startup();
+ 
+   // Check with customized background vertical alignment
+@@ -156,7 +157,7 @@ add_task(async function test_dynamic_theme_updates() {
+   });
+ 
+   let { color } = rootCS;
+-  let backgroundImage = bodyCS.backgroundImage;
++  let backgroundImage = toolboxCS.backgroundImage;
+   let backgroundColor = getToolboxBackgroundColor();
+   validateTheme(backgroundImage, backgroundColor, color, false);
+ 
+@@ -187,7 +188,9 @@ add_task(async function test_dynamic_theme_updates_with_data_url() {
+   });
+ 
+   let rootCS = window.getComputedStyle(window.document.documentElement);
+-  let bodyCS = window.getComputedStyle(window.document.body);
++  let toolboxCS = window.getComputedStyle(
++    window.document.documentElement.querySelector("#navigator-toolbox")
++  );
+   await extension.startup();
+ 
+   extension.sendMessage("update-theme", {
+@@ -224,7 +227,7 @@ add_task(async function test_dynamic_theme_updates_with_data_url() {
+   });
+ 
+   let { color } = rootCS;
+-  let backgroundImage = bodyCS.backgroundImage;
++  let backgroundImage = toolboxCS.backgroundImage;
+   let backgroundColor = getToolboxBackgroundColor();
+   validateTheme(backgroundImage, backgroundColor, color, false);
+ 
+diff --git a/toolkit/modules/LightweightThemeConsumer.sys.mjs b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+index 2bef680f1568..9aaa9128d631 100644
+--- a/toolkit/modules/LightweightThemeConsumer.sys.mjs
++++ b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+@@ -439,16 +439,16 @@ LightweightThemeConsumer.prototype = {
+         if (theme.backgroundsArea && theme.backgroundsArea != "auto") {
+           return theme.backgroundsArea == "top_toolbars";
+         }
+-        return (
+-          hasTheme &&
+-          !!theme.backgroundsAlignment?.split(",").some(alignment => {
++        if (hasTheme) {
++          return !!theme.backgroundsAlignment?.split(",").some(alignment => {
+             if (alignment == "center" || alignment == "bottom") {
+               return true;
+             }
+             let [, y] = alignment.split(" ");
+             return y == "center" || y == "bottom";
+-          })
+-        );
++          });
++        }
++        return lazy.BROWSER_NOVA_ENABLED;
+       })()
+     );
+     this._setExperiment(hasTheme, themeData.experiment, theme.experimental);

@@ -1,0 +1,1 @@
+Bug 1363398 - GetShellFolderPath shouldn't fetch folder display names, r=jimm.    2017-05-20 06:35:05    349f1ae99cf3f154705a197a0995655e4cc844b8

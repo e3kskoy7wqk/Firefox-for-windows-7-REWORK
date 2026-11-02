@@ -1,0 +1,17 @@
+diff --git a/tools/profiler/core/platform-win32.cpp b/tools/profiler/core/platform-win32.cpp
+index b73020e018e7..edbc72e17687 100644
+--- a/tools/profiler/core/platform-win32.cpp
++++ b/tools/profiler/core/platform-win32.cpp
+@@ -130,7 +130,11 @@ static RunningTimes GetProcessRunningTimesDiff(
+   RunningTimes newRunningTimes;
+   {
+     AUTO_PROFILER_STATS(GetProcessRunningTimes_QueryProcessCycleTime);
+-    if (ULONG64 cycles; QueryProcessCycleTime(processHandle, &cycles) != 0) {
++typedef BOOL (WINAPI *Func_QueryProcessCycleTime)(HANDLE Process, PULONG64 CycleTime);
++    HMODULE kern = ::GetModuleHandleW(L"kernel32.dll");
++    Func_QueryProcessCycleTime my_QueryProcessCycleTime = (Func_QueryProcessCycleTime)
++        ::GetProcAddress(kern, "QueryProcessCycleTime");
++    if (ULONG64 cycles; my_QueryProcessCycleTime && my_QueryProcessCycleTime(processHandle, &cycles) != 0) {
+       newRunningTimes.SetThreadCPUDelta(cycles);
+     }
+     newRunningTimes.SetPostMeasurementTimeStamp(TimeStamp::Now());

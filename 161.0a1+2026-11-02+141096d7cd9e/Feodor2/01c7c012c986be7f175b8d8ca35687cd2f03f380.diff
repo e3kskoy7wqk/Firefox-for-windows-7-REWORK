@@ -1,0 +1,28 @@
+diff --git a/xpcom/threads/TimerThreadMonitor_windows.cpp b/xpcom/threads/TimerThreadMonitor_windows.cpp
+index 649b002..21de20a 100644
+--- a/xpcom/threads/TimerThreadMonitor_windows.cpp
++++ b/xpcom/threads/TimerThreadMonitor_windows.cpp
+@@ -16,10 +16,8 @@ namespace mozilla {
+ 
+ TimerThreadMonitor::TimerThreadMonitor(const char* aName)
+     : mMutex(aName),
+-      mHiResTimer(CreateWaitableTimerEx(nullptr, nullptr,
+-                                        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+-                                        TIMER_ALL_ACCESS)),
+-      mLoResTimer(CreateWaitableTimerEx(nullptr, nullptr, 0, TIMER_ALL_ACCESS)),
++      mHiResTimer(nullptr),
++      mLoResTimer(CreateWaitableTimerW(nullptr, FALSE, nullptr)),
+       mEvent(CreateEvent(nullptr, FALSE, FALSE, nullptr)) {
+   // Release assertions because we cannot continue without these. mHiResTimer
+   // is allowed to be null; timed waits fall back to mLoResTimer.
+@@ -51,8 +49,8 @@ void TimerThreadMonitor::Wait(TimeDuration aDuration, TimeDuration aTolerance) {
+   // the low-resolution one and its precision.
+   const ULONG timerTolerance = canBePrecise ? 0 : toleranceMs;
+ 
+-  [[maybe_unused]] const BOOL ok = SetWaitableTimerEx(
+-      timer, &dueTime, 0, nullptr, nullptr, nullptr, timerTolerance);
++  [[maybe_unused]] const BOOL ok = SetWaitableTimer(
++      timer, &dueTime, 0, nullptr, nullptr, FALSE);
+   MOZ_RELEASE_ASSERT(ok);
+ 
+   {

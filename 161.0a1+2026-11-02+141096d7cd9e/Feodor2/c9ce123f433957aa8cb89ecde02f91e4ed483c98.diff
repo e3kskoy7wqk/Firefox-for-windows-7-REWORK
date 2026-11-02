@@ -1,0 +1,22 @@
+diff --git a/toolkit/components/geolocation/GeolocationService.cpp b/toolkit/components/geolocation/GeolocationService.cpp
+index 70af7ec..b228d02 100644
+--- a/toolkit/components/geolocation/GeolocationService.cpp
++++ b/toolkit/components/geolocation/GeolocationService.cpp
+@@ -26,6 +26,7 @@
+ 
+ #ifdef XP_WIN
+ #  include "WindowsLocationProvider.h"
++#  include "mozilla/WindowsVersion.h"
+ #endif
+ 
+ // XXX(krosylight): We should stop directly involving child process and
+@@ -109,7 +110,8 @@ nsresult GeolocationService::Init() {
+ #endif
+ 
+ #ifdef XP_WIN
+-  if (Preferences::GetBool("geo.provider.ms-windows-location", false)) {
++  if (Preferences::GetBool("geo.provider.ms-windows-location", false) &&
++      IsWin8OrLater()) {
+     mProvider = new WindowsLocationProvider();
+   }
+ #endif

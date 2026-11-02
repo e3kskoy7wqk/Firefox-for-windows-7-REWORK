@@ -1,0 +1,1 @@
+Win32: Add thread data structure    2026-07-09 13:34:19    0776c890d897c0e0879a879bb0473b3fa9d0ef3b

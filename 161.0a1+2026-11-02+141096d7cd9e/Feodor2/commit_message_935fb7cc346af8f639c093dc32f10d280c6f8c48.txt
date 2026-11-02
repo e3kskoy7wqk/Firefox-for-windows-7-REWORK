@@ -1,0 +1,1 @@
+Bug 1602195: Attempt to always set a default app user model id for the application and make sure that jump lists and recent documents are associated with it. r=mhowell    2020-01-03 00:06:35    935fb7cc346af8f639c093dc32f10d280c6f8c48

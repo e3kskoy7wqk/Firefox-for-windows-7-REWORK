@@ -1,0 +1,1 @@
+Bug 1325368 - Assume Win7 or later when testing Windows version. r=jimm    2017-01-29 15:42:46    1811bcea387d8ea47bb95d57222c7d3ef9594a3c

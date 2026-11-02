@@ -1,0 +1,1 @@
+Bug 1975170 - Don't use an experiments stylesheet for built-in light/dark themes. r=dao,desktop-theme-reviewers    2025-07-02 20:59:52    e6f12787724a761985dd9a4e2b6623f8fe10bae2

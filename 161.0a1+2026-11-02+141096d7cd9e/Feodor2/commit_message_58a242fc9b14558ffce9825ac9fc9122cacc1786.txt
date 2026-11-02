@@ -1,0 +1,1 @@
+Bug 1363172 - add mozilla::RWLock; r=erahm    2017-05-23 09:26:26    58a242fc9b14558ffce9825ac9fc9122cacc1786

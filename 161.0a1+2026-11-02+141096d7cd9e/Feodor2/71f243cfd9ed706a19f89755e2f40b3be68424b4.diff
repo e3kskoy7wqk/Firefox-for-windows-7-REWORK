@@ -1,0 +1,177 @@
+diff --git a/widget/windows/ScreenHelperWin.cpp b/widget/windows/ScreenHelperWin.cpp
+index 0a952f3684c3..945b8d1895a0 100644
+--- a/widget/windows/ScreenHelperWin.cpp
++++ b/widget/windows/ScreenHelperWin.cpp
+@@ -94,7 +94,12 @@ BOOL CALLBACK CollectMonitors(HMONITOR aMon, HDC, LPRECT, LPARAM ioParam) {
+   }
+ 
+   double scale = WinUtils::LogToPhysFactor(aMon);
+-  DesktopToLayoutDeviceScale contentsScaleFactor(1.0);
++  DesktopToLayoutDeviceScale contentsScaleFactor;
++  if (WinUtils::IsPerMonitorDPIAware()) {
++    contentsScaleFactor.scale = 1.0;
++  } else {
++    contentsScaleFactor.scale = scale;
++  }
+   CSSToLayoutDeviceScale defaultCssScaleFactor(scale);
+   LayoutDeviceIntRect rect(info.rcMonitor.left, info.rcMonitor.top,
+                            info.rcMonitor.right - info.rcMonitor.left,
+diff --git a/widget/windows/WinUtils.cpp b/widget/windows/WinUtils.cpp
+index 929c20b8db95..b291197eef10 100644
+--- a/widget/windows/WinUtils.cpp
++++ b/widget/windows/WinUtils.cpp
+@@ -234,12 +234,48 @@ float WinUtils::SystemDPI() {
+ // static
+ double WinUtils::SystemScaleFactor() { return SystemDPI() / 96.0; }
+ 
++typedef HRESULT(WINAPI* GETDPIFORMONITORPROC)(HMONITOR, MONITOR_DPI_TYPE, UINT*,
++                                              UINT*);
++
++typedef HRESULT(WINAPI* GETPROCESSDPIAWARENESSPROC)(HANDLE,
++                                                    PROCESS_DPI_AWARENESS*);
++
++GETDPIFORMONITORPROC sGetDpiForMonitor;
++GETPROCESSDPIAWARENESSPROC sGetProcessDpiAwareness;
++
++static bool SlowIsPerMonitorDPIAware() {
++  // Intentionally leak the handle.
++  HMODULE shcore = LoadLibraryEx(L"shcore", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++  if (shcore) {
++    sGetDpiForMonitor =
++        (GETDPIFORMONITORPROC)GetProcAddress(shcore, "GetDpiForMonitor");
++    sGetProcessDpiAwareness = (GETPROCESSDPIAWARENESSPROC)GetProcAddress(
++        shcore, "GetProcessDpiAwareness");
++  }
++  PROCESS_DPI_AWARENESS dpiAwareness;
++  return sGetDpiForMonitor && sGetProcessDpiAwareness &&
++         SUCCEEDED(
++             sGetProcessDpiAwareness(GetCurrentProcess(), &dpiAwareness)) &&
++         dpiAwareness == PROCESS_PER_MONITOR_DPI_AWARE;
++}
++
++/* static */
++bool WinUtils::IsPerMonitorDPIAware() {
++  static bool perMonitorDPIAware = SlowIsPerMonitorDPIAware();
++  return perMonitorDPIAware;
++}
++
+ /* static */
+ float WinUtils::MonitorDPI(HMONITOR aMonitor) {
+-  UINT dpiX, dpiY = 96;
+-  GetDpiForMonitor(aMonitor ? aMonitor : GetPrimaryMonitor(), MDT_EFFECTIVE_DPI,
+-                   &dpiX, &dpiY);
+-  return dpiY;
++  if (IsPerMonitorDPIAware()) {
++    UINT dpiX, dpiY = 96;
++    sGetDpiForMonitor(aMonitor ? aMonitor : GetPrimaryMonitor(),
++                      MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
++    return dpiY;
++  }
++
++  // We're not per-monitor aware, use system DPI instead.
++  return SystemDPI();
+ }
+ 
+ /* static */
+@@ -280,9 +316,14 @@ WinUtils::GetPrimaryMonitor() {
+ /* static */
+ HMONITOR
+ WinUtils::MonitorFromRect(const gfx::Rect& rect) {
+-  RECT globalWindowBounds = {NSToIntRound(rect.X()), NSToIntRound(rect.Y()),
+-                             NSToIntRound(rect.XMost()),
+-                             NSToIntRound(rect.YMost())};
++  // convert coordinates from desktop to device pixels for MonitorFromRect
++  double dpiScale =
++      IsPerMonitorDPIAware() ? 1.0 : LogToPhysFactor(GetPrimaryMonitor());
++
++  RECT globalWindowBounds = {NSToIntRound(dpiScale * rect.X()),
++                             NSToIntRound(dpiScale * rect.Y()),
++                             NSToIntRound(dpiScale * (rect.XMost())),
++                             NSToIntRound(dpiScale * (rect.YMost()))};
+ 
+   return ::MonitorFromRect(&globalWindowBounds, MONITOR_DEFAULTTONEAREST);
+ }
+@@ -299,7 +340,7 @@ int WinUtils::GetSystemMetricsForDpi(int nIndex, UINT dpi) {
+   if (HasSystemMetricsForDpi()) {
+     return sGetSystemMetricsForDpi(nIndex, dpi);
+   } else {
+-    double scale = dpi / SystemDPI();
++    double scale = IsPerMonitorDPIAware() ? dpi / SystemDPI() : 1.0;
+     return NSToIntRound(::GetSystemMetrics(nIndex) * scale);
+   }
+ }
+diff --git a/widget/windows/WinUtils.h b/widget/windows/WinUtils.h
+index b38f1f7f718e..cb467449c574 100644
+--- a/widget/windows/WinUtils.h
++++ b/widget/windows/WinUtils.h
+@@ -217,6 +217,7 @@ class WinUtils {
+    */
+   static double SystemScaleFactor();
+ 
++  static bool IsPerMonitorDPIAware();
+   /**
+    * Get the DPI of the given monitor if it's per-monitor DPI aware, otherwise
+    * return the system DPI.
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index e6638bc64f22..108e92a43ab5 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -5518,16 +5518,18 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
+ 
+     case WM_MOVING:
+       FinishLiveResizing(MOVING);
+-      // Sometimes, we appear to miss a WM_DPICHANGED message while moving
+-      // a window around. Therefore, call ChangedDPI and ResetLayout here
+-      // if it appears that the window's scaling is not what we expect.
+-      // This causes the prescontext and appshell window management code to
+-      // check the appUnitsPerDevPixel value and current widget size, and
+-      // refresh them if necessary. If nothing has changed, these calls will
+-      // return without actually triggering any extra reflow or painting.
+-      if (WinUtils::LogToPhysFactor(mWnd) != mDefaultScale) {
+-        ChangedDPI();
+-        ResetLayout();
++      if (WinUtils::IsPerMonitorDPIAware()) {
++        // Sometimes, we appear to miss a WM_DPICHANGED message while moving
++        // a window around. Therefore, call ChangedDPI and ResetLayout here
++        // if it appears that the window's scaling is not what we expect.
++        // This causes the prescontext and appshell window management code to
++        // check the appUnitsPerDevPixel value and current widget size, and
++        // refresh them if necessary. If nothing has changed, these calls will
++        // return without actually triggering any extra reflow or painting.
++        if (WinUtils::LogToPhysFactor(mWnd) != mDefaultScale) {
++          ChangedDPI();
++          ResetLayout();
++        }
+       }
+       break;
+ 
+diff --git a/widget/windows/nsWindow.h b/widget/windows/nsWindow.h
+index d551dfd2387a..a43bf1f906fd 100644
+--- a/widget/windows/nsWindow.h
++++ b/widget/windows/nsWindow.h
+@@ -196,6 +196,16 @@ class nsWindow final : public nsIWidget {
+   double GetDefaultScaleInternal() override;
+   void DidClearParent(nsIWidget* aOldParent) override;
+   int32_t LogToPhys(double aValue);
++  mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale() const override {
++    if (mozilla::widget::WinUtils::IsPerMonitorDPIAware()) {
++      return mozilla::DesktopToLayoutDeviceScale(1.0);
++    } else {
++      if (mDefaultScale <= 0.0) {
++        mDefaultScale = mozilla::widget::WinUtils::LogToPhysFactor(mWnd);
++      }
++      return mozilla::DesktopToLayoutDeviceScale(mDefaultScale);
++    }
++  }
+ 
+   void Show(bool aState) override;
+   bool IsVisible() const override;
+@@ -842,7 +845,7 @@ class nsWindow final : public nsIWidget {
+   mozilla::LayoutDeviceIntCoord mCustomResizeMargin{0};
+ 
+   // not yet set, will be calculated on first use
+-  double mDefaultScale = -1.0;
++  mutable double mDefaultScale = -1.0;
+ 
+   // not yet set, will be calculated on first use
+   float mAspectRatio = 0.0;

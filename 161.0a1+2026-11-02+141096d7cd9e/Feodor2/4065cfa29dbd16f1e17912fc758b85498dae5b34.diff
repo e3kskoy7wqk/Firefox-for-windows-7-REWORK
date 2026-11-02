@@ -1,0 +1,14 @@
+diff --git a/third_party/libwebrtc/modules/desktop_capture/mouse_cursor_monitor_win.cc b/third_party/libwebrtc/modules/desktop_capture/mouse_cursor_monitor_win.cc
+index aa2347423c4b..18ef43eeb440 100644
+--- a/third_party/libwebrtc/modules/desktop_capture/mouse_cursor_monitor_win.cc
++++ b/third_party/libwebrtc/modules/desktop_capture/mouse_cursor_monitor_win.cc
+@@ -110,7 +110,8 @@ void MouseCursorMonitorWin::Capture() {
+   }
+ 
+   if (!IsSameCursorShape(cursor_info, last_cursor_)) {
+-    if (cursor_info.flags == CURSOR_SUPPRESSED) {
++    // Mozilla - CURSOR_SUPPRESSED is win8 and above; so we seem not to be able to see the symbol
++    if (cursor_info.flags != CURSOR_SHOWING) {
+       // The cursor is intentionally hidden now, send an empty bitmap.
+       last_cursor_ = cursor_info;
+       callback_->OnMouseCursor(new MouseCursor(

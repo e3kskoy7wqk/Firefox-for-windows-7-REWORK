@@ -1,0 +1,14 @@
+diff --git a/layout/generic/nsIFrame.cpp b/layout/generic/nsIFrame.cpp
+index a8225ca927c8..4d2c20626517 100644
+--- a/layout/generic/nsIFrame.cpp
++++ b/layout/generic/nsIFrame.cpp
+@@ -8199,6 +8199,9 @@ void nsIFrame::ClearInvalidationStateBits() {
+   if (HasAnyStateBits(NS_FRAME_DESCENDANT_NEEDS_PAINT)) {
+     for (const auto& childList : CrossDocChildLists()) {
+       for (nsIFrame* child : childList.mList) {
++        if (nsLayoutUtils::IsPopup(child)) {
++          continue;
++        }
+         child->ClearInvalidationStateBits();
+       }
+     }

@@ -1,0 +1,1 @@
+Bug 1956139 - Switch back to upstream windows-link. r=firefox-build-system-reviewers,supply-chain-reviewers,sergesanspaille    2026-10-02 18:24:49    a59e1f66e1237262916b476d4434938a01cb21af

@@ -1,0 +1,1 @@
+Bug 1334883 - Remove code Windows Vista code from installer. r=mhowell    2017-01-31 18:25:03    69dc22e3c92d09ed6908de98e28d7931829da9c6

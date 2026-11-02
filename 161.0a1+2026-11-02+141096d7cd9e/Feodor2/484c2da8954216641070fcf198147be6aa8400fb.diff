@@ -1,0 +1,42 @@
+diff --git a/gfx/2d/Factory.cpp b/gfx/2d/Factory.cpp
+index 1dd46e048b8d..ebc816ebc0f5 100644
+--- a/gfx/2d/Factory.cpp
++++ b/gfx/2d/Factory.cpp
+@@ -51,7 +51,6 @@
+ #  include "mozilla/layers/LayersSurfaces.h"
+ #  include "mozilla/layers/TextureD3D11.h"
+ #  include "mozilla/layers/VideoProcessorD3D11.h"
+-#  include "nsWindowsHelpers.h"
+ #endif
+ 
+ #include "DrawTargetOffset.h"
+@@ -901,7 +900,7 @@ RefPtr<IDWriteFactory> Factory::EnsureDWriteFactory() {
+     return mDWriteFactory;
+   }
+ 
+-  HMODULE dwriteModule = LoadLibrarySystem32(L"dwrite.dll");
++  HMODULE dwriteModule = LoadLibraryW(L"dwrite.dll");
+   decltype(DWriteCreateFactory)* createDWriteFactory =
+       (decltype(DWriteCreateFactory)*)GetProcAddress(dwriteModule,
+                                                      "DWriteCreateFactory");
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 2219b3e22abd..f800af03c506 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -2807,7 +2807,6 @@ NS_VISIBILITY_DEFAULT PRBool nspr_use_zone_allocator = PR_FALSE;
+ #ifdef CAIRO_HAS_DWRITE_FONT
+ 
+ #  include <dwrite.h>
+-#  include "nsWindowsHelpers.h"
+ 
+ #  ifdef DEBUG_DWRITE_STARTUP
+ 
+@@ -2834,7 +2833,7 @@ static void LogRegistryEvent(const wchar_t* msg) {
+ static DWORD WINAPI InitDwriteBG(LPVOID lpdwThreadParam) {
+   SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+   LOGREGISTRY(L"loading dwrite.dll");
+-  HMODULE dwdll = LoadLibrarySystem32(L"dwrite.dll");
++  HMODULE dwdll = LoadLibraryW(L"dwrite.dll");
+   if (dwdll) {
+     decltype(DWriteCreateFactory)* createDWriteFactory =
+         (decltype(DWriteCreateFactory)*)GetProcAddress(dwdll,

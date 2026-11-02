@@ -1,0 +1,86 @@
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index 0dc6a4b..b840d71 100644
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -3108,14 +3108,14 @@ function updateToggleControlLabel(control) {
+ // more like non-tablet mode and has no need for this.)
+ var Win10TabletModeUpdater = {
+   init() {
+-    if (AppConstants.platform == "win") {
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       this.update(WindowsUIUtils.inWin10TabletMode);
+       Services.obs.addObserver(this, "tablet-mode-change");
+     }
+   },
+ 
+   uninit() {
+-    if (AppConstants.platform == "win") {
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       Services.obs.removeObserver(this, "tablet-mode-change");
+     }
+   },
+@@ -3332,7 +3332,7 @@ var gUIDensity = {
+   // Whether the device is currently in a tablet mode that should influence the
+   // UI density. Only Windows (Win10 or Win11) exposes such a signal.
+   _inTabletMode() {
+-    if (AppConstants.platform != "win") {
++    if (!AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       return false;
+     }
+     return WindowsUIUtils.inWin10TabletMode || WindowsUIUtils.inWin11TabletMode;
+diff --git a/browser/components/BrowserContentHandler.sys.mjs b/browser/components/BrowserContentHandler.sys.mjs
+index c50c12d..6852795 100644
+--- a/browser/components/BrowserContentHandler.sys.mjs
++++ b/browser/components/BrowserContentHandler.sys.mjs
+@@ -1735,7 +1735,7 @@ nsDefaultCommandLineHandler.prototype = {
+       }
+     } else if (!cmdLine.preventDefault) {
+       if (
+-        AppConstants.platform == "win" &&
++        AppConstants.isPlatformAndVersionAtLeast("win", "10") &&
+         cmdLine.state != Ci.nsICommandLine.STATE_INITIAL_LAUNCH &&
+         lazy.WindowsUIUtils.inWin10TabletMode
+       ) {
+diff --git a/layout/xul/nsXULPopupManager.cpp b/layout/xul/nsXULPopupManager.cpp
+index 985cba4..85ce32c 100644
+--- a/layout/xul/nsXULPopupManager.cpp
++++ b/layout/xul/nsXULPopupManager.cpp
+@@ -60,6 +60,9 @@
+ #include "nsPIWindowRoot.h"
+ #include "nsPresContextInlines.h"
+ #include "nsXULElement.h"
++#ifdef XP_WIN
++#  include "mozilla/WindowsVersion.h"
++#endif
+ 
+ using namespace mozilla;
+ using namespace mozilla::dom;
+@@ -934,6 +937,11 @@ void nsXULPopupManager::ShowPopupAtScreen(Element* aPopup, int32_t aXPos,
+ }
+ 
+ void ToggleTouchMode(const PendingPopup& aPopup) {
++#ifdef XP_WIN
++  if (!IsWin10OrLater()) {
++    return;
++  }
++#endif
+   aPopup.mPopup->SetBoolAttr(
+       nsGkAtoms::touchmode,
+       aPopup.MouseInputSource() == MouseEvent_Binding::MOZ_SOURCE_TOUCH);
+diff --git a/toolkit/content/aboutSupport.js b/toolkit/content/aboutSupport.js
+index a2cd331..54f267b 100644
+--- a/toolkit/content/aboutSupport.js
++++ b/toolkit/content/aboutSupport.js
+@@ -344,6 +344,12 @@ var snapshotFormatters = {
+   },
+ 
+   securitySoftware(data) {
++    if (!AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
++      $("security-software").hidden = true;
++      $("security-software-table").hidden = true;
++      return;
++    }
++
+     if (AppConstants.platform !== "win") {
+       $("security-software").hidden = true;
+       $("security-software-table").hidden = true;

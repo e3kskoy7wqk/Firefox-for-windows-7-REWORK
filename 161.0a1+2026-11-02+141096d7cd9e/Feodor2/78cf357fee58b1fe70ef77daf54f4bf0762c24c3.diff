@@ -1,0 +1,70 @@
+diff --git a/browser/installer/windows/nsis/defines.nsi.in b/browser/installer/windows/nsis/defines.nsi.in
+index c6bb41695d70..a86443603f68 100644
+--- a/browser/installer/windows/nsis/defines.nsi.in
++++ b/browser/installer/windows/nsis/defines.nsi.in
+@@ -101,10 +101,10 @@
+ !define MinSupportedVer "Microsoft Windows 10 for ARM"
+ #else
+ !define ARCH "x64"
+-!define MinSupportedVer "Microsoft Windows 10 x64"
++!define MinSupportedVer "Microsoft Windows 7 x64"
+ #endif
+ #else
+-!define MinSupportedVer "Microsoft Windows 10"
++!define MinSupportedVer "Microsoft Windows 7"
+ !define ARCH "x86"
+ #endif
+ 
+diff --git a/browser/installer/windows/nsis/installer.nsi b/browser/installer/windows/nsis/installer.nsi
+index ffbe8ad43ef7..f95f1e75ac8b 100755
+--- a/browser/installer/windows/nsis/installer.nsi
++++ b/browser/installer/windows/nsis/installer.nsi
+@@ -1871,8 +1871,8 @@ Function .onInit
+   ; SSE2 instruction set is available. Result returned in $R7.
+   System::Call "kernel32::IsProcessorFeaturePresent(i 10)i .R7"
+ 
+-  ; Windows 8.1/Server 2012 R2 and lower are not supported.
+-  ${Unless} ${AtLeastWin10}
++  ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
++  ${Unless} ${AtLeastWin7}
+     ${If} "$R7" == "0"
+       strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG2)"
+     ${Else}
+@@ -1893,6 +1893,7 @@ Function .onInit
+ !ifdef HAVE_64BIT_BUILD
+   ${If} "${ARCH}" == "AArch64"
+     ${IfNot} ${IsNativeARM64}
++    ${OrIfNot} ${AtLeastWin10}
+       MessageBox MB_OKCANCEL|MB_ICONSTOP "$(WARN_MIN_SUPPORTED_OSVER_MSG2)" IDCANCEL +2
+       ExecShell "open" "${URLSystemRequirements}"
+       Quit
+diff --git a/browser/installer/windows/nsis/stub.nsh b/browser/installer/windows/nsis/stub.nsh
+index 53d110f23cdb..f3212e72d766 100644
+--- a/browser/installer/windows/nsis/stub.nsh
++++ b/browser/installer/windows/nsis/stub.nsh
+@@ -1587,8 +1587,8 @@ Function CommonOnInit
+   StrCpy $CpuSupportsSSE "0"
+   Call CheckCpuSupportsSSE
+ 
+-  ; Windows 8.1/Server 2012 R2 and lower are not supported.
+-  ${Unless} ${AtLeastWin10}
++  ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
++  ${Unless} ${AtLeastWin7}
+     StrCpy $ExitCode "${ERR_PREINSTALL_SYS_OS_REQ}"
+     ${If} "$CpuSupportsSSE" == "0"
+       strCpy $R7 "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG2)"
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+index e615f4d6cd0c..081ab42b5a65 100755
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -5317,8 +5317,8 @@
+         Quit
+       ${EndIf}
+ 
+-      ; Windows 8.1/Server 2012 R2 and lower are not supported.
+-      ${Unless} ${AtLeastWin10}
++      ; Windows NT 6.0 (Vista/Server 2008) and lower are not supported.
++      ${Unless} ${AtLeastWin7}
+         MessageBox MB_OK|MB_ICONSTOP "$R9"
+         ; Nothing initialized so no need to call OnEndCommon
+         Quit

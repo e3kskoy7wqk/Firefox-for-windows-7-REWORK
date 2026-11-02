@@ -1,0 +1,1 @@
+Add windows NamedPipe (#1351)    2020-10-02 11:31:22    52e8c2220e87696d20f13561402bcaabba4136ed

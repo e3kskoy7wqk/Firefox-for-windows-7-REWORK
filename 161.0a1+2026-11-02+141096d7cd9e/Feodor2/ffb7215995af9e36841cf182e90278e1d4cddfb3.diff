@@ -1,0 +1,15 @@
+diff --git a/third_party/rust/getrandom/src/backends.rs b/third_party/rust/getrandom/src/backends.rs
+index 1509af115bb0..b3df7b267a70 100644
+--- a/third_party/rust/getrandom/src/backends.rs
++++ b/third_party/rust/getrandom/src/backends.rs
+@@ -150,8 +150,8 @@
+         mod windows7;
+         pub use windows7::*;
+     } else if #[cfg(windows)] {
+-        mod windows;
+-        pub use windows::*;
++        mod windows7;
++        pub use windows7::*;
+     } else if #[cfg(all(target_arch = "x86_64", target_env = "sgx"))] {
+         mod rdrand;
+         pub use rdrand::*;

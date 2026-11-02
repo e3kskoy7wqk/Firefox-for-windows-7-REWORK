@@ -1,0 +1,1 @@
+Bug 2055984 - Reimplement Taskbar pin-status check in Rust. r=hsohaney    2026-08-04 05:41:56    63b39a300e3c7e24ddc86be2d6c58a22d6046fb0

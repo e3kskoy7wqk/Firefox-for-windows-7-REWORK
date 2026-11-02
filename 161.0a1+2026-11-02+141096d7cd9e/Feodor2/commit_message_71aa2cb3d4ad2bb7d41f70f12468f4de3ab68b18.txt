@@ -1,0 +1,1 @@
+Bug 1991891 - Update to Glean v66.0.0 r=TravisLong,supply-chain-reviewers,mach-reviewers    2025-10-24 20:39:27    71aa2cb3d4ad2bb7d41f70f12468f4de3ab68b18

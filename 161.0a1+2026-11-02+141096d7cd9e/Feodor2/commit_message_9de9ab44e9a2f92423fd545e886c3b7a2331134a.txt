@@ -1,0 +1,1 @@
+Bug 2039226 - Use ProcessPrng in mfbt/RandomNum on Windows. r=glandium,sergesanspaille    2026-06-22 21:41:58    9de9ab44e9a2f92423fd545e886c3b7a2331134a

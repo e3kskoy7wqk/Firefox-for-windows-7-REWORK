@@ -1,0 +1,1 @@
+Bug 2078055 - Remove unused gfxWindowsNativeDrawing and gfxSharedImageSurface. r=gfx-reviewers,lsalzman    2026-10-05 22:39:18    c8e82c9d637529590af8ec301c1260eef395a90f

@@ -1,0 +1,1 @@
+Bug 1334883 - Remove code Windows XP code from installer. r=mhowell    2017-01-31 18:24:30    03fbc20c46b1179168ec520a363e6e4f70f62597

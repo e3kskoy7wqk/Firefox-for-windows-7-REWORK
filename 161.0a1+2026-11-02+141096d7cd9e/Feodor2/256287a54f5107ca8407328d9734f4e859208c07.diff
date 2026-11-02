@@ -1,0 +1,213 @@
+diff --git a/memory/build/Mutex.cpp b/memory/build/Mutex.cpp
+index bb37c880a506..bbdf7fa2be89 100644
+--- a/memory/build/Mutex.cpp
++++ b/memory/build/Mutex.cpp
+@@ -12,7 +12,7 @@ bool Mutex::TryLock() {
+   MOZ_ASSERT(mInitialised);
+ 
+ #if defined(XP_WIN)
+-  return mozilla::detail::MutexImpl::tryLock();
++  return !!TryEnterCriticalSection(mMutex.addr());
+ #elif defined(XP_DARWIN)
+   return os_unfair_lock_trylock(&mMutex);
+ #else
+diff --git a/memory/build/Mutex.h b/memory/build/Mutex.h
+index 995d5543972a..2f34b194a93e 100644
+--- a/memory/build/Mutex.h
++++ b/memory/build/Mutex.h
+@@ -16,9 +16,7 @@
+ 
+ #include "mozilla/Assertions.h"
+ #include "mozilla/Attributes.h"
+-#if defined(XP_WIN)
+-#  include "mozilla/PlatformMutex.h"
+-#endif
++#include "mozilla/MaybeStorageBase.h"
+ #include "mozilla/ThreadSafety.h"
+ 
+ #if defined(XP_DARWIN)
+@@ -46,16 +44,15 @@ OS_EXPORT OS_NOTHROW OS_NONNULL_ALL void os_unfair_lock_lock_with_options(
+ // A constexpr constructor is provided so that Mutex can be part of something
+ // that is constinit, but the mutex won't be initialised, you must still
+ // call Init() before the mutex can be used.
+-struct MOZ_CAPABILITY("mutex") Mutex
++struct MOZ_CAPABILITY("mutex") Mutex {
+ #if defined(XP_WIN)
+-    : private mozilla::detail::MutexImpl
+-#endif
+-{
+-#if defined(XP_DARWIN)
++  // MaybeStorageBase provides a constexpr constructor.
++  mozilla::detail::MaybeStorageBase<CRITICAL_SECTION> mMutex;
++#elif defined(XP_DARWIN)
+   os_unfair_lock mMutex = OS_UNFAIR_LOCK_INIT;
+ #elif defined(XP_LINUX) && !defined(ANDROID)
+   pthread_mutex_t mMutex = PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP;
+-#elif !defined(XP_WIN)
++#else
+   pthread_mutex_t mMutex = PTHREAD_MUTEX_INITIALIZER;
+ #endif
+ 
+@@ -78,8 +75,9 @@ struct MOZ_CAPABILITY("mutex") Mutex
+     mInitialised = true;
+ #endif
+ #if defined(XP_WIN)
+-    reset();
+-    return true;
++    if (!InitializeCriticalSectionAndSpinCount(mMutex.addr(), 5000)) {
++      return false;
++    }
+ #elif defined(XP_DARWIN)
+     mMutex = OS_UNFAIR_LOCK_INIT;
+ #elif defined(XP_LINUX) && !defined(ANDROID)
+@@ -105,7 +103,7 @@ struct MOZ_CAPABILITY("mutex") Mutex
+     MOZ_ASSERT(mInitialised);
+ 
+ #if defined(XP_WIN)
+-    mozilla::detail::MutexImpl::lock();
++    EnterCriticalSection(mMutex.addr());
+ #elif defined(XP_DARWIN)
+     // We rely on a non-public function to improve performance here.
+     // The OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION flag informs the kernel that
+@@ -128,7 +126,7 @@ struct MOZ_CAPABILITY("mutex") Mutex
+     MOZ_ASSERT(mInitialised);
+ 
+ #if defined(XP_WIN)
+-    mozilla::detail::MutexImpl::unlock();
++    LeaveCriticalSection(mMutex.addr());
+ #elif defined(XP_DARWIN)
+     os_unfair_lock_unlock(&mMutex);
+ #else
+@@ -143,9 +141,32 @@ struct MOZ_CAPABILITY("mutex") Mutex
+ };
+ 
+ // Mutex that can be used for static initialization.
++// On Windows, CRITICAL_SECTION requires a function call to be initialized,
++// but for the initialization lock, a static initializer calling the
++// function would be called too late. We need no-function-call
++// initialization, which SRWLock provides.
++// Ideally, we'd use the same type of locks everywhere, but SRWLocks
++// everywhere incur a performance penalty. See bug 1418389.
++#if defined(XP_WIN)
++struct MOZ_CAPABILITY("mutex") StaticMutex {
++  SRWLOCK mMutex = SRWLOCK_INIT;
++
++  constexpr StaticMutex() = default;
++
++  inline void Lock() MOZ_CAPABILITY_ACQUIRE() {
++    AcquireSRWLockExclusive(&mMutex);
++  }
++
++  inline void Unlock() MOZ_CAPABILITY_RELEASE() {
++    ReleaseSRWLockExclusive(&mMutex);
++  }
++};
++
++#else
+ struct MOZ_CAPABILITY("mutex") StaticMutex : public Mutex {
+   constexpr StaticMutex() : Mutex(true) {}
+ };
++#endif
+ 
+ #ifdef XP_WIN
+ typedef DWORD ThreadId;
+diff --git a/memory/replace/logalloc/replay/moz.build b/memory/replace/logalloc/replay/moz.build
+index d67caca8d442..59d66ce12f0c 100644
+--- a/memory/replace/logalloc/replay/moz.build
++++ b/memory/replace/logalloc/replay/moz.build
+@@ -15,8 +15,6 @@ SOURCES += [
+ 
+ if CONFIG["OS_TARGET"] == "WINNT":
+     SOURCES += [
+-        "/mozglue/misc/Futex_windows.cpp",
+-        "/mozglue/misc/Mutex_futex.cpp",
+         "/mozglue/misc/ProcessType.cpp",
+     ]
+ 
+@@ -38,7 +36,6 @@ if CONFIG["OS_ARCH"] == "WINNT":
+     OS_LIBS += [
+         "advapi32",
+         "dbghelp",
+-        "synchronization",
+     ]
+ 
+ if CONFIG["MOZ_LINKER"] and CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
+diff --git a/mozglue/misc/Mutex_futex.cpp b/mozglue/misc/Mutex_futex.cpp
+index 12eb0a71cbb8..f1f34e003c0c 100644
+--- a/mozglue/misc/Mutex_futex.cpp
++++ b/mozglue/misc/Mutex_futex.cpp
+@@ -67,10 +67,7 @@ MOZ_COLD void LockContended(mozilla::SmallFutex& aFutex) {
+ 
+ }  // namespace
+ 
+-// Windows defines the constructor constexpr in PlatformMutex.h.
+-#if !defined(XP_WIN)
+ mozilla::detail::MutexImpl::MutexImpl() = default;
+-#endif
+ mozilla::detail::MutexImpl::~MutexImpl() = default;
+ 
+ void mozilla::detail::MutexImpl::lock() {
+diff --git a/mozglue/misc/PlatformMutex.h b/mozglue/misc/PlatformMutex.h
+index 1db343b108ca..0e4aef7e0127 100644
+--- a/mozglue/misc/PlatformMutex.h
++++ b/mozglue/misc/PlatformMutex.h
+@@ -5,10 +5,6 @@
+ #ifndef mozilla_PlatformMutex_h
+ #define mozilla_PlatformMutex_h
+ 
+-#if defined(XP_WIN)
+-#  include <atomic>
+-#endif
+-
+ #include "mozilla/Types.h"
+ 
+ #if defined(XP_WIN)
+@@ -25,11 +21,7 @@ class ConditionVariableImpl;
+ 
+ class MutexImpl {
+  public:
+-#if defined(XP_WIN)
+-  constexpr MutexImpl() = default;
+-#else
+   explicit MFBT_API MutexImpl();
+-#endif
+   MFBT_API ~MutexImpl();
+ 
+   MutexImpl(const MutexImpl&) = delete;
+@@ -39,10 +31,6 @@ class MutexImpl {
+   // through the PLT.
+   MFBT_API bool tryLock();
+ 
+-#if defined(XP_WIN)
+-  void reset() { mFutex.mValue.store(0, std::memory_order_relaxed); }
+-#endif
+-
+  private:
+   void mutexLock();
+   bool mutexTryLock();
+@@ -55,8 +43,6 @@ class MutexImpl {
+ 
+ #if defined(XP_WIN)
+   SmallFutex mFutex;
+-  static_assert(std::atomic<uint8_t>::is_always_lock_free);
+-  static_assert(sizeof(std::atomic<uint8_t>) == sizeof(uint8_t));
+ #elif !defined(__wasi__)
+   pthread_mutex_t mMutex;
+ #endif
+diff --git a/xpcom/base/nsTraceRefcnt.cpp b/xpcom/base/nsTraceRefcnt.cpp
+index ea4949cae928..d8baa67846f2 100644
+--- a/xpcom/base/nsTraceRefcnt.cpp
++++ b/xpcom/base/nsTraceRefcnt.cpp
+@@ -76,12 +76,7 @@ class MOZ_CAPABILITY("mutex") TraceLogMutex
+   }
+ };
+ 
+-#ifdef XP_WIN
+-// The Windows futex mutex supports constant initialization.
+-constinit static TraceLogMutex gTraceLog;
+-#else
+ MOZ_RUNINIT static TraceLogMutex gTraceLog;
+-#endif
+ 
+ class MOZ_RAII AutoTraceLogLock {
+  public:

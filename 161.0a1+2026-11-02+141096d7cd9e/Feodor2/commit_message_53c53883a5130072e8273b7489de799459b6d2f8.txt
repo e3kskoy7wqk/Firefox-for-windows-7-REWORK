@@ -1,0 +1,1 @@
+Bug 1991957 - Remove dead audio decoder types from AgnosticDecoderModule. r=media-playback-reviewers,alwu    2026-08-27 09:53:27    53c53883a5130072e8273b7489de799459b6d2f8

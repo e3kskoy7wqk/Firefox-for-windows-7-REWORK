@@ -1,0 +1,1 @@
+Bug 2029827 - Handle ordinal values passed to MozGetProcAddress by Widevine on Windows 7. r=yjuglaret a=RyanVM    2026-04-14 09:43:04    8409f65420e8b2ed36d9428e079f46d19d395b80

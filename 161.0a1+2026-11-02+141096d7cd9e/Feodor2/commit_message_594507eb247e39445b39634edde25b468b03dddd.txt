@@ -1,0 +1,3 @@
+Bug 1850034 - Remove pre-Win10-specific codepath from gfx/. r=gfx-reviewers,lsalzman    2023-08-27 07:44:57    594507eb247e39445b39634edde25b468b03dddd
+Bug 1850034 - Remove pre-Win10-specific codepath from toolkit/crashreporter/. r=gsvelto    2023-08-27 07:44:58    cc37318c967095351e0be4598df2bbf8c42aae61
+Bug 1850034 - Remove Win7-specific workaround from toolkit/xre/. r=bobowen    2023-08-27 07:44:58    033edf820c163a1f07652018cbccc93f2d9019af

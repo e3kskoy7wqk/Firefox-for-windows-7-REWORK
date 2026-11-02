@@ -1,0 +1,1 @@
+Bug 1460022: Part 1 - Modify DLL interceptor to use one-time initialization when setting hooks; r=handyman    2018-06-28 01:48:05    ff8f1be7a66b9d6675f06d189788909a8ba81e20

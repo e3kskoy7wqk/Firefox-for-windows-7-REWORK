@@ -1,0 +1,1 @@
+Bug 2069090 - Extend nova background under the sidebar. r=desktop-theme-reviewers,dao    2026-09-07 23:07:20    b2a4671da001c757295adfc1fcb559aa642bc164

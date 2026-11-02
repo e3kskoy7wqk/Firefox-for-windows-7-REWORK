@@ -1,0 +1,1 @@
+Bug 1634253 - P6. Remove MessageLoop use from gfx. r=kats,mattwoodrow    2020-05-09 04:20:44    647b901352a12e946150e4bf5c03004782b3c446

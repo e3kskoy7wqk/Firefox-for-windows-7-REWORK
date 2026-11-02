@@ -1,0 +1,81 @@
+diff --git a/browser/components/shell/rust/shell_windows/src/taskbar/shortcut.rs b/browser/components/shell/rust/shell_windows/src/taskbar/shortcut.rs
+index b8875393e1a5..3361025952ba 100644
+--- a/browser/components/shell/rust/shell_windows/src/taskbar/shortcut.rs
++++ b/browser/components/shell/rust/shell_windows/src/taskbar/shortcut.rs
+@@ -19,12 +19,18 @@ use std::{
+             EnhancedStorage::PKEY_AppUserModel_ID,
+             Packaging::Appx::APPLICATION_USER_MODEL_ID_MAX_LENGTH,
+         },
+-        System::Com::{
+-            CoCreateInstance, IPersistFile,
+-            StructuredStorage::{PropVariantClear, PropVariantToString},
+-            CLSCTX_INPROC_SERVER, STGM,
++        System::{
++            Com::{
++                CoCreateInstance, IPersistFile,
++                StructuredStorage::PropVariantClear,
++                CLSCTX_INPROC_SERVER, STGM,
++            },
++            Variant::VT_LPWSTR,
++        },
++        UI::Shell::{
++            CSIDL_APPDATA, IShellLinkW, PropertiesSystem::IPropertyStore, SHGetFolderPathW,
++            SHGFP_TYPE_CURRENT, ShellLink as ShellLinkClsid,
+         },
+-        UI::Shell::{IShellLinkW, PropertiesSystem::IPropertyStore, ShellLink as ShellLinkClsid},
+     },
+ };
+ 
+@@ -62,10 +67,20 @@ pub fn is_app_pinned(
+ 
+     log::trace!("Current exe path: {exe_path:?}\nPrivate exe path: {pb_exe_path:?}");
+ 
+-    let appdata_folder = UserDataPaths::GetDefault()
+-        .and_then(|paths| paths.RoamingAppData())
+-        .map(|path| PathBuf::from(path.to_os_string()))
+-        .map_err(IsPinnedError::GetAppData)?;
++    let mut appdata_folder = [0u16; MAX_PATH as usize];
++    // SAFETY: The buffer holds MAX_PATH characters; null handles select the current user.
++    unsafe {
++        SHGetFolderPathW(
++            None,
++            CSIDL_APPDATA as i32,
++            None,
++            SHGFP_TYPE_CURRENT.0 as u32,
++            &mut appdata_folder,
++        )
++    }
++    .map_err(IsPinnedError::GetAppData)?;
++    let appdata_folder = appdata_folder.split(|&c| c == 0).next().unwrap_or(&[]);
++    let appdata_folder = PathBuf::from(OsString::from_wide(appdata_folder));
+     let taskbar_shortcut_folder =
+         appdata_folder.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
+ 
+@@ -174,12 +189,21 @@ impl ShellLink {
+             },
+         );
+ 
+-        let mut aumid = [0u16; APPLICATION_USER_MODEL_ID_MAX_LENGTH as usize];
+-        // SAFETY: `propvar` pointer derived from a reference.
+-        unsafe { PropVariantToString(&*pv, &mut aumid) }?;
+-
+-        // Strip the trailing nulls, including the null terminator.
+-        let aumid = aumid.split(|&c| c == 0).next().unwrap_or(&[]);
++        // SAFETY: GetValue initialized the variant; check its type before reading the union.
++        let aumid = unsafe {
++            if pv.Anonymous.Anonymous.vt != VT_LPWSTR {
++                return Err(E_FAIL.into());
++            }
++            pv.Anonymous.Anonymous.Anonymous.pwszVal
++        };
++        if aumid.is_null() {
++            return Err(E_FAIL.into());
++        }
++        // SAFETY: VT_LPWSTR is null-terminated and remains owned by pv until after the copy.
++        let aumid = unsafe { aumid.as_wide() };
++        if aumid.len() >= APPLICATION_USER_MODEL_ID_MAX_LENGTH as usize {
++            return Err(E_FAIL.into());
++        }
+         Ok(String::from_utf16_lossy(aumid))
+     }
+ }

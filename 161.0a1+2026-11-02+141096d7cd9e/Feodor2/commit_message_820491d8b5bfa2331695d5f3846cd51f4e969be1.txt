@@ -1,0 +1,1 @@
+Bug 1372152 - GetShellFolderPath should use SHGetKnownFolderPath instead of SHGetKnownFolderIDList, r=jimm.    2017-06-12 19:42:20    820491d8b5bfa2331695d5f3846cd51f4e969be1

@@ -1,0 +1,2839 @@
+diff --git a/browser/components/tabbrowser/content/tab-bar-visibility.js b/browser/components/tabbrowser/content/tab-bar-visibility.js
+index 45f3efabc9fe2d38e3a53324dd82aa54d683bda3..90ec2467e44e035e276427495a5e86eb8d58278e 100644
+--- a/browser/components/tabbrowser/content/tab-bar-visibility.js
++++ b/browser/components/tabbrowser/content/tab-bar-visibility.js
+@@ -38,9 +38,13 @@ var TabBarVisibility = {
+     // a titlebar? When the tabs toolbar is hidden they form the top edge of the
+     // window, so they share the titlebar's background and inactive styling.
+     let isTitlebar = CustomTitlebar.enabled && hideTabsToolbar;
+-    let titlebarIds = Services.prefs.getBoolPref("browser.nova.enabled")
+-      ? ["nav-bar", "PersonalToolbar"]
+-      : ["nav-bar"];
++    let titlebarIds =
++      Services.prefs.getBoolPref("browser.nova.enabled") &&
++      !window.matchMedia(
++        "(-moz-platform: windows-xp), (-moz-platform: windows-win7), (-moz-platform: windows-win8)"
++      ).matches
++        ? ["nav-bar", "PersonalToolbar"]
++        : ["nav-bar"];
+     for (let id of titlebarIds) {
+       document
+         .getElementById(id)
+diff --git a/browser/themes/shared/browser-shared.css b/browser/themes/shared/browser-shared.css
+index 6ca16f4757519bdcabb32cfd3ab8b96a5642f3f7..9ae774f92a378a41e23e9ed4ccd98efc78008a98 100644
+--- a/browser/themes/shared/browser-shared.css
++++ b/browser/themes/shared/browser-shared.css
+@@ -365,11 +365,41 @@ body {
+ 
+ :root:not([theme-image-in-toolbox]) body,
+ :root[theme-image-in-toolbox] #navigator-toolbox {
+-  background-image: var(--toolbox-background-image);
+-  background-repeat: var(--toolbox-background-repeat);
+-  background-position: var(--toolbox-background-position);
+-  /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-  background-size: var(--toolbox-background-size);
++  @media not (-moz-platform: windows-win7) {
++    @media not (-moz-platform: windows-win8) {
++      background-image: var(--toolbox-background-image);
++      background-repeat: var(--toolbox-background-repeat);
++      background-position: var(--toolbox-background-position);
++      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++      background-size: var(--toolbox-background-size);
++    }
++  }
++}
++
++/* TODO bug 1695280: Remove this block. */
++@media (-moz-platform: windows-win7),
++       (-moz-platform: windows-win8) {
++  :root[lwtheme] {
++    background-color: var(--lwt-accent-color);
++    background-image: var(--lwt-additional-images);
++    background-repeat: var(--lwt-background-tiling);
++    background-position: var(--lwt-background-alignment);
++  }
++
++  :root[lwtheme] body,
++  :root[lwtheme] #navigator-toolbox {
++    background-color: transparent;
++  }
++
++  :root[lwtheme-image] {
++    background-image: var(--lwt-header-image, linear-gradient(transparent, transparent)),  var(--lwt-additional-images) !important;
++    background-repeat: no-repeat, var(--lwt-background-tiling);
++    background-position: right top, var(--lwt-background-alignment) !important;
++  }
++
++  :root[lwtheme]:-moz-window-inactive {
++    background-color: var(--lwt-accent-color-inactive, var(--lwt-accent-color));
++  }
+ }
+ 
+ .browser-toolbar {
+@@ -543,21 +573,25 @@ body {
+   &[autohide] {
+     overflow: hidden;
+ 
+-    /* For linux and windows, when temporarily showing the menu bar, make it at least
+-       as tall as the tab toolbar such that the window controls don't appear to move up.
+-       For MacOS, autohide is never true on the menubar.
+-    */
+-    :root[customtitlebar] #navigator-toolbox:not([tabs-hidden]) > & {
+-      /* --tabstrip-min-height is defined in tabs.css, which stylelint doesn't know about. */
+-      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-      min-height: var(--tabstrip-min-height);
+-    }
+-    /* adjust the height of the auto-hiding toolbar menubar when the tabstrip is
+-       hidden and we need to match the height of the nav-bar. */
+-    :root[customtitlebar] #navigator-toolbox[tabs-hidden] > & {
+-      /* urlbar variables will be tokenized, see bug 2017983 */
+-      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-      min-height: calc(var(--urlbar-height) + 2 * var(--urlbar-padding-block));
++    @media not (-moz-platform: windows-win7) {
++      @media not (-moz-platform: windows-win8) {
++        /* For linux and windows, when temporarily showing the menu bar, make it at least
++           as tall as the tab toolbar such that the window controls don't appear to move up.
++           For MacOS, autohide is never true on the menubar.
++        */
++        :root[customtitlebar] #navigator-toolbox:not([tabs-hidden]) > & {
++          /* --tabstrip-min-height is defined in tabs.css, which stylelint doesn't know about. */
++          /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++          min-height: var(--tabstrip-min-height);
++        }
++        /* adjust the height of the auto-hiding toolbar menubar when the tabstrip is
++           hidden and we need to match the height of the nav-bar. */
++        :root[customtitlebar] #navigator-toolbox[tabs-hidden] > & {
++          /* urlbar variables will be tokenized, see bug 2017983 */
++          /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++          min-height: calc(var(--urlbar-height) + 2 * var(--urlbar-padding-block));
++        }
++      }
+     }
+ 
+     &[inactive]:not([customizing]) {
+diff --git a/browser/themes/shared/contextmenu.css b/browser/themes/shared/contextmenu.css
+index fdf95241bc0a1116295cf230217326e65684412b..8ece5de249d08809184a5d25532bfecbcb88dc59 100644
+--- a/browser/themes/shared/contextmenu.css
++++ b/browser/themes/shared/contextmenu.css
+@@ -57,3 +57,81 @@
+ #context-media-eme-learnmore {
+   --menuitem-icon: url("chrome://browser/skin/drm-icon.svg");
+ }
++
++@media not (-moz-windows-non-native-menus) {
++  #context-navigation {
++    background-color: transparent;
++  }
++}
++
++@media (-moz-windows-non-native-menus) {
++  /* :not([hidden]) to avoid the display: flex unhiding the item. */
++  #context-navigation:not([hidden]) {
++    /* Use modern flex box so we can use percentage widths to redistribute
++     * spacing manually. */
++    display: flex;
++    flex-direction: row;
++    /* We want the first and last icons to align with the text items which
++     * have 1em inline padding, and for icons to be centered within their
++     * hover state, so each icon of 16px needs 1em padding on both sides:
++     */
++    --menuitem-min-width: calc(2em + 16px);
++    /* The total width of the container should then be at least 4 times that: */
++    min-width: calc(4 * var(--menuitem-min-width));
++  }
++
++  #context-navigation > .menuitem-iconic {
++    flex: 1 0 auto;
++  }
++
++  #context-navigation > .menuitem-iconic[_moz-menuactive="true"] {
++    /* We only show hover state on the icons. This ensures there is no
++     * dead space between icons, but the visible hover state is only
++     * around the icons, and all the icons' hover states match each other.
++     */
++    background-color: transparent;
++  }
++
++  /* Override the default context-menu icon size. */
++  #context-navigation > .menuitem-iconic > .menu-icon {
++    width: var(--menuitem-min-width);
++    height: 32px;
++    padding: 8px 1em;
++    margin: 0;
++  }
++  #context-navigation > .menuitem-iconic[_moz-menuactive="true"] > .menu-icon {
++    background-color: -moz-menuhover;
++  }
++
++  #context-navigation > .menuitem-iconic[_moz-menuactive="true"][disabled] > .menu-icon {
++    background-color: -moz-menuhoverdisabled;
++  }
++
++  /* If the menu is wider than the icons strictly need, the <menuitem> elements
++   * will stretch to pick up the extra space. In that case, the outer icons
++   * should align to the start/end of their containing <menuitem>: */
++  #context-navigation > .menuitem-iconic:first-child {
++    justify-content: flex-start;
++  }
++
++  #context-navigation > .menuitem-iconic:last-child {
++    justify-content: flex-end;
++  }
++
++  #context-navigation > .menuitem-iconic:last-child,
++  #context-navigation > .menuitem-iconic:first-child {
++    flex-grow: 0;
++    /* The first and last items start off as 16px + 2em, like the other ones.
++     * 100% is the width of the parent, which will be at least 4 * the width of
++     * an individual item (16px + 2em)
++     * So 100% - 4 item widths gets us the remaining available space if
++     * #context-navigation is wider than that.
++     * Then divide by 6 to get the 1/6 of that extra space, and add this space
++     * to the width of the first/last items.
++     * This ensures that the 3 visual gaps between the 4 icons are all the same
++     * size, with each 1/3 of the available space evenly distributed between
++     * the 2 items on either side of the gap.
++     */
++    width: calc(var(--menuitem-min-width) + calc(100% - 4 * var(--menuitem-min-width)) / 6);
++  }
++}
+diff --git a/browser/themes/shared/light-dark-overrides.css b/browser/themes/shared/light-dark-overrides.css
+index 1c69bfcdd7b5ff56ea7dadd27c7a3edbdd4cf163..4cfb400f46ea6c417fb6233d20770b0304067d7b 100644
+--- a/browser/themes/shared/light-dark-overrides.css
++++ b/browser/themes/shared/light-dark-overrides.css
+@@ -7,3 +7,122 @@
+   --urlbar-box-background-color-focus: var(--button-background-color);
+   --urlbar-box-background-color-hover: var(--button-background-color-hover);
+ }
++
++@media (-moz-platform: windows) {
++  /* The window background is white due to no accentcolor in the lightweight
++     theme. It can't be changed to transparent when there is no compositor
++     (Win 7 in classic / basic theme), or else dragging and focus become
++     broken. So instead just show the normal titlebar in that case, and override
++     the window color as transparent when the compositor is available. */
++  @media (-moz-windows-compositor: 0) {
++    :root[customtitlebar][lwtheme]:not([inDOMFullscreen]) .browser-titlebar:not([collapsed]) {
++      visibility: visible;
++    }
++
++    :root[customtitlebar][lwtheme] .browser-titlebar:-moz-window-inactive {
++      opacity: 1;
++    }
++
++    /* Prevent accent color overriding the window background for
++     * light and dark theme on Aero Basic. This is copied from browser-aero.css. */
++    @media (-moz-windows-default-theme) {
++      :root#main-window {
++        background-color: rgb(185,209,234) !important;
++      }
++      :root#main-window:-moz-window-inactive {
++        background-color: rgb(215,228,242) !important;
++      }
++    }
++  }
++
++  /* Add a fog for background tabs to be visible on Windows 7 glass window background */
++  @media (-moz-platform: windows-win7) {
++    @media (-moz-windows-default-theme) {
++      :is(#TabsToolbar, #navigator-toolbox[tabs-hidden] #nav-bar) {
++        background-image: radial-gradient(ellipse at bottom, rgba(255,255,255,0.8), rgba(255,255,255,0.5) 80%, transparent);
++        color: black;
++        --toolbarbutton-icon-fill: currentColor;
++      }
++    }
++  }
++
++  @media (-moz-windows-glass) {
++    /* Make the menubar text readable on aero glass (copied from browser-aero.css). */
++    #toolbar-menubar {
++      text-shadow: 0 0 .5em white, 0 0 .5em white, 0 1px 0 rgba(255,255,255,.4);
++    }
++
++    #main-menubar:not(:-moz-window-inactive) {
++      background-color: rgba(255,255,255,.5);
++      color: black;
++      border-radius: 4px;
++    }
++  }
++
++  @media (-moz-platform: windows-xp),
++         (-moz-platform: windows-win7),
++         (-moz-platform: windows-win8) {
++    :root[lwt-toolbar="dark"] {
++      --tab-background-color-selected: rgb(66, 65, 77) !important;
++    }
++
++    @media (-moz-windows-compositor) {
++      :root#main-window {
++        background: transparent !important;
++      }
++
++      /* Remove lwtheme borders from toolbars in non-maximized windows. */
++      #toolbar-menubar,
++      #TabsToolbar {
++        border-inline-style: none !important;
++      }
++    }
++
++    /* Use proper menu text styling in Win7 classic mode. On Windows 8, we use
++       these colors so tabs and menus are legible against the window accent color.
++       These colors are copied from browser.css. */
++    @media (-moz-windows-compositor: 0),
++           (-moz-windows-default-theme: 0),
++           (-moz-platform: windows-win8) {
++      :root[customtitlebar][lwtheme] {
++        color: CaptionText;
++        --toolbarbutton-icon-fill: currentColor !important;
++      }
++
++      :root[customtitlebar][lwtheme]:-moz-window-inactive {
++        color: InactiveCaptionText;
++      }
++
++      :root[customtitlebar][lwtheme] .browser-titlebar {
++        color: CaptionText;
++
++        &:-moz-window-inactive {
++          color: InactiveCaptionText;
++        }
++      }
++    }
++  }
++
++  /* Restored windows get an artificial border on windows, because the lwtheme background
++   * overlaps the regular window border. That isn't the case for us, so we avoid painting
++   * over the native border with our custom borders. These are !important to avoid
++   * specificity-wars with the selectors that add these borders. */
++  @media (-moz-windows-classic),
++         (-moz-windows-compositor: 0) and (-moz-windows-default-theme) {
++    #navigator-toolbox {
++      background-image: none !important;
++    }
++  }
++  @media (-moz-windows-glass) {
++    #navigator-toolbox {
++      border-top: none !important;
++      box-shadow: none !important;
++      padding-top: 0 !important;
++    }
++  }
++  @media (-moz-platform: windows-win8) {
++    #navigator-toolbox {
++      border-top: none !important;
++    }
++  }
++}
+diff --git a/browser/themes/shared/preferences/preferences.css b/browser/themes/shared/preferences/preferences.css
+index 6055822c810cc2344926ff32bd8aee81cf8f5502..8bb03b9f19a514bc7e590476fe64baeb7135fd7c 100644
+--- a/browser/themes/shared/preferences/preferences.css
++++ b/browser/themes/shared/preferences/preferences.css
+@@ -537,6 +537,14 @@ html|label[disabled] {
+   margin-inline-start: 0;
+ }
+ 
++@media (-moz-platform: windows-win7),
++       (-moz-platform: windows-win8) {
++  #windows-sso,
++  #windows-sso-caption {
++    display: none;
++  }
++}
++
+ /**
+  * Dialog
+  */
+diff --git a/browser/themes/shared/search/searchbar.css b/browser/themes/shared/search/searchbar.css
+index 452c4cde34c8fe2beac44418e615304a2bfe35fc..80b984d4ef3da672911ae8a141293c5f5e055908 100644
+--- a/browser/themes/shared/search/searchbar.css
++++ b/browser/themes/shared/search/searchbar.css
+@@ -168,7 +168,7 @@
+   fill-opacity: var(--urlbar-icon-fill-opacity);
+ }
+ 
+-@media (-moz-platform: windows) {
++@media (-moz-platform: windows-win10) {
+   #PopupSearchAutoComplete {
+     --panel-border-radius: inherit;
+   }
+diff --git a/browser/themes/shared/urlbar/urlbar.tokens.css b/browser/themes/shared/urlbar/urlbar.tokens.css
+index c683488b688ac1e1ebabb5a25dc669aa8e43a207..269c1bad55e3068021978d1afa2be04e129ec705 100644
+--- a/browser/themes/shared/urlbar/urlbar.tokens.css
++++ b/browser/themes/shared/urlbar/urlbar.tokens.css
+@@ -52,7 +52,7 @@
+     }
+ 
+     @layer tokens-forced-colors-nova {
+-      @media ((-moz-platform: windows) and (not (-moz-windows-default-theme))) or ((not (-moz-platform: windows)) and (forced-colors)) {
++      @media ((-moz-platform: windows) and (-moz-windows-default-theme: 0)) or ((not (-moz-platform: windows)) and (forced-colors)) {
+         --urlbar-box-background-color: var(--button-background-color-ghost);
+         --urlbar-box-background-color-hover: var(--button-background-color-ghost-hover);
+         --urlbar-box-background-color-active: var(--button-background-color-ghost-active);
+diff --git a/browser/themes/windows/browser-aero.css b/browser/themes/windows/browser-aero.css
+index 14b26d83613ac36ebc26d4f7ad9cd1e92a95f6b7..f17f1428208695f51adb75ac8bcbfc51b31c6466 100644
+--- a/browser/themes/windows/browser-aero.css
++++ b/browser/themes/windows/browser-aero.css
+@@ -2,159 +2,338 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-@media (-moz-windows-default-theme) {
+-  @media (-moz-windows-accent-color-in-titlebar) {
+-    :root[sizemode=normal][customtitlebar] #navigator-toolbox {
+-      border-top: .5px solid ActiveBorder;
++:root {
++  --glass-active-border-color: rgb(37, 44, 51);
++  --glass-inactive-border-color: rgb(102, 102, 102);
++  --glass-shadow-color: hsla(240,5%,5%,0.3);
++}
++
++@media (-moz-platform: windows-win7),
++       (-moz-platform: windows-win8) {
++  @media (-moz-windows-classic: 0) {
++    :root[sizemode="normal"] #toolbar-menubar:not([autohide="true"]) > #menubar-items,
++    :root[sizemode="normal"] #toolbar-menubar[autohide="true"][inactive] + #TabsToolbar > .toolbar-items {
++      margin-top: 1px;
++    }
++    /**
++     * Except for Windows 8, Windows 7 Aero and Windows 7 Aero Basic, the
++     * -moz-window-button-box appearance on the .titlebar-buttonbox adds an
++     * unwanted margin at the top of the button box.
++     *
++     * For Windows 8 and Windows Aero (which both use the compositor):
++     *   We want the -moz-window-button-box applied in the restored case,
++     *   and -moz-window-button-box-maximized in the maximized case.
++     *
++     * For Windows Aero Basic:
++     *   The margin is also unwanted in the maximized case, but we want
++     *   it in the restored window case.
++     */
++    :root[sizemode="normal"] .titlebar-buttonbox {
++      appearance: auto;
++      -moz-default-appearance: -moz-window-button-box;
+     }
+-  }
+ 
+-  :root[sizemode=normal][customtitlebar]:-moz-window-inactive #navigator-toolbox {
+-    border-top-color: InactiveBorder;
++    @media (-moz-windows-compositor) {
++      :root[sizemode="maximized"] .titlebar-buttonbox {
++        appearance: auto;
++        -moz-default-appearance: -moz-window-button-box-maximized;
++      }
++    }
+   }
++}
+ 
+-  :root[customtitlebar] .tab-label:-moz-window-inactive {
+-    /* Calculated to match the opacity change of Windows Explorer
+-       titlebar text change for inactive windows. */
+-    opacity: .6;
+-  }
++@media (-moz-windows-compositor) {
++  @media not (-moz-platform: windows-win7) {
++    @media not (-moz-platform: windows-win8) {
++      @media (-moz-windows-default-theme) {
++        @media (-moz-windows-accent-color-in-titlebar) {
++          :root[sizemode=normal][customtitlebar] #navigator-toolbox {
++            border-top: .5px solid ActiveBorder;
++          }
++        }
+ 
+-  :root[customtitlebar] .tab-secondary-label:-moz-window-inactive {
+-    opacity: .6;
+-  }
+-}
++        :root[sizemode=normal][customtitlebar] #navigator-toolbox:-moz-window-inactive {
++          border-top-color: InactiveBorder;
++        }
+ 
+-/* See bug 1715990 about why we do this ourselves on HCM */
+-@media (prefers-contrast) {
+-  :root[customtitlebar]:not([lwtheme]) {
+-    background-color: ActiveCaption;
+-    color: CaptionText;
+-  }
++        :root[customtitlebar] .tab-label:-moz-window-inactive {
++          /* Calculated to match the opacity change of Windows Explorer
++             titlebar text change for inactive windows. */
++          opacity: .6;
++        }
+ 
+-  :root[customtitlebar]:not([lwtheme]):-moz-window-inactive {
+-    background-color: InactiveCaption;
+-    color: InactiveCaptionText;
+-  }
+-}
++        :root[customtitlebar] .tab-secondary-label:-moz-window-inactive {
++          opacity: .6;
++        }
++      }
+ 
+-.titlebar-buttonbox,
+-.titlebar-button {
+-  appearance: none !important;
+-}
++      /* See bug 1715990 about why we do this ourselves on HCM */
++      @media (prefers-contrast) {
++        :root[customtitlebar]:not([lwtheme]) {
++          background-color: ActiveCaption;
++          color: CaptionText;
++        }
+ 
+-.titlebar-button {
+-  border: none;
+-  margin: 0 !important;
+-  /* Keep px padding for square hit targets; space tokens are rem-based on the Windows system font (12px). */
+-  /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-  padding: 8px 18px;
+-
+-  /* Segoe Fluent Icons is the preferred font for Windows 11, and
+-   * Segoe MDL2 Assets is there for windows 10. Luckily, the relevant glyphs
+-   * are the same, so we can just fall back.
+-   * See: https://learn.microsoft.com/en-us/windows/apps/design/style/segoe-fluent-icons-font */
+-  font:
+-    round(10px, env(hairline)) / 1 "Segoe Fluent Icons",
+-    "Segoe MDL2 Assets"; /* stylelint-disable-line font-family-no-missing-generic-family-keyword */
+-}
++        :root[customtitlebar]:not([lwtheme]):-moz-window-inactive {
++          background-color: InactiveCaption;
++          color: InactiveCaptionText;
++        }
++      }
+ 
+-.titlebar-button > .toolbarbutton-icon {
+-  display: none;
+-}
++      .titlebar-buttonbox,
++      .titlebar-button {
++        appearance: none !important;
++      }
+ 
+-.titlebar-button::before {
+-  display: inline-block;
+-  content: inherit;
+-}
++      .titlebar-button {
++        border: none;
++        margin: 0 !important;
++        /* Keep px padding for square hit targets; space tokens are rem-based on the Windows system font (12px). */
++        /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++        padding: 8px 18px;
+ 
+-.titlebar-min {
+-  content: "\e921"; /* ChromeMinimize */
+-}
++        /* Segoe Fluent Icons is the preferred font for Windows 11, and
++         * Segoe MDL2 Assets is there for windows 10. Luckily, the relevant glyphs
++         * are the same, so we can just fall back.
++         * See: https://learn.microsoft.com/en-us/windows/apps/design/style/segoe-fluent-icons-font */
++        font:
++          round(10px, env(hairline)) / 1 "Segoe Fluent Icons",
++          "Segoe MDL2 Assets"; /* stylelint-disable-line font-family-no-missing-generic-family-keyword */
++      }
+ 
+-.titlebar-max {
+-  content: "\e922"; /* ChromeMaximize */
+-}
++      .titlebar-button > .toolbarbutton-icon {
++        display: none;
++      }
+ 
+-.titlebar-restore {
+-  content: "\e923"; /* ChromeRestore */
+-}
++      .titlebar-button::before {
++        display: inline-block;
++        content: inherit;
++      }
+ 
+-.titlebar-restore:-moz-locale-dir(rtl)::before {
+-  transform: scaleX(-1);
+-}
++      .titlebar-min {
++        content: "\e921"; /* ChromeMinimize */
++      }
+ 
+-.titlebar-close {
+-  content: "\e8bb"; /* ChromeClose */
+-}
++      .titlebar-max {
++        content: "\e922"; /* ChromeMaximize */
++      }
+ 
+-@media (-moz-windows-default-theme) {
+-  #main-menubar > menu[_moz-menuactive="true"] {
+-    color: inherit;
+-  }
++      .titlebar-restore {
++        content: "\e923"; /* ChromeRestore */
++      }
+ 
+-  #main-menubar > menu[_moz-menuactive="true"],
+-  .titlebar-button:hover {
+-    background-color: hsla(0,0%,0%,.12);
+-  }
+-  .titlebar-button:hover:active {
+-    background-color: hsla(0,0%,0%,.22);
++      .titlebar-restore:-moz-locale-dir(rtl)::before {
++        transform: scaleX(-1);
++      }
++
++      .titlebar-close {
++        content: "\e8bb"; /* ChromeClose */
++      }
++
++      @media (-moz-windows-default-theme) {
++        #main-menubar > menu[_moz-menuactive="true"] {
++          color: inherit;
++        }
++
++        #main-menubar > menu[_moz-menuactive="true"],
++        .titlebar-button:hover {
++          background-color: hsla(0,0%,0%,.12);
++        }
++        .titlebar-button:hover:active {
++          background-color: hsla(0,0%,0%,.22);
++        }
++
++        #toolbar-menubar[brighttext] > #menubar-items > #main-menubar > menu[_moz-menuactive="true"],
++        toolbar[brighttext] .titlebar-button:not(.titlebar-close):hover {
++          background-color: hsla(0,0%,100%,.22);
++        }
++        toolbar[brighttext] .titlebar-button:not(.titlebar-close):hover:active {
++          background-color: hsla(0,0%,100%,.32);
++        }
++
++        .titlebar-close:hover {
++          /* Uses native Windows colors */
++          color: white;
++          /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++          background-color: hsl(355,86%,49%);
++        }
++        .titlebar-close:hover:active {
++          /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
++          background-color: hsl(355,82%,69%);
++        }
++
++        .titlebar-button:not(:hover):-moz-window-inactive::before {
++          opacity: 0.5;
++        }
++      }
++
++      @media (-moz-windows-default-theme: 0) {
++        .titlebar-button {
++          background-color: -moz-field;
++          color: ButtonText;
++        }
++        .titlebar-button:hover {
++          background-color: SelectedItem;
++          color: SelectedItemText;
++        }
++
++        .titlebar-min {
++          content: "\ef2d"; /* ChromeMinimizeContrast */
++        }
++
++        .titlebar-max {
++          content: "\ef2e"; /* ChromeMaximizeContrast */
++        }
++
++        .titlebar-restore {
++          content: "\ef2f"; /* ChromeRestoreContrast */
++        }
++
++        .titlebar-close {
++          content: "\ef2c"; /* ChromeCloseContrast */
++        }
++      }
++    }
+   }
+ 
+-  #toolbar-menubar[brighttext] > #menubar-items > #main-menubar > menu[_moz-menuactive="true"],
+-  toolbar[brighttext] .titlebar-button:not(.titlebar-close):hover {
+-    background-color: hsla(0,0%,100%,.22);
++  @media (-moz-platform: windows-win7),
++         (-moz-platform: windows-win8) {
++    :root {
++      background-color: transparent;
++      appearance: auto;
++      -moz-default-appearance: -moz-win-borderless-glass;
++    }
++
++    :root[sizemode="maximized"] .titlebar-buttonbox {
++      margin-inline-end: 3px;
++    }
++
++    /* These should be hidden w/ glass enabled. Windows draws its own buttons. */
++    .titlebar-button {
++      display: none;
++    }
++
++    /* The borders on the glass frame are ours, and inside #browser, and on
++     * win7 we want to make sure they are "glassy", so we can't use #browser
++     * as the exclude-glass container. We use #appcontent instead. */
++    #appcontent {
++      appearance: auto;
++      -moz-default-appearance: -moz-win-exclude-glass;
++    }
++
++    :root:not([lwtheme]) body,
++    :root:not([lwtheme]) body:-moz-window-inactive,
++    :root:not([lwtheme]) #navigator-toolbox,
++    :root:not([lwtheme]) #navigator-toolbox:-moz-window-inactive {
++      background-color: transparent;
++    }
++
++    @media -moz-pref("sidebar.verticalTabs") {
++      #browser {
++        background-color: var(--toolbox-background-color);
++        color: var(--toolbox-text-color);
++
++        &:-moz-window-inactive {
++          background-color: var(--toolbox-background-color-inactive);
++          color: var(--toolbox-text-color-inactive);
++        }
++      }
++
++      #PersonalToolbar,
++      #notifications-toolbar {
++        background-color: var(--toolbar-background-color);
++        color: var(--toolbar-text-color);
++      }
++    }
+   }
+-  toolbar[brighttext] .titlebar-button:not(.titlebar-close):hover:active {
+-    background-color: hsla(0,0%,100%,.32);
++
++  @media (-moz-platform: windows-win8) {
++    /* Artificially draw window borders that are covered by lwtheme, see bug 591930.
++     * Borders for win7 are below, win10 only needs something like this when
++     * drawing in the titlebar (-moz-windows-accent-color-in-titlebar). */
++    #main-window[lwtheme][sizemode="normal"] #navigator-toolbox {
++      border-top: 1px solid var(--glass-shadow-color);
++    }
+   }
+ 
+-  .titlebar-close:hover {
+-    /* Uses native Windows colors */
++  :root[darkwindowframe="true"]:not(:-moz-window-inactive, [lwtheme]) {
+     color: white;
+-    /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-    background-color: hsl(355,86%,49%);
+-  }
+-  .titlebar-close:hover:active {
+-    /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+-    background-color: hsl(355,82%,69%);
+   }
+ 
+-  .titlebar-button:not(:hover):-moz-window-inactive::before {
+-    opacity: 0.5;
++  :root:not([lwtheme]) #appcontent {
++    background-color: -moz-dialog;
+   }
+ }
+ 
+-@media (-moz-windows-default-theme: 0) {
+-  .titlebar-button {
+-    background-color: -moz-field;
+-    color: ButtonText;
+-  }
+-  .titlebar-button:hover {
+-    background-color: SelectedItem;
+-    color: SelectedItemText;
++@media (-moz-windows-glass) {
++  :root:not([lwtheme]) #toolbar-menubar {
++    text-shadow: 0 0 .5em white, 0 0 .5em white, 0 1px 0 rgba(255,255,255,.4);
+   }
+ 
+-  .titlebar-min {
+-    content: "\ef2d"; /* ChromeMinimizeContrast */
++  :root:not([lwtheme]) #main-menubar:not(:-moz-window-inactive) {
++    background-color: rgba(255,255,255,.5);
++    color: black;
++    border-radius: 4px;
+   }
+ 
+-  .titlebar-max {
+-    content: "\ef2e"; /* ChromeMaximizeContrast */
++  /* Artificially draw window borders that are covered by lwtheme, see bug 591930.
++   * We use a different border for win8, and this win10+ only needs this if
++   * drawing in the titlebar (-moz-windows-accent-color-in-titlebar). */
++  #main-window[lwtheme][sizemode="normal"] #navigator-toolbox {
++    border-top: 1px solid var(--glass-active-border-color);
++    padding-top: 1px;
++    box-shadow: 0 1px 0 rgba(255,255,255,.6) inset;
+   }
+ 
+-  .titlebar-restore {
+-    content: "\ef2f"; /* ChromeRestoreContrast */
++  #main-window[lwtheme][sizemode="normal"] #navigator-toolbox:-moz-window-inactive {
++    border-top-color: var(--glass-inactive-border-color);
+   }
++}
+ 
+-  .titlebar-close {
+-    content: "\ef2c"; /* ChromeCloseContrast */
++/* Aero Basic */
++@media (-moz-windows-compositor: 0) {
++  @media -moz-pref("sidebar.verticalTabs") {
++    #browser,
++    #PersonalToolbar,
++    #notifications-toolbar {
++      background-color: var(--toolbar-background-color);
++      color: var(--toolbar-text-color);
++    }
++
++    @media -moz-pref("browser.nova.enabled") {
++      #sidebar-container {
++        --toolbox-text-color: var(--toolbar-text-color);
++        --toolbox-text-color-inactive: var(--toolbar-text-color);
++        color: var(--toolbar-text-color);
++        --toolbarbutton-icon-fill: currentColor;
++      }
++    }
+   }
+ 
+-  :root[darkwindowframe="true"]:not(:-moz-window-inactive, [lwtheme]) {
+-    color: white;
++  @media (-moz-windows-default-theme) {
++    :root {
++      background-color: rgb(185,209,234);
++    }
++    :root:-moz-window-inactive {
++      background-color: rgb(215,228,242);
++    }
++
++    /* Render a window top border for lwthemes: */
++    #main-window[customtitlebar][lwtheme][sizemode="normal"] #navigator-toolbox {
++      background-image: linear-gradient(to bottom,
++            var(--glass-active-border-color) 0, var(--glass-active-border-color) 1px,
++            rgba(255,255,255,.6) 1px, rgba(255,255,255,.6) 2px, transparent 2px);
++    }
++
++    #main-window[customtitlebar][lwtheme][sizemode="normal"] #navigator-toolbox:-moz-window-inactive {
++      background-image: linear-gradient(to bottom,
++            var(--glass-inactive-border-color) 0, var(--glass-inactive-border-color) 1px,
++            rgba(255,255,255,.6) 1px, rgba(255,255,255,.6) 2px, transparent 2px);
++    }
+   }
+ 
+-  :root:not([lwtheme]) #appcontent {
+-    background-color: -moz-dialog;
++  :root:not([lwtheme]) #print-preview-toolbar {
++    appearance: auto;
++    -moz-default-appearance: -moz-win-browsertabbar-toolbox;
+   }
+ }
+diff --git a/browser/themes/windows/browser.css b/browser/themes/windows/browser.css
+index 260d96c004ab829f07a50a3428d2259068f7245d..091337762f5362571f6860c4f4126de8739a8da9 100644
+--- a/browser/themes/windows/browser.css
++++ b/browser/themes/windows/browser.css
+@@ -77,6 +77,115 @@
+   }
+ }
+ 
++@media (-moz-platform: windows-xp),
++       (-moz-platform: windows-win7),
++       (-moz-platform: windows-win8) {
++  @media -moz-pref("browser.nova.enabled") and (not (forced-colors)) {
++    :root:is([theme-in-app], :not([lwtheme])) {
++      @media not (-moz-native-theme) {
++        --toolbar-background-color: var(--background-color-box);
++
++        &[sidebar-expand-on-hover]:not([theme-effective-id="firefox-privatewindow@mozilla.org"]) #sidebar-container {
++          background-image: none;
++          background-color: var(--toolbar-background-color);
++        }
++      }
++
++      --tab-background-color: transparent;
++      --tab-text-color-selected: var(--toolbar-text-color);
++
++      .tab-close-button {
++        --button-background-color-ghost: transparent;
++        --tab-close-button-text-color: currentColor;
++        --tab-close-button-text-color-hover: currentColor;
++        --tab-close-button-text-color-active: currentColor;
++        fill: currentColor;
++      }
++
++      #TabsToolbar {
++        --tab-text-color: currentColor;
++        --tab-text-color-hover: currentColor;
++
++        @media (-moz-windows-glass) and (-moz-windows-default-theme) {
++          :root:not([lwtheme]) & {
++            color: black;
++            --toolbarbutton-icon-fill: currentColor;
++          }
++        }
++      }
++
++      #sidebar-container {
++        /* Rebind tab tokens here; inherited aliases were resolved on :root. */
++        --tab-text-color: var(--toolbar-text-color);
++        --tab-text-color-hover: var(--toolbar-text-color);
++        --tab-text-color-selected: var(--toolbar-text-color);
++        color: var(--toolbar-text-color);
++        --toolbarbutton-icon-fill: currentColor;
++      }
++    }
++  }
++}
++
++/* Add 4px extra margin on top of the tabs toolbar on Windows 7. */
++@media (-moz-platform: windows-win7) {
++  :root[sizemode="normal"][chromehidden~="menubar"] #TabsToolbar > .toolbar-items,
++  :root[sizemode="normal"] #toolbar-menubar[autohide="true"][inactive] + #TabsToolbar > .toolbar-items {
++    padding-top: 4px;
++  }
++}
++
++/* Add a fog for background tabs to be visible on Windows 7 glass window background */
++@media (-moz-platform: windows-win7) {
++  @media (-moz-windows-default-theme) {
++    :root:not([lwtheme]) :is(#TabsToolbar, #navigator-toolbox[tabs-hidden] #nav-bar) {
++      background-image: radial-gradient(ellipse at bottom, rgba(255,255,255,0.8), rgba(255,255,255,0.5) 80%, transparent);
++    }
++  }
++}
++
++@media (-moz-windows-compositor: 0),
++       (-moz-windows-default-theme: 0),
++       (-moz-platform: windows-win8) {
++  /* Please keep the menu text colors in this media block in sync with
++   * light-dark-overrides.css, minus the :not(:-moz-lwtheme) condition - see Bug 1165718.
++   */
++  :root[customtitlebar]:not([lwtheme]) {
++    --toolbox-background-color: ActiveCaption;
++    --toolbox-text-color: CaptionText;
++    --toolbox-background-color-inactive: InactiveCaption;
++    --toolbox-text-color-inactive: InactiveCaptionText;
++    color: CaptionText;
++      --toolbarbutton-icon-fill: currentColor;
++  }
++
++  :root[customtitlebar]:not([lwtheme]):-moz-window-inactive {
++    color: InactiveCaptionText;
++  }
++
++  :root[customtitlebar]:not([lwtheme]) .browser-titlebar {
++    color: CaptionText;
++
++    &:-moz-window-inactive {
++      color: InactiveCaptionText;
++    }
++  }
++}
++
++@media (-moz-windows-classic) {
++  /* Add a window top border for webextension themes */
++  :root[customtitlebar][lwtheme][sizemode="normal"] #navigator-toolbox {
++    background-image: linear-gradient(to bottom,
++          ThreeDLightShadow 0, ThreeDLightShadow 1px,
++          ThreeDHighlight 1px, ThreeDHighlight 2px,
++          ActiveBorder 2px, ActiveBorder 4px, transparent 4px);
++  }
++
++  :root[customtitlebar]:not([lwtheme]) :is(#TabsToolbar, #toolbar-menubar) toolbarbutton {
++    color: inherit;
++  }
++}
++
++
+ /* Titlebar */
+ 
+ :root[customtitlebar][sizemode="normal"] #titlebar {
+@@ -89,6 +198,31 @@
+   -moz-default-appearance: -moz-window-titlebar-maximized;
+ }
+ 
++@media (-moz-windows-compositor: 0) {
++  /**
++   * Anytime we're not using the compositor on Windows, the -moz-window-titlebar
++   * and -moz-window-titlebar-maximized values for -moz-appearance override
++   * backgrounds supplied by lwthemes. Hide the .browser-titlebar backgrounds,
++   * but keep their children visible in order to retain the margins supplied
++   * by those native titlebar rules.
++   */
++  :root[lwtheme]:not([inFullscreen]) .browser-titlebar:not([collapsed]) {
++    visibility: hidden;
++  }
++  :root[lwtheme]:not([inFullscreen], [chromehidden~="menubar"]) #toolbar-menubar:not([collapsed]) > *,
++  :root[lwtheme]:not([inFullscreen], [chromehidden~="toolbar"]) #TabsToolbar:not([collapsed]) > *,
++  :root[lwtheme]:not([inFullscreen], [chromehidden~="toolbar"]) #nav-bar.browser-titlebar:not([collapsed]) > * {
++    visibility: visible;
++  }
++}
++
++@media (-moz-windows-classic) {
++  :root[customtitlebar][sizemode="normal"] #toolbar-menubar {
++    margin-top: 4px;
++  }
++}
++
++
+ .titlebar-buttonbox {
+   /* For all Windows configurations except for Windows Aero and Windows Aero Basic,
+    * the default -moz-default-appearance of -moz-window-button-box and
+@@ -107,6 +241,13 @@
+ .titlebar-buttonbox-container {
+   align-items: stretch;
+ }
++@media (-moz-platform: windows-win7),
++       (-moz-platform: windows-win8) {
++  /* Preserve window control buttons position at the top of the button box. */
++  .titlebar-buttonbox-container {
++    align-items: flex-start;
++  }
++}
+ 
+ /* Window control buttons */
+ 
+@@ -118,7 +259,6 @@
+ .titlebar-min {
+   appearance: auto;
+   -moz-default-appearance: -moz-window-button-minimize;
+-  margin-inline-end: 2px;
+ }
+ 
+ .titlebar-max {
+@@ -135,6 +275,12 @@
+   appearance: auto;
+   -moz-default-appearance: -moz-window-button-close;
+ }
++@media (-moz-windows-classic: 0) {
++  .titlebar-min {
++    margin-inline-end: 2px;
++  }
++}
++
+ 
+ :root[win10-tablet-mode] .titlebar-min,
+ :root[win10-tablet-mode] .titlebar-restore,
+@@ -171,7 +317,7 @@
+   font-size: 1.15em;
+ }
+ 
+-@media not (-moz-windows-default-theme) {
++@media (-moz-windows-default-theme: 0) {
+   :root:not([lwtheme]) {
+     #searchbar:not(:focus-within),
+     .findbar-textbox:not(:focus) {
+@@ -190,7 +336,7 @@
+ 
+ /* Address bar results view */
+ 
+-@media not (-moz-windows-default-theme) {
++@media (-moz-windows-default-theme: 0) {
+   :root:not([lwtheme]) {
+     --urlbar-popup-action-color: LinkText;
+   }
+@@ -207,7 +353,7 @@
+   padding: 0;
+ }
+ 
+-@media not (-moz-windows-default-theme) {
++@media (-moz-windows-default-theme: 0) {
+   /* For high contrast themes. */
+   #tabbrowser-tabpanels,
+   :root[privatebrowsingmode="temporary"] #tabbrowser-tabpanels {
+@@ -265,3 +411,20 @@ menupopup[touchmode] :is(menu, menuitem, menucaption) {
+ #context-sep-navigation {
+   padding-inline: 0;
+ }
++
++:root[customtitlebar][sizemode="normal"] .browser-titlebar:not([collapsed], [autohide][inactive]:not([customizing])) {
++  appearance: auto;
++  -moz-default-appearance: -moz-window-titlebar;
++}
++
++:root[customtitlebar][sizemode="maximized"] .browser-titlebar:not([collapsed], [autohide][inactive]:not([customizing])) {
++  appearance: auto;
++  -moz-default-appearance: -moz-window-titlebar-maximized;
++}
++
++/* Only the first visible titlebar toolbar needs native caption padding. */
++@media (-moz-windows-compositor) {
++:root[customtitlebar]:not([chromehidden~="menubar"]) #toolbar-menubar:not([collapsed], [autohide][inactive]:not([customizing])) ~ .browser-titlebar {
++  appearance: none;
++}
++}
+diff --git a/browser/themes/windows/customizableui/panelUI.css b/browser/themes/windows/customizableui/panelUI.css
+index 793f5782c65cecb7060c61774e6ddf48b1af06c2..c096526f789aafa32894dfdebbdd5fdb44c44a82 100644
+--- a/browser/themes/windows/customizableui/panelUI.css
++++ b/browser/themes/windows/customizableui/panelUI.css
+@@ -10,3 +10,13 @@ menupopup::part(drop-indicator) {
+   /* To account for the shadow margin + border of the panel */
+   margin-inline-start: calc(var(--panel-box-shadow-margin) + var(--border-width));
+ }
++
++@media not (-moz-windows-non-native-menus) {
++  .toolbar-menupopup {
++    --panel-box-shadow-margin: 4px;
++  }
++
++  .toolbar-menupopup menupopup {
++    margin-inline-start: calc(-1 * (var(--panel-menuitem-padding-inline) + var(--panel-box-shadow-margin)));
++  }
++}
+diff --git a/layout/painting/nsCSSRendering.cpp b/layout/painting/nsCSSRendering.cpp
+index 4f19c54efdda80311066e4d5bc8ecca14dde8760..d7601377f1830f34eadeab1a0dbfbfc66dbbd790 100644
+--- a/layout/painting/nsCSSRendering.cpp
++++ b/layout/painting/nsCSSRendering.cpp
+@@ -22,6 +22,7 @@
+ #include "gfxUtils.h"
+ #include "imgIContainer.h"
+ #include "mozilla/ComputedStyle.h"
++#include "mozilla/LookAndFeel.h"
+ #include "mozilla/PresShell.h"
+ #include "mozilla/ProfilerLabels.h"
+ #include "mozilla/SVGImageContext.h"
+@@ -2444,23 +2445,29 @@ ImgDrawResult nsCSSRendering::PaintStyleImageLayerWithSC(
+   MOZ_ASSERT(aParams.layer != -1 ||
+              aParams.compositionOp == CompositionOp::OP_OVER);
+ 
+-  // Check to see if we have an appearance defined.  If so, we let the theme
+-  // renderer draw the background and bail out.
+-  // XXXzw this ignores aParams.bgClipRect.
+   StyleAppearance appearance =
+       aParams.frame->StyleDisplay()->EffectiveAppearance();
+-  if (appearance != StyleAppearance::None) {
++  bool isThemed = aParams.frame->IsThemed();
++#ifdef XP_WIN
++  if ((appearance == StyleAppearance::MozWindowTitlebar ||
++       appearance == StyleAppearance::MozWindowTitlebarMaximized) &&
++      LookAndFeel::GetInt(LookAndFeel::IntID::DWMCompositor)) {
++    // Keep the fallback path consistent with WebRender for titlebar fog.
++    isThemed = false;
++  }
++#endif
++
++  // Let the theme renderer draw native backgrounds and bail out.
++  // XXXzw this ignores aParams.bgClipRect.
++  if (isThemed) {
+     nsITheme* theme = aParams.presCtx.Theme();
+-    if (theme->ThemeSupportsWidget(&aParams.presCtx, aParams.frame,
+-                                   appearance)) {
+-      nsRect drawing(aParams.borderArea);
+-      theme->GetWidgetOverflow(aParams.presCtx.DeviceContext(), aParams.frame,
+-                               appearance, &drawing);
+-      drawing.IntersectRect(drawing, aParams.dirtyRect);
+-      theme->DrawWidgetBackground(&aRenderingCtx, aParams.frame, appearance,
+-                                  aParams.borderArea, drawing);
+-      return ImgDrawResult::SUCCESS;
+-    }
++    nsRect drawing(aParams.borderArea);
++    theme->GetWidgetOverflow(aParams.presCtx.DeviceContext(), aParams.frame,
++                             appearance, &drawing);
++    drawing.IntersectRect(drawing, aParams.dirtyRect);
++    theme->DrawWidgetBackground(&aRenderingCtx, aParams.frame, appearance,
++                                aParams.borderArea, drawing);
++    return ImgDrawResult::SUCCESS;
+   }
+ 
+   // For canvas frames (in the CSS sense) we draw the background color using
+diff --git a/layout/painting/nsDisplayList.cpp b/layout/painting/nsDisplayList.cpp
+index 2f07834baca1d056995a7f3bc751f5c9fe17f0a6..8df98acf692d3c1842322e668f0059f2cbfc96df 100644
+--- a/layout/painting/nsDisplayList.cpp
++++ b/layout/painting/nsDisplayList.cpp
+@@ -1925,7 +1925,9 @@ void nsDisplayListBuilder::AdjustWindowDraggingRegion(nsIFrame* aFrame) {
+     return;
+   }
+ 
+-  if (!aFrame->StyleVisibility()->IsVisible()) {
++  if (!aFrame->StyleVisibility()->IsVisible() &&
++       aFrame->StyleDisplay()->EffectiveAppearance() != StyleAppearance::MozWindowTitlebar &&
++       aFrame->StyleDisplay()->EffectiveAppearance() != StyleAppearance::MozWindowTitlebarMaximized) {
+     // Invisible frames don't influence the window dragging region.
+     return;
+   }
+@@ -3268,7 +3270,16 @@ AppendedBackgroundType nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+ 
+   DealWithWindowsAppearanceHacks(aFrame, aBuilder);
+ 
+-  const bool isThemed = aFrame->IsThemed();
++  bool isThemed = aFrame->IsThemed();
++#ifdef XP_WIN
++  const auto appearance = aFrame->StyleDisplay()->EffectiveAppearance();
++  if ((appearance == StyleAppearance::MozWindowTitlebar ||
++       appearance == StyleAppearance::MozWindowTitlebarMaximized) &&
++      LookAndFeel::GetInt(LookAndFeel::IntID::DWMCompositor)) {
++    // Paint CSS backgrounds while retaining the native titlebar's metrics.
++    isThemed = false;
++  }
++#endif
+ 
+   const ComputedStyle* bgSC = aFrame->Style();
+   const nsStyleBackground* bg = bgSC->StyleBackground();
+@@ -4010,7 +4021,37 @@ Maybe<nscolor> nsDisplayThemedBackground::IsUniform(
+ }
+ 
+ nsRect nsDisplayThemedBackground::GetPositioningArea() const {
+-  return mBackgroundRect;
++  nsRect positioningArea(mBackgroundRect);
++#ifdef XP_WIN
++  const auto appearance = StyleFrame()->StyleDisplay()->EffectiveAppearance();
++  if (!LookAndFeel::GetInt(LookAndFeel::IntID::DWMCompositor) &&
++      (appearance == StyleAppearance::MozWindowTitlebar ||
++       appearance == StyleAppearance::MozWindowTitlebarMaximized)) {
++    nsIFrame* frame = StyleFrame();
++    const nsPoint offset = mBackgroundRect.TopLeft() - frame->GetPosition();
++    nsIFrame* first = frame;
++    for (nsIFrame* previous = frame->GetPrevSibling(); previous;
++         previous = previous->GetPrevSibling()) {
++      if (previous->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (previous->StyleDisplay()->EffectiveAppearance() != appearance) {
++        break;
++      }
++      first = previous;
++    }
++    for (nsIFrame* row = first; row; row = row->GetNextSibling()) {
++      if (row->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (row->StyleDisplay()->EffectiveAppearance() != appearance) {
++        break;
++      }
++      positioningArea.UnionRect(positioningArea, row->GetRect() + offset);
++    }
++  }
++#endif
++  return positioningArea;
+ }
+ 
+ void nsDisplayThemedBackground::Paint(nsDisplayListBuilder* aBuilder,
+diff --git a/layout/style/GeckoBindings.h b/layout/style/GeckoBindings.h
+index 08abd7335300939c5d09ad1f2b40f4a951f878c5..d794621985b8f1f62fef35ddbabbbeda87c9a0ea 100644
+--- a/layout/style/GeckoBindings.h
++++ b/layout/style/GeckoBindings.h
+@@ -587,6 +587,8 @@ int32_t Gecko_GetNumStyleThreads();
+ mozilla::StyleDisplayMode Gecko_MediaFeatures_GetDisplayMode(
+     const mozilla::dom::Document*);
+ 
++bool Gecko_MediaFeatures_WindowsNonNativeMenus(const mozilla::dom::Document*);
++
+ void Gecko_GetSubmitString(const mozilla::dom::Document*, nsAString*);
+ bool Gecko_MediaFeatures_UseOverlayScrollbars(const mozilla::dom::Document*);
+ int32_t Gecko_MediaFeatures_GetColorDepth(const mozilla::dom::Document*);
+diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
+index bc737614fe036c9a3e769e6f4073f53cacc48215..cb3ad61afdd1e6ade2708daa57daf76289148f9b 100644
+--- a/layout/style/nsMediaFeatures.cpp
++++ b/layout/style/nsMediaFeatures.cpp
+@@ -17,6 +17,7 @@
+ #include "mozilla/dom/DocumentInlines.h"
+ #include "mozilla/dom/ScreenBinding.h"
+ #include "mozilla/gfx/gfxVars.h"
++#include "mozilla/WindowsVersion.h"
+ #include "nsCSSProps.h"
+ #include "nsCSSValue.h"
+ #include "nsContentUtils.h"
+@@ -97,6 +98,11 @@ static nsSize GetDeviceSize(const Document& aDocument) {
+   return pc->DeviceContext()->GetDeviceSurfaceDimensions();
+ }
+ 
++bool Gecko_MediaFeatures_WindowsNonNativeMenus(const Document* aDocument) {
++  return LookAndFeel::WindowsNonNativeMenusEnabled() ||
++         aDocument->ShouldAvoidNativeTheme();
++}
++
+ bool Gecko_MediaFeatures_IsResourceDocument(const Document* aDocument) {
+   return aDocument->IsResourceDoc();
+ }
+@@ -253,6 +259,17 @@ bool Gecko_MediaFeatures_MatchesPlatform(StylePlatform aPlatform) {
+ #if defined(XP_WIN)
+     case StylePlatform::Windows:
+       return true;
++    case StylePlatform::WindowsWin10:
++    case StylePlatform::WindowsWin7:
++    case StylePlatform::WindowsWin8: {
++      if (IsWin10OrLater()) {
++        return aPlatform == StylePlatform::WindowsWin10;
++      }
++      if (IsWin8OrLater()) {
++        return aPlatform == StylePlatform::WindowsWin8;
++      }
++      return aPlatform == StylePlatform::WindowsWin7;
++    }
+ #elif defined(ANDROID)
+     case StylePlatform::Android:
+       return true;
+diff --git a/servo/components/style/gecko/media_features.rs b/servo/components/style/gecko/media_features.rs
+index 297b31bcfd628b67e18facf2fa73461b2a081767..9659e4fe00174ad2343832cd9f15a1fdbf666ca0 100644
+--- a/servo/components/style/gecko/media_features.rs
++++ b/servo/components/style/gecko/media_features.rs
+@@ -557,6 +557,12 @@ pub enum Platform {
+     Macos,
+     /// Matches any Windows version.
+     Windows,
++    /// Matches only Windows 7.
++    WindowsWin7,
++    /// Matches only Windows 8.
++    WindowsWin8,
++    /// Matches windows 10 and actually matches windows 11 too, as of right now.
++    WindowsWin10,
+ }
+ 
+ fn eval_moz_platform(_: &Context, query_value: Option<Platform>) -> bool {
+@@ -615,6 +621,10 @@ fn eval_scripting(context: &Context, query_value: Option<Scripting>) -> bool {
+     }
+ }
+ 
++fn eval_moz_windows_non_native_menus(context: &Context) -> bool {
++    unsafe { bindings::Gecko_MediaFeatures_WindowsNonNativeMenus(context.device().document()) }
++}
++
+ fn eval_moz_overlay_scrollbars(context: &Context) -> bool {
+     unsafe { bindings::Gecko_MediaFeatures_UseOverlayScrollbars(context.device().document()) }
+ }
+@@ -659,7 +669,7 @@ macro_rules! lnf_int_feature {
+ /// to support new types in these entries and (2) ensuring that either
+ /// nsPresContext::MediaFeatureValuesChanged is called when the value that
+ /// would be returned by the evaluator function could change.
+-pub static MEDIA_FEATURES: [QueryFeatureDescription; 62] = [
++pub static MEDIA_FEATURES: [QueryFeatureDescription; 66] = [
+     feature!(
+         atom!("width"),
+         AllowsRanges::Yes,
+@@ -924,6 +934,12 @@ pub static MEDIA_FEATURES: [QueryFeatureDescription; 62] = [
+         Evaluator::BoolInteger(eval_moz_print_preview),
+         FeatureFlags::CHROME_AND_UA_ONLY,
+     ),
++    feature!(
++        atom!("-moz-windows-non-native-menus"),
++        AllowsRanges::No,
++        Evaluator::BoolInteger(eval_moz_windows_non_native_menus),
++        FeatureFlags::CHROME_AND_UA_ONLY,
++    ),
+     feature!(
+         atom!("-moz-overlay-scrollbars"),
+         AllowsRanges::No,
+@@ -951,6 +967,9 @@ pub static MEDIA_FEATURES: [QueryFeatureDescription; 62] = [
+         atom!("-moz-windows-accent-color-in-titlebar"),
+         WindowsAccentColorInTitlebar
+     ),
++    lnf_int_feature!(atom!("-moz-windows-compositor"), DWMCompositor),
++    lnf_int_feature!(atom!("-moz-windows-classic"), WindowsClassic),
++    lnf_int_feature!(atom!("-moz-windows-glass"), WindowsGlass),
+     lnf_int_feature!(atom!("-moz-windows-mica"), WindowsMica),
+     lnf_int_feature!(atom!("-moz-windows-mica-popups"), WindowsMicaPopups),
+     lnf_int_feature!(atom!("-moz-swipe-animation-enabled"), SwipeAnimationEnabled),
+diff --git a/toolkit/modules/LightweightThemeConsumer.sys.mjs b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+index ae69f598342dc3b74b2211e20955b386539caecb..e5b7cea5e20fb786f2a670b30b5c7a56197aabaf 100644
+--- a/toolkit/modules/LightweightThemeConsumer.sys.mjs
++++ b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+@@ -353,7 +353,11 @@ LightweightThemeConsumer.prototype = {
+     } else if (
+       shouldMakePrivateWindowDark &&
+       lazy.BROWSER_NOVA_ENABLED &&
+-      isDefaultOrInApp
++      isDefaultOrInApp &&
++      (themeId === DEFAULT_THEME_ID ||
++        !this._win.matchMedia(
++          "(-moz-platform: windows-xp), (-moz-platform: windows-win7), (-moz-platform: windows-win8)"
++        ).matches)
+     ) {
+       // When in a private window, with nova enabled and any of the in-app themes active,
+       // substitute the built-in private-window theme. Other themes are unchanged.
+diff --git a/toolkit/themes/shared/checkbox.css b/toolkit/themes/shared/checkbox.css
+index 39243c858ec982d6e111c0539a345f78fcdf12aa..45883eef4812176b9917d8b13549e09e2a1825fe 100644
+--- a/toolkit/themes/shared/checkbox.css
++++ b/toolkit/themes/shared/checkbox.css
+@@ -18,6 +18,13 @@ checkbox {
+   }
+ }
+ 
++@media (-moz-windows-classic) {
++  checkbox[native][disabled] {
++    color: ThreeDShadow;
++    text-shadow: 1px 1px ThreeDHighlight;
++  }
++}
++
+ .checkbox-icon {
+   margin-inline-end: 2px;
+ 
+diff --git a/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs b/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
+index 4175cc39e95c3af0b947a60a0d9f217506f4d46c..e275f10ebfbeffd28621f0e33c5403c4d9d705ac 100644
+--- a/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
++++ b/toolkit/themes/shared/design-system/config/helpers/desktop-format/get-token-css.mjs
+@@ -39,7 +39,7 @@ export const getTokenCSS = ({
+     sharedLayers += `\n\n  @layer tokens-forced-colors${overrideIdentifier ? `-${overrideIdentifier}` : ""} {
+     @media ${
+       componentName === "urlbar" && overrideIdentifier === "nova"
+-        ? "((-moz-platform: windows) and (not (-moz-windows-default-theme))) or ((not (-moz-platform: windows)) and (forced-colors))"
++        ? "((-moz-platform: windows) and (-moz-windows-default-theme: 0)) or ((not (-moz-platform: windows)) and (forced-colors))"
+         : "(forced-colors)"
+     } {
+       ${forcedColors.join("\n      ")}
+diff --git a/toolkit/themes/shared/menu.css b/toolkit/themes/shared/menu.css
+index ee9d5e57cad05464bda2c403390663cbc1ccd487..53a6195b443b68105c82ed06618f6c0bb242a223 100644
+--- a/toolkit/themes/shared/menu.css
++++ b/toolkit/themes/shared/menu.css
+@@ -54,7 +54,7 @@ panel {
+   @media (-moz-platform: windows) {
+     --menu-arrow-size: max(1em, var(--size-item-small));
+ 
+-    @media (prefers-color-scheme: light) {
++    @media (prefers-color-scheme: light) and (-moz-windows-non-native-menus) {
+       --menu-arrow-opacity: var(--opacity-deemphasized);
+     }
+   }
+@@ -95,6 +95,25 @@ menupopup {
+     /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+     margin-top: calc(-1 * (var(--panel-box-shadow-margin) + var(--panel-padding-block) + 1px));
+   }
++
++  @media (-moz-platform: windows) {
++    @media (-moz-windows-non-native-menus) {
++      > menu, > menuitem {
++        padding-block: 0.5em;
++        padding-inline-start: 1em;
++      }
++      > menu > menupopup {
++        margin-top: -10px;
++        margin-inline-start: -10px;
++      }
++    }
++    @media not (-moz-windows-non-native-menus) {
++      > menu > menupopup {
++        margin-top: -3px;
++        margin-inline-start: -3px;
++      }
++    }
++  }
+ }
+ 
+ /* Rules for popups associated with menulists */
+@@ -102,6 +121,14 @@ menulist > menupopup {
+   min-width: 0;
+   font: inherit;
+ 
++  @media (-moz-platform: windows) {
++    @media not (-moz-windows-non-native-menus) {
++      color: FieldText;
++      --panel-background-color: Field;
++      --panel-border-color: ThreeDShadow;
++    }
++  }
++
+   @media (-moz-platform: macos) {
+     color: FieldText;
+ 
+@@ -127,6 +154,12 @@ menulist > menupopup {
+     > menuitem[_moz-menuactive][disabled] {
+       color: var(--text-color-disabled);
+     }
++    @media (-moz-windows-classic) {
++      > menuitem[disabled]:not([_moz-menuactive="true"]) {
++        color: GrayText;
++        text-shadow: none;
++      }
++    }
+   }
+ }
+ 
+@@ -144,8 +177,10 @@ menuseparator {
+   }
+ 
+   @media (-moz-platform: windows) {
+-    /* The side padding should align with the start of the menu item text. */
+-    padding-inline: 1em;
++    @media (-moz-windows-non-native-menus) {
++      /* The side padding should align with the start of the menu item text. */
++      padding-inline: 1em;
++    }
+   }
+ 
+   &::before {
+@@ -250,6 +285,28 @@ menubar > menu {
+   }
+ }
+ 
++@media (-moz-platform: windows) {
++  @media (-moz-windows-classic) {
++    menubar > menu {
++      border: 2px solid transparent;
++    }
++    menubar > menu[_moz-menuactive="true"][open="true"] {
++      border-width: 3px 1px 1px 3px;
++    }
++  }
++
++  @media (-moz-windows-default-theme) {
++    :root[lwtheme] menubar > menu {
++      appearance: auto;
++      -moz-default-appearance: menuitem;
++    }
++    :root[lwtheme] menubar > menu[_moz-menuactive="true"]:not([disabled]) {
++      color: inherit !important;
++      text-shadow: inherit;
++    }
++  }
++}
++
+ menu,
+ menuitem,
+ menucaption {
+@@ -266,6 +323,29 @@ menucaption {
+   --menuitem-icon: normal;
+ }
+ 
++@media (-moz-platform: windows) and (not (-moz-windows-non-native-menus)) {
++  menu,
++  menuitem,
++  menucaption {
++    appearance: auto;
++    -moz-default-appearance: menuitem;
++    padding: 0;
++    margin: 0;
++    border-radius: 0;
++  }
++}
++
++menucaption {
++  @media (-moz-platform: windows) {
++    appearance: auto;
++    -moz-default-appearance: menuitem;
++
++    @media (-moz-windows-non-native-menus) {
++      appearance: none;
++    }
++  }
++}
++
+ menu,
+ menuitem {
+   -moz-context-properties: fill;
+@@ -274,6 +354,10 @@ menuitem {
+   &:where([disabled]) {
+     color: var(--text-color-disabled);
+     text-shadow: none;
++    @media (-moz-windows-classic) {
++      color: ThreeDShadow;
++      text-shadow: 1px 1px ThreeDHighlight;
++    }
+   }
+ 
+   &:where([_moz-menuactive]:not([disabled])) {
+@@ -282,7 +366,9 @@ menuitem {
+   }
+ 
+   &:where([_moz-menuactive][disabled]) {
+-    background-color: -moz-menuhoverdisabled;
++    @media not (-moz-platform: windows) or (-moz-windows-non-native-menus) {
++      background-color: -moz-menuhoverdisabled;
++    }
+   }
+ }
+ 
+@@ -325,6 +411,18 @@ menupopup > menu:-moz-locale-dir(rtl)::after {
+   background-image: url("chrome://global/skin/icons/arrow-left.svg");
+ }
+ 
++@media (-moz-platform: windows) and (not (-moz-windows-non-native-menus)) {
++  menupopup > menu::after,
++  menupopup > menu:-moz-locale-dir(rtl)::after {
++    appearance: auto;
++    -moz-default-appearance: menuarrow;
++    background-image: none;
++    margin-inline-end: -2px;
++    width: 1.28em;
++    padding-top: 1px;
++  }
++}
++
+ .menu-text,
+ .menu-accel {
+   margin: 0;
+@@ -338,6 +436,24 @@ menupopup > menu:-moz-locale-dir(rtl)::after {
+   }
+ }
+ 
++@media (-moz-platform: windows) and (not (-moz-windows-non-native-menus)) {
++  menupopup > menu:not(.menu-iconic) > .menu-text,
++  menupopup > menuitem:not(.menuitem-iconic, [type="checkbox"], [type="radio"], [checked]) > .menu-text {
++    padding-inline-start: 1.45em !important;
++    appearance: auto;
++    -moz-default-appearance: menuitemtext;
++  }
++
++  menupopup > :is(menu, menuitem) > .menu-text {
++    margin-inline-start: 2px !important;
++    padding-inline-end: 2px;
++  }
++
++  menulist > menupopup > :is(menu, menuitem) > .menu-text {
++    padding-inline-start: 0 !important;
++  }
++}
++
+ /* Accel text */
+ 
+ .menu-accel {
+@@ -394,7 +510,16 @@ menuitem[highlightable] > .menu-text {
+       appearance: auto;
+       -moz-default-appearance: menuimage;
+     }
+-    margin-inline-end: var(--space-small);
++    @media (-moz-windows-non-native-menus) {
++      :is(.menu-iconic, .menuitem-iconic) > & {
++        appearance: none !important;
++      }
++      margin-inline-end: var(--space-small);
++    }
++    @media not (-moz-windows-non-native-menus) {
++      width: 1.45em;
++      margin-inline-end: 0;
++    }
+   }
+ 
+   menuitem:where(.menuitem-iconic, [image]) > &,
+@@ -424,8 +549,8 @@ menuitem[highlightable] > .menu-text {
+   }
+ }
+ 
+-/* On windows we use a checkmark */
+-@media (-moz-platform: windows) {
++/* On windows with non-native menus we use a checkmark */
++@media (-moz-platform: windows) and (-moz-windows-non-native-menus) {
+   /* We need to do something to override the default style for selected
+      checkboxes and radio buttons because the native drawing we use on other
+      Windows versions looks pretty bad with the Win10 styles, so for now we'll
+@@ -439,8 +564,40 @@ menuitem[highlightable] > .menu-text {
+   }
+ }
+ 
++@media (-moz-platform: windows) and (not (-moz-windows-non-native-menus)) {
++  menuitem:is([type="checkbox"], [checked]) {
++    appearance: auto;
++    -moz-default-appearance: checkmenuitem;
++  }
++
++  menuitem[type="radio"] {
++    appearance: auto;
++    -moz-default-appearance: radiomenuitem;
++  }
++
++  menuitem:is([type="checkbox"], [checked], [type="radio"]) > .menu-icon {
++    display: revert;
++    list-style-image: none;
++    margin-top: 0;
++  }
++
++  menuitem[checked] > .menu-icon {
++    visibility: inherit;
++  }
++
++  menuitem:is([type="checkbox"], [checked]) > .menu-icon {
++    appearance: auto;
++    -moz-default-appearance: menucheckbox;
++  }
++
++  menuitem[type="radio"] > .menu-icon {
++    appearance: auto;
++    -moz-default-appearance: menuradio;
++  }
++}
++
+ menupopup[needsgutter] {
+-  @media (-moz-platform: linux) or (-moz-platform: windows) {
++  @media (-moz-platform: linux), (-moz-platform: windows) and (-moz-windows-non-native-menus) {
+     > :is(menu, menuitem) > .menu-icon {
+       display: revert;
+     }
+diff --git a/toolkit/themes/shared/popup.css b/toolkit/themes/shared/popup.css
+index 6b925f58d0dc28305da47054cd3711456149b2b1..29a84b4321d4f94f6fb14403d26c0da1c4e19efd 100644
+--- a/toolkit/themes/shared/popup.css
++++ b/toolkit/themes/shared/popup.css
+@@ -37,6 +37,30 @@
+   -moz-window-input-region-margin: var(--panel-box-shadow-margin);
+   margin: calc(-1 * var(--panel-box-shadow-margin));
+ 
++  @media (-moz-platform: windows) {
++    &:where(menupopup) {
++      @media not (-moz-windows-non-native-menus) {
++        appearance: auto;
++        -moz-default-appearance: menupopup;
++        color-scheme: light !important;
++        background-color: Menu;
++        border: 1px solid ThreeDShadow;
++        --panel-background-color: transparent;
++        --panel-border-color: transparent;
++        --panel-box-shadow-margin: 0px;
++      }
++      @media (-moz-windows-non-native-menus) {
++        appearance: none;
++        background-color: transparent;
++        border: none;
++        --panel-border-radius: 4px;
++        --panel-padding: 4px 0;
++        --panel-border-color: ThreeDShadow;
++        --panel-background-color: Menu;
++      }
++    }
++  }
++
+   --button-icon-fill: var(--panel-icon-fill);
+ 
+   /* Panel design token theming */
+diff --git a/toolkit/themes/shared/radio.css b/toolkit/themes/shared/radio.css
+index bc0fabcf67e22e2cec3ab1f89bd3c82aebb84369..79fe7742a27315b15784ff10abd07a7041326581 100644
+--- a/toolkit/themes/shared/radio.css
++++ b/toolkit/themes/shared/radio.css
+@@ -21,6 +21,11 @@ radio {
+ 
+   &[disabled] {
+     color: GrayText;
++
++    @media (-moz-windows-classic) {
++      color: ThreeDShadow;
++      text-shadow: 1px 1px ThreeDHighlight;
++    }
+   }
+ }
+ 
+diff --git a/toolkit/themes/shared/toolbarbutton.css b/toolkit/themes/shared/toolbarbutton.css
+index 71e13d0774e241b869544e1d09572377ce0aec56..67f796beee64dbcb09ee21427fe70daa6ad07637 100644
+--- a/toolkit/themes/shared/toolbarbutton.css
++++ b/toolkit/themes/shared/toolbarbutton.css
+@@ -43,6 +43,12 @@ toolbarbutton {
+     color: var(--button-text-color-ghost-disabled);
+     opacity: var(--button-opacity-disabled);
+     text-shadow: none;
++    @media (-moz-windows-classic) {
++      @media not (prefers-contrast) {
++        text-shadow: 1px 1px ThreeDHighlight;
++      }
++      color: ThreeDShadow;
++    }
+   }
+ }
+ 
+diff --git a/toolkit/themes/windows/global/button.css b/toolkit/themes/windows/global/button.css
+index 17ba1b3656db291648619ae32b3d6cfa69839fc3..6e690d83619b4bf3113c5a93e66ba6881448e91f 100644
+--- a/toolkit/themes/windows/global/button.css
++++ b/toolkit/themes/windows/global/button.css
+@@ -39,6 +39,10 @@ button {
+     color: GrayText;
+     border-color: -moz-buttondisabledborder;
+     background-color: -moz-buttondisabledface;
++    @media (-moz-windows-classic) {
++      color: ThreeDShadow;
++      text-shadow: 1px 1px ThreeDHighlight;
++    }
+   }
+ 
+   &.plain {
+diff --git a/toolkit/themes/windows/global/global.css b/toolkit/themes/windows/global/global.css
+index f1660bcb5ad6e49f290974a2a78c9c18ae6ee3a1..bd14b2c00a319b7ffa78a81a23466ede26dd604b 100644
+--- a/toolkit/themes/windows/global/global.css
++++ b/toolkit/themes/windows/global/global.css
+@@ -81,6 +81,15 @@ xul|separator.groove[orient="vertical"] {
+   margin-inline: 0.4em;
+ }
+ 
++/* Windows classic disabled labels */
++
++@media (-moz-windows-classic) {
++  xul|label[disabled] {
++    color: ThreeDShadow;
++    text-shadow: 1px 1px ThreeDHighlight;
++  }
++}
++
+ /* Content select */
+ 
+ #ContentSelectDropdown > menupopup {
+diff --git a/toolkit/themes/windows/global/richlistbox.css b/toolkit/themes/windows/global/richlistbox.css
+index eb9ec42fc87ced07b94641e1837f34b7f4c8af99..2e95fe2e11ca2ae64924bfec4c82ca194046df53 100644
+--- a/toolkit/themes/windows/global/richlistbox.css
++++ b/toolkit/themes/windows/global/richlistbox.css
+@@ -114,6 +114,37 @@ richlistbox.theme-listbox > richlistitem > label {
+     background-color: var(--listitem-selectedFocusCurrentBackground);
+     outline: none;
+   }
++
++  @media (-moz-platform: windows-win7) {
++    richlistbox.theme-listbox > richlistitem {
++      --listitem-selectedBottomBorder: var(--listitem-selectedColor);
++      --listitem-selectedBackground: rgba(190,190,190,.15);
++      --listitem-selectedImage: linear-gradient(rgba(190,190,190,.1), rgba(190,190,190,.4));
++      --listitem-selectedCurrentBorder: rgb(125,162,206);
++      --listitem-selectedFocusColor: rgb(132,172,221);
++      --listitem-selectedFocusBottomBorder: var(--listitem-selectedFocusColor);
++      --listitem-selectedFocusBackground: rgba(131,183,249,.02);
++      --listitem-selectedFocusImage: linear-gradient(rgba(131,183,249,.16), rgba(131,183,249,.375));
++      --listitem-selectedFocusCurrentBackground: rgba(131,183,249,.15);
++
++      border-radius: 3px;
++      box-shadow: inset 0 0 0 1px rgba(255,255,255,.4), inset 0 -1px 0 1px rgba(255,255,255,.2);
++    }
++  }
++
++  @media (-moz-platform: windows-win8) {
++    richlistbox.theme-listbox > richlistitem {
++      --listitem-selectedBottomBorder: var(--listitem-selectedColor);
++      --listitem-selectedBackground: rgba(190,190,190,.15);
++      --listitem-selectedImage: linear-gradient(rgba(190,190,190,.4), rgba(190,190,190,.4));
++      --listitem-selectedCurrentBorder: rgb(125,162,206);
++      --listitem-selectedFocusColor: rgb(132,172,221);
++      --listitem-selectedFocusBottomBorder: var(--listitem-selectedFocusColor);
++      --listitem-selectedFocusBackground: rgba(131,183,249,.02);
++      --listitem-selectedFocusImage: linear-gradient(rgba(131,183,249,.375), rgba(131,183,249,.375));
++      --listitem-selectedFocusCurrentBackground: rgba(131,183,249,.15);
++    }
++  }
+ }
+ 
+ listheader {
+diff --git a/widget/LookAndFeel.h b/widget/LookAndFeel.h
+index d389af245f10af606cd3f26f2112f00802084e15..1e1f1a8467b843f4f34b848109a3009b6f25d51d 100644
+--- a/widget/LookAndFeel.h
++++ b/widget/LookAndFeel.h
+@@ -116,6 +116,32 @@ class LookAndFeel {
+      */
+     WindowsDefaultTheme,
+ 
++    /*
++     * A Boolean value to determine whether the DWM compositor is being used
++     *
++     * This metric is not used on non-Windows platforms. These platforms
++     * should return NS_ERROR_NOT_IMPLEMENTED when queried for this metric.
++     */
++    DWMCompositor,
++
++    /*
++     * A Boolean value to determine whether Windows is themed (Classic vs.
++     * uxtheme)
++     *
++     * This is Windows-specific and is not implemented on other platforms
++     * (will return the default of NS_ERROR_FAILURE).
++     */
++    WindowsClassic,
++
++    /*
++     * A Boolean value to determine whether the current Windows desktop theme
++     * supports Aero Glass.
++     *
++     * This is Windows-specific and is not implemented on other platforms
++     * (will return the default of NS_ERROR_FAILURE).
++     */
++    WindowsGlass,
++
+     /*
+      * A Boolean value to determine whether the Mac graphite theme is
+      * being used.
+@@ -418,6 +444,8 @@ class LookAndFeel {
+ 
+   using FontID = mozilla::StyleSystemFont;
+ 
++  static bool WindowsNonNativeMenusEnabled();
++
+   enum class PointingDeviceKinds : uint8_t {
+     None = 0,
+     Mouse = 1 << 0,
+diff --git a/widget/headless/HeadlessLookAndFeelGTK.cpp b/widget/headless/HeadlessLookAndFeelGTK.cpp
+index a1aedbfbe453c0f9f25266a2a57999ab380b85c2..eb258ae3da5669864d3dfc24c659725bff24e80f 100644
+--- a/widget/headless/HeadlessLookAndFeelGTK.cpp
++++ b/widget/headless/HeadlessLookAndFeelGTK.cpp
+@@ -86,9 +86,15 @@ nsresult HeadlessLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+       break;
+     case IntID::WindowsAccentColorInTitlebar:
+     case IntID::WindowsDefaultTheme:
++    case IntID::DWMCompositor:
+       aResult = 0;
+       res = NS_ERROR_NOT_IMPLEMENTED;
+       break;
++    case IntID::WindowsClassic:
++    case IntID::WindowsGlass:
++      aResult = 0;
++      res = NS_ERROR_FAILURE;
++      break;
+     case IntID::AlertNotificationOrigin:
+       aResult = NS_ALERT_TOP;
+       break;
+diff --git a/widget/nsXPLookAndFeel.cpp b/widget/nsXPLookAndFeel.cpp
+index cddd94b436392195eb2184b6a01daf1b4481c7fb..45c8844df36c12ba0b65fe8e14177e538a61e91f 100644
+--- a/widget/nsXPLookAndFeel.cpp
++++ b/widget/nsXPLookAndFeel.cpp
+@@ -45,6 +45,10 @@
+ #include "nscore.h"
+ #include "qcms.h"
+ 
++#ifdef XP_WIN
++#  include "mozilla/WindowsVersion.h"
++#endif
++
+ using namespace mozilla;
+ 
+ using IntID = mozilla::LookAndFeel::IntID;
+@@ -115,6 +119,9 @@ static const char sIntPrefs[][45] = {
+     "ui.windowsAccentColorInTitlebar",
+     "ui.windowsMica",
+     "ui.windowsDefaultTheme",
++    "ui.dwmCompositor",
++    "ui.windowsClassic",
++    "ui.windowsGlass",
+     "ui.macGraphiteTheme",
+     "ui.windowsMicaPopups",
+     "ui.macBigSurTheme",
+@@ -498,11 +505,27 @@ void nsXPLookAndFeel::OnPrefChanged(const char* aPref, void* aClosure) {
+   }
+ }
+ 
++bool LookAndFeel::WindowsNonNativeMenusEnabled() {
++  switch (StaticPrefs::browser_display_windows_non_native_menus()) {
++    case 0:
++      return false;
++    case 1:
++      return true;
++    default:
++#ifdef XP_WIN
++      return IsWin10OrLater();
++#else
++      return false;
++#endif
++  }
++}
++
+ static constexpr struct {
+   nsLiteralCString mName;
+   widget::ThemeChangeKind mChangeKind =
+       widget::ThemeChangeKind::MediaQueriesOnly;
+ } kMediaQueryPrefs[] = {
++    {"browser.display.windows.non_native_menus"_ns},
+     // Affects whether standins are used for the accent color.
+     {"widget.non-native-theme.use-theme-accent"_ns,
+      widget::ThemeChangeKind::Style},
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+index d559e8d1e4a26f22a5ac13002d1d296612638cf0..945fc2ee2fa738c99726f196f8001962cad9ac57 100644
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -4,18 +4,21 @@
+ 
+ #include "nsLookAndFeel.h"
+ 
++#include <dwmapi.h>
+ #include <shellapi.h>
+ #include <stdint.h>
+ #include <windows.h>
+ 
+ #include "WinUtils.h"
+ #include "WindowsUIUtils.h"
++#include "gfxWindowsPlatform.h"
+ #include "mozilla/FontPropertyTypes.h"
+ #include "mozilla/WindowsVersion.h"
+ #include "mozilla/glean/WidgetWindowsMetrics.h"
+ #include "mozilla/intl/LocaleService.h"
+ #include "mozilla/widget/WinRegistry.h"
+ #include "nsStyleConsts.h"
++#include "nsToolkit.h"
+ #include "nsUXThemeConstants.h"
+ #include "nsWindowDefs.h"
+ #include "nsWindowsHelpers.h"
+@@ -25,6 +28,30 @@
+ using namespace mozilla;
+ using namespace mozilla::widget;
+ 
++const int NUM_COMMAND_BUTTONS = 3;
++SIZE nsLookAndFeel::sCommandButtonMetrics[NUM_COMMAND_BUTTONS];
++bool nsLookAndFeel::sCommandButtonMetricsInitialized = false;
++SIZE nsLookAndFeel::sCommandButtonBoxMetrics;
++bool nsLookAndFeel::sCommandButtonBoxMetricsInitialized = false;
++
++bool nsLookAndFeel::sTitlebarInfoPopulatedAero = false;
++bool nsLookAndFeel::sTitlebarInfoPopulatedThemed = false;
++
++/**
++ * Windows themes we currently detect.
++ */
++enum class WindowsTheme {
++  Generic = 0,  // unrecognized theme
++  Classic,
++  Aero,
++  Luna,
++  Royale,
++  Zune,
++  AeroLite
++};
++
++static WindowsTheme sThemeId = WindowsTheme::Generic;
++
+ static Maybe<nscolor> GetColorFromTheme(UXThemeClass cls, int32_t aPart,
+                                         int32_t aState, int32_t aPropId) {
+   COLORREF color;
+@@ -105,6 +132,164 @@ static const wchar_t* GetUXThemeClassName(UXThemeClass aClass) {
+   return L"";
+ }
+ 
++// static
++void nsLookAndFeel::EnsureCommandButtonMetrics() {
++  if (sCommandButtonMetricsInitialized) {
++    return;
++  }
++  sCommandButtonMetricsInitialized = true;
++
++  // This code should never need to be evaluated for our UI since if we need
++  // these metrics for our UI we should make sure that we obtain the correct
++  // metrics when nsWindow::Create() is called.  The generic metrics that we
++  // fetch here will likley not match the current theme, but we provide these
++  // values in case arbitrary content is styled with the '-moz-appearance'
++  // value '-moz-window-button-close' etc.
++  //
++  // ISSUE: We'd prefer to use MOZ_ASSERT_UNREACHABLE here, but since content
++  // (and at least one of our crashtests) can use '-moz-window-button-close'
++  // we need to use NS_WARNING instead.
++  NS_WARNING("Making expensive and likely unnecessary GetSystemMetrics calls");
++
++  sCommandButtonMetrics[0].cx = GetSystemMetrics(SM_CXSIZE);
++  sCommandButtonMetrics[0].cy = GetSystemMetrics(SM_CYSIZE);
++  sCommandButtonMetrics[1].cx = sCommandButtonMetrics[2].cx =
++      sCommandButtonMetrics[0].cx;
++  sCommandButtonMetrics[1].cy = sCommandButtonMetrics[2].cy =
++      sCommandButtonMetrics[0].cy;
++
++  // Trigger a refresh on the next layout.
++  sTitlebarInfoPopulatedAero = sTitlebarInfoPopulatedThemed = false;
++}
++
++// static
++void nsLookAndFeel::EnsureCommandButtonBoxMetrics() {
++  if (sCommandButtonBoxMetricsInitialized) {
++    return;
++  }
++  sCommandButtonBoxMetricsInitialized = true;
++
++  EnsureCommandButtonMetrics();
++
++  sCommandButtonBoxMetrics.cx = sCommandButtonMetrics[0].cx +
++                                sCommandButtonMetrics[1].cx +
++                                sCommandButtonMetrics[2].cx;
++  sCommandButtonBoxMetrics.cy = sCommandButtonMetrics[0].cy +
++                                sCommandButtonMetrics[1].cy +
++                                sCommandButtonMetrics[2].cy;
++
++  // Trigger a refresh on the next layout.
++  sTitlebarInfoPopulatedAero = sTitlebarInfoPopulatedThemed = false;
++}
++
++// static
++void nsLookAndFeel::UpdateTitlebarInfo(HWND aWnd) {
++  if (!aWnd) return;
++
++  if (!sTitlebarInfoPopulatedAero &&
++      gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++    RECT captionButtons;
++    if (SUCCEEDED(DwmGetWindowAttribute(aWnd, DWMWA_CAPTION_BUTTON_BOUNDS,
++                                        &captionButtons,
++                                        sizeof(captionButtons)))) {
++      sCommandButtonBoxMetrics.cx =
++          captionButtons.right - captionButtons.left - 3;
++      sCommandButtonBoxMetrics.cy =
++          (captionButtons.bottom - captionButtons.top) - 1;
++      sCommandButtonBoxMetricsInitialized = true;
++      MOZ_ASSERT(
++          sCommandButtonBoxMetrics.cx > 0 && sCommandButtonBoxMetrics.cy > 0,
++          "We must not cache bad command button box dimensions");
++      sTitlebarInfoPopulatedAero = true;
++    }
++  }
++
++  // NB: sTitlebarInfoPopulatedThemed is always true pre-vista.
++  if (sTitlebarInfoPopulatedThemed || IsWin8OrLater()) return;
++
++  // Query a temporary, visible window with command buttons to get
++  // the right metrics.
++  WNDCLASSW wc;
++  wc.style = 0;
++  wc.lpfnWndProc = ::DefWindowProcW;
++  wc.cbClsExtra = 0;
++  wc.cbWndExtra = 0;
++  wc.hInstance = nsToolkit::mDllInstance;
++  wc.hIcon = nullptr;
++  wc.hCursor = nullptr;
++  wc.hbrBackground = nullptr;
++  wc.lpszMenuName = nullptr;
++  wc.lpszClassName = L"MozillaTempWindowClass";
++  ::RegisterClassW(&wc);
++
++  // Create a transparent descendant of the window passed in. This
++  // keeps the window from showing up on the desktop or the taskbar.
++  // Note the parent (browser) window is usually still hidden, we
++  // don't want to display it, so we can't query it directly.
++  HWND hWnd = CreateWindowExW(WS_EX_LAYERED, L"MozillaTempWindowClass", L"",
++                              WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, aWnd, nullptr,
++                              nsToolkit::mDllInstance, nullptr);
++  NS_ASSERTION(hWnd, "UpdateTitlebarInfo window creation failed.");
++
++  int showType = SW_SHOWNA;
++  // We try to avoid activating this window, but on Aero basic (aero without
++  // compositor) and aero lite (special theme for win server 2012/2013) we may
++  // get the wrong information if the window isn't activated, so we have to:
++  if (sThemeId == WindowsTheme::AeroLite ||
++      (sThemeId == WindowsTheme::Aero &&
++       !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled())) {
++    showType = SW_SHOW;
++  }
++  ShowWindow(hWnd, showType);
++  TITLEBARINFOEX info = {0};
++  info.cbSize = sizeof(TITLEBARINFOEX);
++  SendMessage(hWnd, WM_GETTITLEBARINFOEX, 0, (LPARAM)&info);
++  DestroyWindow(hWnd);
++
++  // Only set if we have valid data for all three buttons we use.
++  if ((info.rgrect[2].right - info.rgrect[2].left) == 0 ||
++      (info.rgrect[3].right - info.rgrect[3].left) == 0 ||
++      (info.rgrect[5].right - info.rgrect[5].left) == 0) {
++    NS_WARNING("WM_GETTITLEBARINFOEX query failed to find usable metrics.");
++    return;
++  }
++  // minimize
++  sCommandButtonMetrics[0].cx = info.rgrect[2].right - info.rgrect[2].left;
++  sCommandButtonMetrics[0].cy = info.rgrect[2].bottom - info.rgrect[2].top;
++  // maximize/restore
++  sCommandButtonMetrics[1].cx = info.rgrect[3].right - info.rgrect[3].left;
++  sCommandButtonMetrics[1].cy = info.rgrect[3].bottom - info.rgrect[3].top;
++  // close
++  sCommandButtonMetrics[2].cx = info.rgrect[5].right - info.rgrect[5].left;
++  sCommandButtonMetrics[2].cy = info.rgrect[5].bottom - info.rgrect[5].top;
++  sCommandButtonMetricsInitialized = true;
++
++#ifdef DEBUG
++  // Verify that all values for the command buttons are positive values
++  // otherwise we have cached bad values for the caption buttons
++  for (int i = 0; i < NUM_COMMAND_BUTTONS; i++) {
++    MOZ_ASSERT(sCommandButtonMetrics[i].cx > 0);
++    MOZ_ASSERT(sCommandButtonMetrics[i].cy > 0);
++  }
++#endif
++
++  sTitlebarInfoPopulatedThemed = true;
++}
++
++// visual style (aero glass, aero basic)
++//    theme (aero, luna, zune)
++//      theme color (silver, olive, blue)
++//        system colors
++
++const struct {
++  LPCWSTR name;
++  WindowsTheme type;
++} kKnownThemes[] = {{L"aero.msstyles", WindowsTheme::Aero},
++                    {L"aerolite.msstyles", WindowsTheme::AeroLite},
++                    {L"luna.msstyles", WindowsTheme::Luna},
++                    {L"zune.msstyles", WindowsTheme::Zune},
++                    {L"royale.msstyles", WindowsTheme::Royale}};
++
+ HANDLE nsLookAndFeel::GetTheme(UXThemeClass aClass) {
+   auto& handle =
+       static_cast<nsLookAndFeel*>(GetInstance())->mThemeHandles[aClass];
+@@ -112,6 +297,56 @@ HANDLE nsLookAndFeel::GetTheme(UXThemeClass aClass) {
+   return handle;
+ }
+ 
++void nsLookAndFeel::UpdateNativeThemeInfo() {
++  if (!nsLookAndFeel::IsAppThemed()) {
++    sThemeId = WindowsTheme::Classic;
++    return;
++  }
++
++  WCHAR themeFileName[MAX_PATH + 1];
++  WCHAR themeColor[MAX_PATH + 1];
++  if (FAILED(GetCurrentThemeName(themeFileName, MAX_PATH, themeColor, MAX_PATH,
++                                 nullptr, 0))) {
++    sThemeId = WindowsTheme::Classic;
++    return;
++  }
++
++  LPCWSTR themeName = wcsrchr(themeFileName, L'\\');
++  themeName = themeName ? themeName + 1 : themeFileName;
++
++  sThemeId = [&] {
++    for (const auto& theme : kKnownThemes) {
++      if (!lstrcmpiW(themeName, theme.name)) {
++        return theme.type;
++      }
++    }
++    return WindowsTheme::Generic;
++  }();
++
++  // We're using the default theme if we're using any of Aero, Aero Lite, or
++  // luna. However, on Win8, GetCurrentThemeName (see above) returns
++  // AeroLite.msstyles for the 4 builtin highcontrast themes as well. Those
++  // themes "don't count" as default themes, so we specifically check for high
++  // contrast mode in that situation.
++  mIsDefaultWindowsTheme = [&] {
++    if (mHighContrastOn && IsWin8OrLater()) {
++      return false;
++    }
++    return sThemeId == WindowsTheme::Aero ||
++           sThemeId == WindowsTheme::AeroLite || sThemeId == WindowsTheme::Luna;
++  }();
++}
++
++// static
++bool nsLookAndFeel::AreFlatMenusEnabled() {
++  BOOL useFlat = FALSE;
++  return !!::SystemParametersInfo(SPI_GETFLATMENU, 0, &useFlat, 0) ? useFlat
++                                                                   : false;
++}
++
++// static
++bool nsLookAndFeel::IsAppThemed() { return !!::IsAppThemed(); }
++
+ uint32_t nsLookAndFeel::SystemColorFilter() {
+   if (!mColorFilterWatcher) {
+     return 0;
+@@ -142,6 +377,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+   BOOL is_enabled;
+ 
+   auto UseNonNativeMenuColors = [&]() -> bool {
++    if (!LookAndFeel::WindowsNonNativeMenusEnabled()) {
++      return false;
++    }
+     return LookAndFeel::GetInt(LookAndFeel::IntID::WindowsDefaultTheme) || aScheme == ColorScheme::Dark;
+   };
+ 
+@@ -168,6 +406,9 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+         if (UseNonNativeMenuColors()) {
+           return false;
+         }
++        if (!nsLookAndFeel::IsAppThemed()) {
++          return nsLookAndFeel::AreFlatMenusEnabled();
++        }
+         [[fallthrough]];
+       case ColorID::MozMenuhovertext:
+         if (UseNonNativeMenuColors()) {
+@@ -255,15 +496,23 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+     switch (aID) {
+       case ColorID::MozButtonhoverborder:
+       case ColorID::MozButtonhoverface:
+-      case ColorID::MozColheaderhover:
+       case ColorID::MozButtonactivetext:
++        if (!(WinUtils::dwmIsCompositionEnabledPtr && SUCCEEDED(WinUtils::dwmIsCompositionEnabledPtr(&is_enabled)) && is_enabled)) {
++          break;
++        }
++        [[fallthrough]];
++      case ColorID::MozColheaderhover:
+       case ColorID::MozColheaderactivetext:
+       case ColorID::TargetTextBackground:
+         aColor = GetColorForSysColorIndex(COLOR_HIGHLIGHT);
+         return NS_OK;
+       case ColorID::MozButtonhovertext:
+-      case ColorID::MozColheaderhovertext:
+       case ColorID::MozButtonactiveface:
++        if (!(WinUtils::dwmIsCompositionEnabledPtr && SUCCEEDED(WinUtils::dwmIsCompositionEnabledPtr(&is_enabled)) && is_enabled)) {
++          break;
++        }
++        [[fallthrough]];
++      case ColorID::MozColheaderhovertext:
+       case ColorID::MozColheaderactive:
+       case ColorID::TargetTextForeground:
+         aColor = GetColorForSysColorIndex(COLOR_HIGHLIGHTTEXT);
+@@ -278,11 +527,15 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+       case ColorID::Field:
+         aColor = GetColorForSysColorIndex(COLOR_BTNFACE);
+         return NS_OK;
++      case ColorID::MozButtonactiveborder:
++        if (!(WinUtils::dwmIsCompositionEnabledPtr && SUCCEEDED(WinUtils::dwmIsCompositionEnabledPtr(&is_enabled)) && is_enabled)) {
++          break;
++        }
++        [[fallthrough]];
+       case ColorID::Buttontext:
+       case ColorID::MozColheadertext:
+       case ColorID::Buttonborder:
+       case ColorID::Fieldtext:
+-      case ColorID::MozButtonactiveborder:
+         aColor = GetColorForSysColorIndex(COLOR_BTNTEXT);
+         return NS_OK;
+       case ColorID::Visitedtext: {
+@@ -374,6 +627,10 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+         aColor = kNonNativeMenuText;
+         return NS_OK;
+       }
++      if (!nsLookAndFeel::IsAppThemed()) {
++        idx = COLOR_MENUTEXT;
++        break;
++      }
+       [[fallthrough]];
+     case ColorID::MozMenuhovertext:
+       if (UseNonNativeMenuColors()) {
+@@ -521,6 +778,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
+ 
+ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+   EnsureInit();
++  BOOL is_enabled;
+   nsresult res = NS_OK;
+ 
+   switch (aID) {
+@@ -596,12 +854,23 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+     case IntID::TreeScrollLinesMax:
+       aResult = 3;
+       break;
++    case IntID::WindowsClassic:
++      aResult = !nsLookAndFeel::IsAppThemed();
++      break;
+     case IntID::WindowsDefaultTheme:
+       aResult = IsDefaultWindowTheme();
+       break;
++    case IntID::DWMCompositor:
++      aResult = (WinUtils::dwmIsCompositionEnabledPtr && SUCCEEDED(WinUtils::dwmIsCompositionEnabledPtr(&is_enabled)) && is_enabled);
++      break;
+     case IntID::WindowsAccentColorInTitlebar:
+       aResult = mTitlebarColors.mUseAccent;
+       break;
++    case IntID::WindowsGlass:
++      // Aero Glass is only available prior to Windows 8 when DWM is used.
++      aResult = ((WinUtils::dwmIsCompositionEnabledPtr && SUCCEEDED(WinUtils::dwmIsCompositionEnabledPtr(&is_enabled)) && is_enabled) &&
++                 !IsWin8OrLater());
++      break;
+     case IntID::WindowsMica:
+       aResult = WinUtils::MicaEnabled();
+       break;
+@@ -1042,18 +1311,27 @@ void nsLookAndFeel::EnsureInit() {
+     handle.Close();
+   }
+ 
++  // Trigger a refresh of themed button metrics if needed
++  sTitlebarInfoPopulatedThemed = false;
++
++  mIsDefaultWindowsTheme = false;
++  sThemeId = WindowsTheme::Generic;
++
+   mHighContrastOn = []() {
+     HIGHCONTRAST hc;
+     hc.cbSize = sizeof(HIGHCONTRAST);
+     return ::SystemParametersInfo(SPI_GETHIGHCONTRAST, 0, &hc, 0) &&
+            hc.dwFlags & HCF_HIGHCONTRASTON;
+   }();
+-  mIsDefaultWindowsTheme = !mHighContrastOn;
+ 
+   const bool neededMicaWorkaround = NeedsMicaWorkaround();
+ 
+-  mColorMenuHoverText = ::GetColorFromTheme(UXThemeClass::Menu, MENU_POPUPITEM,
+-                                            MPI_HOT, TMT_TEXTCOLOR);
++  nsLookAndFeel::UpdateNativeThemeInfo();
++  mColorMenuHoverText = Nothing();
++  if (nsLookAndFeel::IsAppThemed()) {
++    mColorMenuHoverText =
++        ::GetColorFromTheme(UXThemeClass::Menu, MENU_POPUPITEM, MPI_HOT, TMT_TEXTCOLOR);
++  }
+ 
+   // Fill out the sys color table.
+   for (int i = SYS_COLOR_MIN; i <= SYS_COLOR_MAX; ++i) {
+diff --git a/widget/windows/nsLookAndFeel.h b/widget/windows/nsLookAndFeel.h
+index dc910a2e071c98a170c0073fe05c99550a26e86d..791db4f461da0f7c4b66c5d356c362e6d0a46733 100644
+--- a/widget/windows/nsLookAndFeel.h
++++ b/widget/windows/nsLookAndFeel.h
+@@ -63,6 +63,13 @@ enum class UXThemeClass : uint8_t {
+   NumClasses
+ };
+ 
++enum CmdButtonIdx {
++  CMDBUTTONIDX_MINIMIZE = 0,
++  CMDBUTTONIDX_RESTORE,
++  CMDBUTTONIDX_CLOSE,
++  CMDBUTTONIDX_BUTTONBOX
++};
++
+ // This class makes sure we don't attempt to open a theme if the previous
+ // loading attempt has failed because OpenThemeData is a heavy task and
+ // it's less likely that the API returns a different result.
+@@ -85,7 +92,20 @@ class UXThemeHandle final {
+ };
+ 
+ class nsLookAndFeel final : public nsXPLookAndFeel {
++
++  // We initialize sCommandButtonBoxMetrics separately as a performance
++  // optimization to avoid fetching dummy values for sCommandButtonMetrics
++  // when we don't need those.
++  static SIZE sCommandButtonMetrics[3];
++  static bool sCommandButtonMetricsInitialized;
++  static SIZE sCommandButtonBoxMetrics;
++  static bool sCommandButtonBoxMetricsInitialized;
++
++  static void EnsureCommandButtonMetrics();
++  static void EnsureCommandButtonBoxMetrics();
+  public:
++  static bool sTitlebarInfoPopulatedAero;
++  static bool sTitlebarInfoPopulatedThemed;
+   nsLookAndFeel();
+   virtual ~nsLookAndFeel();
+ 
+@@ -93,6 +113,22 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
+ 
+   bool IsDefaultWindowTheme() const { return mIsDefaultWindowsTheme; }
+ 
++  // nsWindow calls this to update desktop settings info
++  static void UpdateTitlebarInfo(HWND aWnd);
++
++  static SIZE GetCommandButtonMetrics(CmdButtonIdx aMetric) {
++    EnsureCommandButtonMetrics();
++    return sCommandButtonMetrics[aMetric];
++  }
++  static SIZE GetCommandButtonBoxMetrics() {
++    EnsureCommandButtonBoxMetrics();
++    return sCommandButtonBoxMetrics;
++  }
++
++  static bool AreFlatMenusEnabled();
++  static bool IsAppThemed();
++  void UpdateNativeThemeInfo();
++
+   void NativeInit() final;
+   void RefreshImpl() override;
+   nsresult NativeGetInt(IntID, int32_t& aResult) override;
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+index bd01e68eb4e6d3c981e41a1e93bb4d2c8b5684e6..11cfa9dabd456e94541aa0e0e6336a8fd0f13af6 100644
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -348,7 +348,11 @@ static CaptionButtonPadding buttonData[3] = {
+ // Adds "hot" caption button padding to minimum widget size.
+ static void AddPaddingRect(LayoutDeviceIntSize* aSize, CaptionButton button) {
+   if (!aSize) return;
+-  RECT offset = buttonData[CAPTION_BASIC].hotPadding[button];
++  RECT offset;
++  if (!nsLookAndFeel::IsAppThemed())
++    offset = buttonData[CAPTION_CLASSIC].hotPadding[button];
++  else
++    offset = buttonData[CAPTION_BASIC].hotPadding[button];
+   aSize->width += offset.left + offset.right;
+   aSize->height += offset.top + offset.bottom;
+ }
+@@ -356,7 +360,11 @@ static void AddPaddingRect(LayoutDeviceIntSize* aSize, CaptionButton button) {
+ // If we've added padding to the minimum widget size, offset
+ // the area we draw into to compensate.
+ static void OffsetBackgroundRect(RECT& rect, CaptionButton button) {
+-  RECT offset = buttonData[CAPTION_BASIC].hotPadding[button];
++  RECT offset;
++  if (!nsLookAndFeel::IsAppThemed())
++    offset = buttonData[CAPTION_CLASSIC].hotPadding[button];
++  else
++    offset = buttonData[CAPTION_BASIC].hotPadding[button];
+   rect.left += offset.left;
+   rect.top += offset.top;
+   rect.right -= offset.right;
+@@ -1211,37 +1219,73 @@ void nsNativeThemeWin::DrawWidgetBackground(
+                                        aDirtyRect, aDrawOverflow);
+   }
+ 
++  nsRect backgroundRect(aRect);
++  gfxContextAutoSaveRestore clip;
++  if (aFrame && !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled() &&
++      (aAppearance == StyleAppearance::MozWindowTitlebar ||
++       aAppearance == StyleAppearance::MozWindowTitlebarMaximized)) {
++    const nsPoint offset = aRect.TopLeft() - aFrame->GetPosition();
++    nsIFrame* first = aFrame;
++    for (nsIFrame* previous = aFrame->GetPrevSibling(); previous;
++         previous = previous->GetPrevSibling()) {
++      if (previous->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (previous->StyleDisplay()->EffectiveAppearance() != aAppearance) {
++        break;
++      }
++      first = previous;
++    }
++    for (nsIFrame* row = first; row; row = row->GetNextSibling()) {
++      if (row->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (row->StyleDisplay()->EffectiveAppearance() != aAppearance) {
++        break;
++      }
++      backgroundRect.UnionRect(backgroundRect, row->GetRect() + offset);
++    }
++
++    if (!backgroundRect.IsEqualInterior(aRect)) {
++      clip.SetContext(aContext);
++      aContext->SnappedClip(nsLayoutUtils::RectToGfxRect(
++          aRect, aFrame->PresContext()->AppUnitsPerDevPixel()));
++    }
++  }
++
+   HANDLE theme = GetTheme(aAppearance);
+   if (!theme) {
+-    ClassicDrawWidgetBackground(aContext, aFrame, aAppearance, aRect,
++    ClassicDrawWidgetBackground(aContext, aFrame, aAppearance, backgroundRect,
+                                 aDirtyRect);
+     return;
+   }
+ 
+   // ^^ without the right sdk, assume xp theming and fall through.
+-  switch (aAppearance) {
+-    case StyleAppearance::MozWindowTitlebar:
+-    case StyleAppearance::MozWindowTitlebarMaximized:
+-      // Nothing to draw, these areas are glass. Minimum dimensions
+-      // should be set, so xul content should be laid out correctly.
+-      return;
+-    case StyleAppearance::MozWindowButtonClose:
+-    case StyleAppearance::MozWindowButtonMinimize:
+-    case StyleAppearance::MozWindowButtonMaximize:
+-    case StyleAppearance::MozWindowButtonRestore:
+-      // Not conventional bitmaps, can't be retrieved. If we fall
+-      // through here and call the theme library we'll get aero
+-      // basic bitmaps.
+-      return;
+-    case StyleAppearance::MozWinBorderlessGlass:
+-      // Nothing to draw, this is the glass background.
+-      return;
+-    case StyleAppearance::MozWindowButtonBox:
+-    case StyleAppearance::MozWindowButtonBoxMaximized:
+-      // We handle these through nsIWidget::UpdateThemeGeometries
+-      return;
+-    default:
+-      break;
++  if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++    switch (aAppearance) {
++      case StyleAppearance::MozWindowTitlebar:
++      case StyleAppearance::MozWindowTitlebarMaximized:
++        // Nothing to draw, these areas are glass. Minimum dimensions
++        // should be set, so xul content should be layed out correctly.
++        return;
++      case StyleAppearance::MozWindowButtonClose:
++      case StyleAppearance::MozWindowButtonMinimize:
++      case StyleAppearance::MozWindowButtonMaximize:
++      case StyleAppearance::MozWindowButtonRestore:
++        // Not conventional bitmaps, can't be retrieved. If we fall
++        // through here and call the theme library we'll get aero
++        // basic bitmaps.
++        return;
++      case StyleAppearance::MozWinBorderlessGlass:
++        // Nothing to draw, this is the glass background.
++        return;
++      case StyleAppearance::MozWindowButtonBox:
++      case StyleAppearance::MozWindowButtonBoxMaximized:
++        // We handle these through nsIWidget::UpdateThemeGeometries
++        return;
++      default:
++        break;
++    }
+   }
+ 
+   int32_t part, state;
+@@ -1261,7 +1305,8 @@ void nsNativeThemeWin::DrawWidgetBackground(
+   gfxFloat p2a = gfxFloat(aFrame->PresContext()->AppUnitsPerDevPixel());
+   RECT widgetRect;
+   RECT clipRect;
+-  gfxRect tr(aRect.X(), aRect.Y(), aRect.Width(), aRect.Height()),
++  gfxRect tr(backgroundRect.X(), backgroundRect.Y(), backgroundRect.Width(),
++             backgroundRect.Height()),
+       dr(aDirtyRect.X(), aDirtyRect.Y(), aDirtyRect.Width(),
+          aDirtyRect.Height());
+ 
+@@ -1641,6 +1686,16 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
+   if (aAppearance == StyleAppearance::MozWindowTitlebar ||
+       aAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
+     aResult->SizeTo(0, 0, 0, 0);
++    for (nsIFrame* previous = aFrame ? aFrame->GetPrevSibling() : nullptr;
++         previous; previous = previous->GetPrevSibling()) {
++      if (previous->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (previous->StyleDisplay()->EffectiveAppearance() == aAppearance) {
++        return true;
++      }
++      break;
++    }
+     // Prior to Windows 10, a bug in DwmDefWindowProc would cause window
+     // button presses/mouseovers to be missed.  This bug is circumvented by
+     // adding padding to the top of the window that is the size of the caption
+@@ -1774,6 +1829,21 @@ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+     return Theme::GetMinimumWidgetSize(aPresContext, aFrame, aAppearance);
+   }
+ 
++  if (aFrame &&
++      (aAppearance == StyleAppearance::MozWindowTitlebar ||
++       aAppearance == StyleAppearance::MozWindowTitlebarMaximized)) {
++    for (nsIFrame* previous = aFrame->GetPrevSibling(); previous;
++         previous = previous->GetPrevSibling()) {
++      if (previous->StyleVisibility()->IsCollapse()) {
++        continue;
++      }
++      if (previous->StyleDisplay()->EffectiveAppearance() == aAppearance) {
++        return {};
++      }
++      break;
++    }
++  }
++
+   mozilla::Maybe<UXThemeClass> themeClass = GetThemeClass(aAppearance);
+   HTHEME theme = NULL;
+   if (!themeClass.isNothing()) {
+@@ -1854,16 +1924,65 @@ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+       }
+       break;
+ 
++    case StyleAppearance::MozWindowButtonMaximize:
++    case StyleAppearance::MozWindowButtonRestore: {
++      // The only way to get accurate titlebar button info is to query a
++      // window w/buttons when it's visible. nsWindow takes care of this and
++      // stores that info in nsUXThemeData.
++      SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_RESTORE);
++      LayoutDeviceIntSize result(sz.cx, sz.cy);
++      AddPaddingRect(&result, CAPTIONBUTTON_RESTORE);
++      return result;
++    }
++
++    case StyleAppearance::MozWindowButtonMinimize: {
++      SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_MINIMIZE);
++      LayoutDeviceIntSize result(sz.cx, sz.cy);
++      AddPaddingRect(&result, CAPTIONBUTTON_MINIMIZE);
++      return result;
++    }
++
++    case StyleAppearance::MozWindowButtonClose: {
++      SIZE sz = nsLookAndFeel::GetCommandButtonMetrics(CMDBUTTONIDX_CLOSE);
++      LayoutDeviceIntSize result(sz.cx, sz.cy);
++      AddPaddingRect(&result, CAPTIONBUTTON_CLOSE);
++      return result;
++    }
++
+     case StyleAppearance::MozWindowTitlebar:
+     case StyleAppearance::MozWindowTitlebarMaximized: {
+       LayoutDeviceIntSize result;
+       result.height = GetSystemMetrics(SM_CYCAPTION);
+       result.height += GetSystemMetrics(SM_CYFRAME);
+       result.height += GetSystemMetrics(SM_CXPADDEDBORDER);
+-      ScaleForFrameDPI(&result, aFrame);
++      // On Win8.1, we don't want this scaling, because Windows doesn't scale
++      // the non-client area of the window, and we can end up with ugly overlap
++      // of the window frame controls into the tab bar or content area. But on
++      // Win10, we render the window controls ourselves, and the result looks
++      // better if we do apply this scaling (particularly with themes such as
++      // DevEdition; see bug 1267636).
++      if (IsWin10OrLater()) {
++        ScaleForFrameDPI(&result, aFrame);
++      }
+       return result;
+     }
+ 
++    case StyleAppearance::MozWindowButtonBox:
++    case StyleAppearance::MozWindowButtonBoxMaximized: {
++      if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++        SIZE sz = nsLookAndFeel::GetCommandButtonBoxMetrics();
++        LayoutDeviceIntSize result(sz.cx,
++                                   sz.cy - GetSystemMetrics(SM_CYFRAME) -
++                                       GetSystemMetrics(SM_CXPADDEDBORDER));
++        if (aAppearance == StyleAppearance::MozWindowButtonBoxMaximized) {
++          result.width += 1;
++          result.height -= 2;
++        }
++        return result;
++      }
++      break;
++    }
++
+     default:
+       break;
+   }
+@@ -2039,6 +2158,9 @@ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
+   switch (aAppearance) {
+     case StyleAppearance::Menubar:
+     case StyleAppearance::Menupopup:
++      // Classic non-flat menus are handled almost entirely through CSS.
++      if (!nsLookAndFeel::AreFlatMenusEnabled()) return false;
++      [[fallthrough]];
+     case StyleAppearance::Menuitem:
+     case StyleAppearance::Checkmenuitem:
+     case StyleAppearance::Radiomenuitem:
+@@ -2122,8 +2244,14 @@ bool nsNativeThemeWin::ClassicGetWidgetPadding(nsDeviceContext* aContext,
+         return false;
+ 
+       if (part == 1) {  // top-level menu
+-        (*aResult).top = (*aResult).bottom = (*aResult).left =
+-            (*aResult).right = 2;
++        if (nsLookAndFeel::AreFlatMenusEnabled() || !(state & DFCS_PUSHED)) {
++          (*aResult).top = (*aResult).bottom = (*aResult).left =
++              (*aResult).right = 2;
++        } else {
++          // make top-level menus look sunken when pushed in the Classic look
++          (*aResult).top = (*aResult).left = 3;
++          (*aResult).bottom = (*aResult).right = 1;
++        }
+       } else {
+         (*aResult).top = 0;
+         (*aResult).bottom = (*aResult).left = (*aResult).right = 2;
+@@ -2461,6 +2589,51 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
+   }
+ }
+ 
++static void DrawMenuImage(HDC hdc, const RECT& rc, int32_t aComponent,
++                          uint32_t aColor) {
++  // This procedure creates a memory bitmap to contain the check mark, draws
++  // it into the bitmap (it is a mask image), then composes it onto the menu
++  // item in appropriate colors.
++  HDC hMemoryDC = ::CreateCompatibleDC(hdc);
++  if (hMemoryDC) {
++    // XXXjgr We should ideally be caching these, but we wont be notified when
++    // they change currently, so we can't do so easily. Same for the bitmap.
++    int checkW = ::GetSystemMetrics(SM_CXMENUCHECK);
++    int checkH = ::GetSystemMetrics(SM_CYMENUCHECK);
++
++    HBITMAP hMonoBitmap = ::CreateBitmap(checkW, checkH, 1, 1, nullptr);
++    if (hMonoBitmap) {
++      HBITMAP hPrevBitmap = (HBITMAP)::SelectObject(hMemoryDC, hMonoBitmap);
++      if (hPrevBitmap) {
++        // XXXjgr This will go pear-shaped if the image is bigger than the
++        // provided rect. What should we do?
++        RECT imgRect = {0, 0, checkW, checkH};
++        POINT imgPos = {rc.left + (rc.right - rc.left - checkW) / 2,
++                        rc.top + (rc.bottom - rc.top - checkH) / 2};
++
++        // XXXzeniko Windows renders these 1px lower than you'd expect
++        if (aComponent == DFCS_MENUCHECK || aComponent == DFCS_MENUBULLET)
++          imgPos.y++;
++
++        ::DrawFrameControl(hMemoryDC, &imgRect, DFC_MENU, aComponent);
++        COLORREF oldTextCol = ::SetTextColor(hdc, 0x00000000);
++        COLORREF oldBackCol = ::SetBkColor(hdc, 0x00FFFFFF);
++        ::BitBlt(hdc, imgPos.x, imgPos.y, checkW, checkH, hMemoryDC, 0, 0,
++                 SRCAND);
++        ::SetTextColor(hdc, ::GetSysColor(aColor));
++        ::SetBkColor(hdc, 0x00000000);
++        ::BitBlt(hdc, imgPos.x, imgPos.y, checkW, checkH, hMemoryDC, 0, 0,
++                 SRCPAINT);
++        ::SetTextColor(hdc, oldTextCol);
++        ::SetBkColor(hdc, oldBackCol);
++        ::SelectObject(hMemoryDC, hPrevBitmap);
++      }
++      ::DeleteObject(hMonoBitmap);
++    }
++    ::DeleteDC(hMemoryDC);
++  }
++}
++
+ void nsNativeThemeWin::DrawCheckedRect(HDC hdc, const RECT& rc, int32_t fore,
+                                        int32_t back, HBRUSH defaultBack) {
+   static WORD patBits[8] = {0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55};
+@@ -2604,6 +2777,60 @@ RENDER_AGAIN:
+ 
+     case StyleAppearance::Menubar:
+       break;
++    case StyleAppearance::Menupopup:
++      NS_ASSERTION(nsLookAndFeel::AreFlatMenusEnabled(),
++                   "Classic menus are styled entirely through CSS");
++      ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_MENU + 1));
++      ::FrameRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_BTNSHADOW));
++      break;
++    case StyleAppearance::Menuitem:
++    case StyleAppearance::Checkmenuitem:
++    case StyleAppearance::Radiomenuitem:
++      // part == 0 for normal items
++      // part == 1 for top-level menu items
++      if (nsLookAndFeel::AreFlatMenusEnabled()) {
++        // Not disabled and hot/pushed.
++        if ((state & (DFCS_HOT | DFCS_PUSHED)) != 0) {
++          ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_MENUHILIGHT + 1));
++          ::FrameRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_HIGHLIGHT));
++        }
++      } else {
++        if (part == 1) {
++          if ((state & DFCS_INACTIVE) == 0) {
++            if ((state & DFCS_PUSHED) != 0) {
++              ::DrawEdge(hdc, &widgetRect, BDR_SUNKENOUTER, BF_RECT);
++            } else if ((state & DFCS_HOT) != 0) {
++              ::DrawEdge(hdc, &widgetRect, BDR_RAISEDINNER, BF_RECT);
++            }
++          }
++        } else {
++          if ((state & (DFCS_HOT | DFCS_PUSHED)) != 0) {
++            ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_HIGHLIGHT + 1));
++          }
++        }
++      }
++      break;
++    case StyleAppearance::Menucheckbox:
++    case StyleAppearance::Menuradio:
++      if (!(state & DFCS_CHECKED)) break;  // nothin' to do
++      [[fallthrough]];
++    case StyleAppearance::Menuarrow: {
++      uint32_t color = COLOR_MENUTEXT;
++      if ((state & DFCS_INACTIVE))
++        color = COLOR_GRAYTEXT;
++      else if ((state & DFCS_HOT))
++        color = COLOR_HIGHLIGHTTEXT;
++
++      if (aAppearance == StyleAppearance::Menucheckbox)
++        DrawMenuImage(hdc, widgetRect, DFCS_MENUCHECK, color);
++      else if (aAppearance == StyleAppearance::Menuradio)
++        DrawMenuImage(hdc, widgetRect, DFCS_MENUBULLET, color);
++      else if (aAppearance == StyleAppearance::Menuarrow)
++        DrawMenuImage(hdc, widgetRect,
++                      (state & DFCS_RTL) ? DFCS_MENUARROWRIGHT : DFCS_MENUARROW,
++                      color);
++      break;
++    }
+     case StyleAppearance::Menuseparator: {
+       // separators are offset by a bit (see menu.css)
+       widgetRect.left++;
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 1531e009b4fb4513702a0d9a52c990fd9fde9120..41d9674d9b26b96c9396e6854e4bd1fef107b4dd 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -928,6 +928,15 @@ nsWindow::~nsWindow() {
+  *
+  **************************************************************/
+ 
++static bool ShouldCacheTitleBarInfo(WindowType aWindowType,
++                                    BorderStyle aBorderStyle) {
++  return (aWindowType == WindowType::TopLevel) &&
++         (aBorderStyle == BorderStyle::Default ||
++          aBorderStyle == BorderStyle::All) &&
++         (!nsLookAndFeel::sTitlebarInfoPopulatedThemed ||
++          !nsLookAndFeel::sTitlebarInfoPopulatedAero);
++}
++
+ void nsWindow::SendAnAPZEvent(InputData& aEvent) {
+   LRESULT popupHandlingResult;
+   if (DealWithPopups(mWnd, MOZ_WM_DMANIP, 0, 0, &popupHandlingResult)) {
+@@ -1338,6 +1347,12 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+   mDefaultIMC.Init(this);
+   IMEHandler::InitInputContext(this, mInputContext);
+ 
++  // Query for command button metric data for rendering the titlebar. We
++  // only do this once on the first window that has an actual titlebar
++  if (ShouldCacheTitleBarInfo(mWindowType, mBorderStyle)) {
++    nsLookAndFeel::UpdateTitlebarInfo(mWnd);
++  }
++
+   RecreateDirectManipulationIfNeeded();
+ 
+   return NS_OK;
+@@ -7874,6 +7889,12 @@ void nsWindow::UpdateOpaqueRegion(const LayoutDeviceIntRegion& aRegion) {
+       margins.cxLeftWidth = largest.X();
+       margins.cxRightWidth = clientBounds.Width() - largest.XMost();
+       margins.cyBottomHeight = clientBounds.Height() - largest.YMost();
++    if (mCustomNonClient) {
++      // The minimum glass height must be the caption buttons height,
++      // otherwise the buttons are drawn incorrectly.
++      largest.MoveToY(std::max<uint32_t>(
++          largest.Y(), nsLookAndFeel::GetCommandButtonBoxMetrics().cy));
++    }
+       margins.cyTopHeight = largest.Y();
+     }
+ 
+diff --git a/xpcom/ds/StaticAtoms.py b/xpcom/ds/StaticAtoms.py
+index 12b8ec97a0d5c7764bd4418f1295b90a055c2a87..ca473cd4866c7d72ec069b0fca190203937e4191 100644
+--- a/xpcom/ds/StaticAtoms.py
++++ b/xpcom/ds/StaticAtoms.py
+@@ -2328,7 +2328,15 @@ STATIC_ATOMS = [
+     Atom("forcemessagemanager", "forcemessagemanager"),
+     Atom("initialBrowsingContextGroupId", "initialBrowsingContextGroupId"),
+     Atom("manualactiveness", "manualactiveness"),
++    # windows media query names
++    Atom("windows_win7", "windows-win7"),
++    Atom("windows_win8", "windows-win8"),
++    Atom("windows_win10", "windows-win10"),
+     # Names for system metrics.
++    Atom("_moz_windows_compositor", "-moz-windows-compositor"),
++    Atom("_moz_windows_classic", "-moz-windows-classic"),
++    Atom("_moz_windows_glass", "-moz-windows-glass"),
++    Atom("_moz_windows_non_native_menus", "-moz-windows-non-native-menus"),
+     Atom("_moz_bool_pref", "-moz-bool-pref"),
+     Atom("_moz_overlay_scrollbars", "-moz-overlay-scrollbars"),
+     Atom("_moz_overlay_scrollbar_fade_duration", "-moz-overlay-scrollbar-fade-duration"),

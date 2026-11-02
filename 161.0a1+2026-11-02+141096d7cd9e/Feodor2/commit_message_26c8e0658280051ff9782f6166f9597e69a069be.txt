@@ -1,0 +1,1 @@
+Bug 1869124 - Streamline Windows event sound playback to avoid shutdown hangs. r=win-reviewers,gstoll    2026-10-02 01:47:42    26c8e0658280051ff9782f6166f9597e69a069be

@@ -1,0 +1,1 @@
+Fix the timezone detection on Windows with RDP.    2018/10/9 15:22:00    ccad4472126e35ccd1d19bea38b6675802d40472

@@ -1,0 +1,362 @@
+diff --git a/browser/components/aboutwelcome/modules/AboutWelcomeDefaults.sys.mjs b/browser/components/aboutwelcome/modules/AboutWelcomeDefaults.sys.mjs
+index 82ce8a8..305b0bc 100644
+--- a/browser/components/aboutwelcome/modules/AboutWelcomeDefaults.sys.mjs
++++ b/browser/components/aboutwelcome/modules/AboutWelcomeDefaults.sys.mjs
+@@ -926,6 +926,13 @@ async function prepareContentForReact(content) {
+     content.backdrop = "var(--mr-smart-window-background-gradient)";
+   }
+ 
++  // Change content for Windows 7 because non-light themes aren't quite right.
++  if (AppConstants.isPlatformAndVersionAtMost("win", "6.1")) {
++    await lazy.AWScreenUtils.removeScreens(screens, screen =>
++      ["theme"].includes(screen.content?.tiles?.type)
++    );
++  }
++
+   // Set the primary import button source based on attribution.
+   if (content?.ua) {
+     // If available, add the browser source to action data
+diff --git a/browser/components/customizableui/CustomizeMode.sys.mjs b/browser/components/customizableui/CustomizeMode.sys.mjs
+index 0226177..e325117 100644
+--- a/browser/components/customizableui/CustomizeMode.sys.mjs
++++ b/browser/components/customizableui/CustomizeMode.sys.mjs
+@@ -2064,8 +2064,9 @@ export class CustomizeMode {
+       }
+     }
+ 
+-    // Add menu items for automatically switching to Touch mode in Windows Tablet Mode.
+-    if (AppConstants.platform == "win") {
++    // Add menu items for automatically switching to Touch mode in Windows Tablet Mode,
++    // which is only available in Windows 10.
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+       let spacer = doc.getElementById("customization-uidensity-touch-spacer");
+       let checkbox = doc.getElementById(
+         "customization-uidensity-autotouchmode-checkbox"
+diff --git a/browser/components/customizableui/test/browser_customizemode_uidensity.js b/browser/components/customizableui/test/browser_customizemode_uidensity.js
+index 890b649..a826c68 100644
+--- a/browser/components/customizableui/test/browser_customizemode_uidensity.js
++++ b/browser/components/customizableui/test/browser_customizemode_uidensity.js
+@@ -196,8 +196,8 @@ add_task(async function test_touch_mode_menuitem() {
+   await testModeMenuitem("touch", window.gUIDensity.MODE_TOUCH);
+ 
+   // Test the checkbox for automatic Touch Mode transition
+-  // in Windows Tablet Mode.
+-  if (AppConstants.platform == "win") {
++  // in Windows 10 Tablet Mode.
++  if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+     await startCustomizing();
+ 
+     let popupButton = document.getElementById("customization-uidensity-button");
+diff --git a/browser/components/migration/MigrationUtils.sys.mjs b/browser/components/migration/MigrationUtils.sys.mjs
+index 1289865..0332b68 100644
+--- a/browser/components/migration/MigrationUtils.sys.mjs
++++ b/browser/components/migration/MigrationUtils.sys.mjs
+@@ -13,6 +13,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
+   PlacesUIUtils: "moz-src:///browser/components/places/PlacesUIUtils.sys.mjs",
+   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
+   Sqlite: "resource://gre/modules/Sqlite.sys.mjs",
++  WindowsRegistry: "resource://gre/modules/WindowsRegistry.sys.mjs",
+   setTimeout: "resource://gre/modules/Timer.sys.mjs",
+   MigrationWizardConstants:
+     "chrome://browser/content/migration/migration-wizard-constants.mjs",
+@@ -31,6 +32,7 @@ var gMigrators = null;
+ var gFileMigrators = null;
+ var gProfileStartup = null;
+ var gL10n = null;
++var gPreviousDefaultBrowserKey = "";
+ 
+ let gForceExitSpinResolve = false;
+ let gKeepUndoData = false;
+@@ -556,6 +558,51 @@ class MigrationUtils {
+       console.error("Could not detect default browser: ", ex);
+     }
+ 
++    // "firefox" is the least useful entry here, and might just be because we've set
++    // ourselves as the default (on Windows 7 and below). In that case, check if we
++    // have a registry key that tells us where to go:
++    if (
++      key == "firefox" &&
++      AppConstants.isPlatformAndVersionAtMost("win", "6.2")
++    ) {
++      // Because we remove the registry key, reading the registry key only works once.
++      // We save the value for subsequent calls to avoid hard-to-trace bugs when multiple
++      // consumers ask for this key.
++      if (gPreviousDefaultBrowserKey) {
++        key = gPreviousDefaultBrowserKey;
++      } else {
++        // We didn't have a saved value, so check the registry.
++        const kRegPath = "Software\\Mozilla\\Firefox";
++        let oldDefault = lazy.WindowsRegistry.readRegKey(
++          Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++          kRegPath,
++          "OldDefaultBrowserCommand"
++        );
++        if (oldDefault) {
++          // Remove the key:
++          lazy.WindowsRegistry.removeRegKey(
++            Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++            kRegPath,
++            "OldDefaultBrowserCommand"
++          );
++          try {
++            let file = Cc["@mozilla.org/file/local;1"].createInstance(
++              Ci.nsILocalFileWin
++            );
++            file.initWithCommandLine(oldDefault);
++            key =
++              APP_DESC_TO_KEY[file.getVersionInfoField("FileDescription")] ||
++              key;
++            // Save the value for future callers.
++            gPreviousDefaultBrowserKey = key;
++          } catch (ex) {
++            console.error(
++              "Could not convert old default browser value to description."
++            );
++          }
++        }
++      }
++    }
+     return key;
+   }
+ 
+diff --git a/browser/components/preferences/config/accessibility.mjs b/browser/components/preferences/config/accessibility.mjs
+index 1b9b856..2fdbd33 100644
+--- a/browser/components/preferences/config/accessibility.mjs
++++ b/browser/components/preferences/config/accessibility.mjs
+@@ -91,10 +91,11 @@ Preferences.addSetting({
+ Preferences.addSetting({
+   id: "mediaControlToggleEnabled",
+   pref: "media.hardwaremediakeys.enabled",
+-  // For media control toggle button, we support it on Windows, macOS and
++  // For media control toggle button, we support it on Windows 8.1+ (NT6.3),
++  // MacOs 10.4+ (darwin8.0, but we already don't support that) and
+   // gtk-based Linux.
+   visible: () =>
+-    AppConstants.platform == "win" ||
++    AppConstants.isPlatformAndVersionAtLeast("win", "6.3") ||
+     AppConstants.platform == "macosx" ||
+     AppConstants.MOZ_WIDGET_GTK,
+ });
+diff --git a/browser/components/sharing/SharingUtils.sys.mjs b/browser/components/sharing/SharingUtils.sys.mjs
+index a29e48e..3f9ba0b 100644
+--- a/browser/components/sharing/SharingUtils.sys.mjs
++++ b/browser/components/sharing/SharingUtils.sys.mjs
+@@ -310,8 +310,9 @@ class SharingUtilsCls {
+       menuPopup.appendChild(qrCodeItem);
+     }
+ 
+-    // Windows: native share dialog
+-    if (AppConstants.platform == "win") {
++    // Native Windows "share URL" support is only available on Windows 10.
++    // Windows 10's internal NT version number was initially 6.4
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "6.4")) {
+       menuPopup.appendChild(document.createXULElement("menuseparator"));
+       let winShareItem = document.createXULElement("menuitem");
+       winShareItem.classList.add("share-windows-item");
+diff --git a/browser/components/shell/ShellService.sys.mjs b/browser/components/shell/ShellService.sys.mjs
+index e6b3089..03a08c9 100644
+--- a/browser/components/shell/ShellService.sys.mjs
++++ b/browser/components/shell/ShellService.sys.mjs
+@@ -14,6 +14,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
+   Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
+   WindowsSetDefaultRedirect:
+     "moz-src:///browser/components/shell/WindowsSetDefaultRedirect.sys.mjs",
++  WindowsRegistry: "resource://gre/modules/WindowsRegistry.sys.mjs",
+ });
+ 
+ XPCOMUtils.defineLazyServiceGetter(
+@@ -121,6 +122,26 @@ let ShellServiceInternal = {
+     return false;
+   },
+ 
++  isDefaultBrowserOptOut() {
++    if (AppConstants.platform == "win") {
++      let optOutValue = lazy.WindowsRegistry.readRegKey(
++        Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++        "Software\\Mozilla\\Firefox",
++        "DefaultBrowserOptOut"
++      );
++      lazy.WindowsRegistry.removeRegKey(
++        Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
++        "Software\\Mozilla\\Firefox",
++        "DefaultBrowserOptOut"
++      );
++      if (optOutValue == "True") {
++        Services.prefs.setBoolPref("browser.shell.checkDefaultBrowser", false);
++        return true;
++      }
++    }
++    return false;
++  },
++
+   /**
+    * Used to determine based on the creation date of the home folder how old a
+    * user profile is (and NOT the browser profile).
+@@ -160,6 +181,10 @@ let ShellServiceInternal = {
+       return false;
+     }
+ 
++    if (this.isDefaultBrowserOptOut()) {
++      return false;
++    }
++
+     return true;
+   },
+ 
+@@ -480,9 +505,9 @@ let ShellServiceInternal = {
+ 
+     this._attemptedSetDefaultThisSession = true;
+ 
+-    // On Windows, our best chance is to set UserChoice, so try that first.
++    // On Windows 10, our best chance is to set UserChoice, so try that first.
+     if (
+-      AppConstants.platform == "win" &&
++      AppConstants.isPlatformAndVersionAtLeast("win", "10") &&
+       Services.prefs.getBoolPref("browser.shell.setDefaultBrowserUserChoice")
+     ) {
+       try {
+@@ -631,6 +656,10 @@ let ShellServiceInternal = {
+    * {@link ShellService.setAsDefaultPDFHandler}.
+    */
+   async _setAsDefaultPDFHandlerWin(onlyIfKnownBrowser, openInFirefox) {
++    if (!AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
++      return false;
++    }
++
+     if (onlyIfKnownBrowser && !this.getDefaultPDFHandler().knownBrowser) {
+       return false;
+     }
+@@ -849,14 +878,14 @@ let ShellServiceInternal = {
+ 
+   /**
+    * Whether the platform supports offering to set Firefox as the default PDF
+-   * handler. Always true on Windows; on macOS requires macOS 12 (the
++   * handler. Requires Windows 10+; on macOS requires macOS 12 (the
+    * underlying NSWorkspace API); false on other platforms.
+    *
+    * @returns {boolean}
+    */
+   get canSetAsDefaultPDFHandler() {
+     if (AppConstants.platform == "win") {
+-      return true;
++      return AppConstants.isPlatformAndVersionAtLeast("win", "10");
+     }
+     if (AppConstants.platform == "macosx") {
+       return this.shellService.canSetAsDefaultHandler;
+diff --git a/browser/components/shell/content/setDesktopBackground.js b/browser/components/shell/content/setDesktopBackground.js
+index 829a7ca..a949789 100644
+--- a/browser/components/shell/content/setDesktopBackground.js
++++ b/browser/components/shell/content/setDesktopBackground.js
+@@ -58,8 +58,11 @@ var gSetBackground = {
+         multiMonitors = monitors.length > 1;
+       }
+ 
+-      if (!multiMonitors) {
+-        // Hide span option on single monitor systems.
++      if (
++        !multiMonitors ||
++        AppConstants.isPlatformAndVersionAtMost("win", 6.1)
++      ) {
++        // Hide span option if < Win8 since that's when it was introduced.
+         document.getElementById("spanPosition").hidden = true;
+       }
+ 
+diff --git a/browser/components/uitour/UITour.sys.mjs b/browser/components/uitour/UITour.sys.mjs
+index f258f90..103613e 100644
+--- a/browser/components/uitour/UITour.sys.mjs
++++ b/browser/components/uitour/UITour.sys.mjs
+@@ -1876,7 +1876,7 @@ export var UITour = {
+       } catch (e) {}
+ 
+       let canSetDefaultBrowserInBackground = true;
+-      if (AppConstants.platform == "win" || AppConstants.platform == "macosx") {
++      if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2") || AppConstants.platform == "macosx") {
+         canSetDefaultBrowserInBackground = false;
+       } else if (AppConstants.platform == "linux") {
+         // The ShellService may not exist on some versions of Linux.
+diff --git a/browser/modules/test/unit/test_InstallationTelemetry.js b/browser/modules/test/unit/test_InstallationTelemetry.js
+index 6907c5a..52939f2 100644
+--- a/browser/modules/test/unit/test_InstallationTelemetry.js
++++ b/browser/modules/test/unit/test_InstallationTelemetry.js
+@@ -226,8 +226,8 @@ add_task(condition, async function testInstallationTelemetry() {
+   // New timestamp and a check to make sure we can find installed MSIX packages
+   // by overriding the prefixes a bit further down.
+   fullData.install_timestamp = "2";
+-  // This check only works on Windows
+-  if (AppConstants.platform == "win") {
++  // This check only works on Windows 10 and above
++  if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+     fullExtra.other_msix_inst = "true";
+   }
+   await writeJsonUtf16(dataFilePath, fullData);
+diff --git a/toolkit/components/telemetry/app/TelemetryEnvironment.sys.mjs b/toolkit/components/telemetry/app/TelemetryEnvironment.sys.mjs
+index e6db833..9453759 100644
+--- a/toolkit/components/telemetry/app/TelemetryEnvironment.sys.mjs
++++ b/toolkit/components/telemetry/app/TelemetryEnvironment.sys.mjs
+@@ -1809,6 +1809,10 @@ EnvironmentCache.prototype = {
+       data.isWow64 = processData.isWow64;
+       Glean.system.isWow64.set(processData.isWow64);
+       Glean.system.isWowArm64.set(processData.isWowARM64);
++    }
++
++    // Windows 8+
++    if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
+       this._recordSecurityAppData();
+     }
+ 
+diff --git a/toolkit/components/telemetry/tests/unit/test_TelemetrySession.js b/toolkit/components/telemetry/tests/unit/test_TelemetrySession.js
+index 87f1525..b797471 100644
+--- a/toolkit/components/telemetry/tests/unit/test_TelemetrySession.js
++++ b/toolkit/components/telemetry/tests/unit/test_TelemetrySession.js
+@@ -563,13 +563,20 @@ add_task(async function sessionTimeExcludingAndIncludingSuspend() {
+     "In test condition, the two uptimes should be close to each other"
+   );
+ 
+-  // This however should always hold.
+-  Assert.greaterOrEqual(
+-    withSuspend,
+-    withoutSuspend,
+-    `The uptime with suspend must always been greater or equal to the uptime
+-     without suspend`
+-  );
++  // This however should always hold, except on Windows < 10, where the two
++  // clocks are from different system calls, and it can fail in test condition
++  // because the machine has not been suspended.
++  if (
++    AppConstants.platform != "win" ||
++    AppConstants.isPlatformAndVersionAtLeast("win", "10.0")
++  ) {
++    Assert.greaterOrEqual(
++      withSuspend,
++      withoutSuspend,
++      `The uptime with suspend must always been greater or equal to the uptime
++       without suspend`
++    );
++  }
+ 
+   Services.prefs.setBoolPref(
+     "toolkit.telemetry.testing.overrideProductsCheck",
+diff --git a/toolkit/modules/subprocess/subprocess_win.sys.mjs b/toolkit/modules/subprocess/subprocess_win.sys.mjs
+index ec6d78d..03d2779 100644
+--- a/toolkit/modules/subprocess/subprocess_win.sys.mjs
++++ b/toolkit/modules/subprocess/subprocess_win.sys.mjs
+@@ -2,6 +2,7 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
++import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
+ import {
+   BaseProcess,
+   PromiseWorker,
+@@ -45,7 +46,10 @@ class WinPromiseWorker extends PromiseWorker {
+ 
+     this.call("init", [
+       {
+-        breakAwayFromJob: false,
++        breakAwayFromJob: !AppConstants.isPlatformAndVersionAtLeast(
++          "win",
++          "6.2"
++        ),
+         comspec: Services.env.get("COMSPEC"),
+         iocpCompletionPort: String(ctypes.cast(iocp, ctypes.uintptr_t).value),
+       },

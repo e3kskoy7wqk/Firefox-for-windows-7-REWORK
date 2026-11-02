@@ -1,0 +1,17 @@
+diff --git a/gfx/ipc/CanvasRenderThread.cpp b/gfx/ipc/CanvasRenderThread.cpp
+index 853806a222c3..710ccb0457a3 100644
+--- a/gfx/ipc/CanvasRenderThread.cpp
++++ b/gfx/ipc/CanvasRenderThread.cpp
+@@ -128,7 +128,11 @@ void CanvasRenderThread::Start() {
+             nsthread->SetUseHangMonitor(true);
+             nsthread->SetPriority(nsISupportsPriority::PRIORITY_HIGH);
+           }),
+-      {.stackSize = stackSize});
++      {.stackSize = stackSize,
++#ifdef XP_WIN
++       .isUiThread = true,
++#endif
++      });
+ 
+   if (NS_WARN_IF(NS_FAILED(rv))) {
+     return;

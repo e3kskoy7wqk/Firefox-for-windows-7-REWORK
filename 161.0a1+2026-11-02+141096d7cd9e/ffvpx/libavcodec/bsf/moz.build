@@ -1,0 +1,14 @@
+# Auto-generated file. Do not edit!
+
+DIRS += [
+]
+
+SOURCES += [
+    'media100_to_mjpegb.c',
+    'vp9_superframe_split.c',
+]
+
+LOCAL_INCLUDES += [ "../" ]
+
+FINAL_LIBRARY = 'mozavcodec'
+include('/media/ffvpx/ffvpxcommon.mozbuild')

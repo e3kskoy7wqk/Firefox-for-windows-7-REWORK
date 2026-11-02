@@ -1,0 +1,1 @@
+Bug 1331171 - Part 1: Remove StartupSpecialSystemDirectory() workaround for Windows XP. r=jimm    2017-01-14 17:12:02    84f6950c2da84ab54298f19584c0a67d7975c111

@@ -1,0 +1,1 @@
+Bug 1918478: Patch in a workable version of GetProcessMitigationPolicy on Windows 7 for widevine. r=aosmond,media-playback-reviewers,win-reviewers,yjuglaret a=diannaS    2024-09-19 00:24:11    6d887671371e7adf68328993e314f57c36f82396

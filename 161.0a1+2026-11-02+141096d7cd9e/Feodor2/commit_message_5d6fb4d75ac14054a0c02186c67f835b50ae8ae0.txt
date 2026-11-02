@@ -1,0 +1,1 @@
+Bug 1630371 - Disable DirectComposition when we have a scaled resolution and no hardware stretching. r=aosmond    2020-04-16 22:54:17    5d6fb4d75ac14054a0c02186c67f835b50ae8ae0

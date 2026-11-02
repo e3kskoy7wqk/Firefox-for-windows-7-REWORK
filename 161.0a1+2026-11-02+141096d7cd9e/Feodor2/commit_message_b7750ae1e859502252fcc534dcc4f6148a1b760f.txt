@@ -1,0 +1,1 @@
+Bug 1836875 - Bump subsystem version to 10.0 to block Firefox from running on Windows 7/8/8.1. r=firefox-build-system-reviewers,glandium    2023-07-15 02:45:24    b7750ae1e859502252fcc534dcc4f6148a1b760f

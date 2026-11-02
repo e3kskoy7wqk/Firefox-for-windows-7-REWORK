@@ -1,0 +1,1 @@
+Bug 1995498 - Assume per-monitor DPI awareness. r=win-reviewers,gstoll    2025-10-22 19:00:57    71f243cfd9ed706a19f89755e2f40b3be68424b4

@@ -1,0 +1,12 @@
+diff --git a/widget/windows/ToastNotification.cpp b/widget/windows/ToastNotification.cpp
+index 9193701a62f9..f7a90367a08d 100644
+--- a/widget/windows/ToastNotification.cpp
++++ b/widget/windows/ToastNotification.cpp
+@@ -154,6 +154,7 @@ bool ToastNotification::AssignIfNsisAumid(nsAutoString& aInstallHash,
+ 
+ bool ToastNotification::RegisterRuntimeAumid(nsAutoString& aInstallHash,
+                                              Maybe<nsAutoString>& aAumid) {
++  return false;
+   // Portable AUMID slightly differs from installed AUMID so we can
+   // differentiate installed to HKCU vs portable installs if necessary.
+   nsAutoString portableAumid =

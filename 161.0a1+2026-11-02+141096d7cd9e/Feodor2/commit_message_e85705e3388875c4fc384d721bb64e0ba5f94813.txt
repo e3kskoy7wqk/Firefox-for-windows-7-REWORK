@@ -1,0 +1,1 @@
+Bug 1391164 - Unnecessary to use GetProcAddress for gesture APIs since we already  drop XP and Vista. r=jimm    2017-08-18 08:47:36    e85705e3388875c4fc384d721bb64e0ba5f94813

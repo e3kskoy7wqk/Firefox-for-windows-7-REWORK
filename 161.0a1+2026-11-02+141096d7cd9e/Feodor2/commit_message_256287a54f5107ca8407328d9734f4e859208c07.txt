@@ -1,0 +1,1 @@
+Bug 2070220: Use a futex-backed allocator mutex on Windows. r=glandium    2026-09-17 23:30:08    256287a54f5107ca8407328d9734f4e859208c07

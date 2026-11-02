@@ -1,0 +1,1 @@
+Bug 1751177 - Give sandbox permissions for BCryptGenRandom on Win7 r=tkikuchi    2022-02-01 04:46:48    24c3b1039fde6bbb0b52186a292bb7a800e473a7

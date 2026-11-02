@@ -1,0 +1,47 @@
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 184dec645259..e3755e5ee6e7 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -9098,7 +9098,8 @@ void nsWindow::FrameState::EnsureSizeMode(nsSizeMode aMode,
+     return;
+   }
+ 
+-  if (StaticPrefs::widget_windows_fullscreen_remind_taskbar()) {
++  if (::IsWin10OrLater() &&
++      StaticPrefs::widget_windows_fullscreen_remind_taskbar()) {
+     // If we're unminimizing a window, asynchronously notify the taskbar after
+     // the message has been processed. This redundant notification works around
+     // a race condition in explorer.exe. (See bug 1835851, or comments in
+diff --git a/widget/windows/nsWindowTaskbarConcealer.cpp b/widget/windows/nsWindowTaskbarConcealer.cpp
+index ec58c5ef2a9f..0b6f91fa9913 100644
+--- a/widget/windows/nsWindowTaskbarConcealer.cpp
++++ b/widget/windows/nsWindowTaskbarConcealer.cpp
+@@ -363,16 +363,18 @@ void nsWindow::TaskbarConcealer::OnAsyncStateUpdateRequest(HWND hwnd) {
+   //
+   // [0] https://github.com/dechamps/RudeWindowFixer#a-race-condition-activating-a-minimized-window
+   //
+-  static UINT const shellHookMsg = ::RegisterWindowMessageW(L"SHELLHOOK");
+-  if (shellHookMsg != 0) {
+-    // Identifying the particular thread of the particular instance of the
+-    // shell associated with our current desktop is probably possible, but
+-    // also probably not worth the effort. Just broadcast the message
+-    // globally.
+-    DWORD info = BSM_APPLICATIONS;
+-    ::BroadcastSystemMessage(BSF_POSTMESSAGE | BSF_IGNORECURRENTTASK, &info,
+-                             shellHookMsg, HSHELL_WINDOWACTIVATED,
+-                             (LPARAM)hwnd);
++  if (::IsWin10OrLater()) {
++    static UINT const shellHookMsg = ::RegisterWindowMessageW(L"SHELLHOOK");
++    if (shellHookMsg != 0) {
++      // Identifying the particular thread of the particular instance of the
++      // shell associated with our current desktop is probably possible, but
++      // also probably not worth the effort. Just broadcast the message
++      // globally.
++      DWORD info = BSM_APPLICATIONS;
++      ::BroadcastSystemMessage(BSF_POSTMESSAGE | BSF_IGNORECURRENTTASK, &info,
++                               shellHookMsg, HSHELL_WINDOWACTIVATED,
++                               (LPARAM)hwnd);
++    }
+   }
+ }
+ 
