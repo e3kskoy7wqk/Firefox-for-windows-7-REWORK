@@ -1,0 +1,15 @@
+diff --git a/gfx/angle/moz.build b/gfx/angle/moz.build
+index b3f3a8593e2b..0df61c36a04b 100644
+--- a/gfx/angle/moz.build
++++ b/gfx/angle/moz.build
+@@ -2,6 +2,10 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
++if CONFIG["OS_TARGET"] == "WINNT":
++    DEFINES["ANGLE_WINDOWS_NO_FUTEX"] = 1
++    export("DEFINES")
++
+ DIRS += [
+     "/third_party/angle",
+ ]

@@ -1,0 +1,1 @@
+Bug 1330496 - Part 1: Remove MOZ_WIN_INHERIT_STD_HANDLES_PRE_VISTA support for inheriting stdout/stderr handles on XP. r=bobowen    2017-01-11 15:50:16    f657247d8634eb572c43f60044d970e07fabce7a

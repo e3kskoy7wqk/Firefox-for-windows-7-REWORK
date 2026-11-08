@@ -1,0 +1,1 @@
+Bug 1348177 - Part 1. Remove GetProcAddress for shell32 to use Vista+ API (image part). r=jimm,tnikkel    2017-03-17 12:26:57    3f4c2156a6b2cd4ba030c1d6475f951ae9d4e873

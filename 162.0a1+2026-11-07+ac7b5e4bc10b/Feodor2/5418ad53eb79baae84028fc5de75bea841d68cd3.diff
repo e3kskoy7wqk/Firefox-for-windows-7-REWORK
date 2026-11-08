@@ -1,0 +1,48 @@
+diff --git a/netwerk/sctp/src/netinet/sctp_os_userspace.h b/netwerk/sctp/src/netinet/sctp_os_userspace.h
+index fcf20de..af95888 100755
+--- a/netwerk/sctp/src/netinet/sctp_os_userspace.h
++++ b/netwerk/sctp/src/netinet/sctp_os_userspace.h
+@@ -51,7 +51,7 @@
+ #include <windows.h>
+ #include "user_environment.h"
+ typedef CRITICAL_SECTION userland_mutex_t;
+-#if WINVER < 0x0600
++#if defined (_WIN32_WINNT)
+ typedef CRITICAL_SECTION userland_rwlock_t;
+ enum {
+ 	C_SIGNAL = 0,
+diff --git a/netwerk/sctp/src/netinet/sctp_userspace.c b/netwerk/sctp/src/netinet/sctp_userspace.c
+index d85ba46..2ac94ad 100755
+--- a/netwerk/sctp/src/netinet/sctp_userspace.c
++++ b/netwerk/sctp/src/netinet/sctp_userspace.c
+@@ -224,7 +224,7 @@ win_if_nametoindex(const char *ifname)
+ 	return index;
+ }
+ 
+-#if WINVER < 0x0600
++#if defined (_WIN32_WINNT)
+ /* These functions are written based on the code at
+  * http://www.cs.wustl.edu/~schmidt/win32-cv-1.html
+  * Therefore, for the rest of the file the following applies:
+diff --git a/netwerk/sctp/src/netinet/sctp_process_lock.h b/netwerk/sctp/src/netinet/sctp_process_lock.h
+index 165c6e4eabd8..5324e93d3180 100755
+--- a/netwerk/sctp/src/netinet/sctp_process_lock.h
++++ b/netwerk/sctp/src/netinet/sctp_process_lock.h
+@@ -129,7 +129,7 @@
+ 	LeaveCriticalSection(&SCTP_BASE_INFO(wq_addr_mtx))
+ #define SCTP_WQ_ADDR_LOCK_ASSERT()
+ 
+-#if WINVER < 0x0600
++#if defined (_WIN32_WINNT)
+ #define SCTP_INP_INFO_LOCK_INIT() \
+ 	InitializeCriticalSection(&SCTP_BASE_INFO(ipi_ep_mtx))
+ #define SCTP_INP_INFO_LOCK_DESTROY() \
+@@ -532,7 +532,7 @@
+ 
+ #if defined(_WIN32)
+ /* address list locks */
+-#if WINVER < 0x0600
++#if defined (_WIN32_WINNT)
+ #define SCTP_IPI_ADDR_INIT() \
+ 	InitializeCriticalSection(&SCTP_BASE_INFO(ipi_addr_mtx))
+ #define SCTP_IPI_ADDR_DESTROY() \

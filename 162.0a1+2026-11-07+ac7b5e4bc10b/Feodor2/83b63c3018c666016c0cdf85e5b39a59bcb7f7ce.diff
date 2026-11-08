@@ -1,0 +1,61 @@
+diff --git a/other-licenses/7zstub/firefox/SFXSetup.vcxproj b/other-licenses/7zstub/firefox/SFXSetup.vcxproj
+index 4e45b1bee712..013b0de21561 100644
+--- a/other-licenses/7zstub/firefox/SFXSetup.vcxproj
++++ b/other-licenses/7zstub/firefox/SFXSetup.vcxproj
+@@ -141,8 +141,8 @@
+     <Link>
+       <SuppressStartupBanner>true</SuppressStartupBanner>
+       <SubSystem>Windows</SubSystem>
+-      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;comctl32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
++      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <ProfileGuidedDatabase />
+       <GenerateDebugInformation>false</GenerateDebugInformation>
+       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+@@ -187,8 +187,8 @@
+     <Link>
+       <SuppressStartupBanner>true</SuppressStartupBanner>
+       <SubSystem>Windows</SubSystem>
+-      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;shell32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;comctl32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
++      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;shell32.lib;oleaut32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <GenerateDebugInformation>false</GenerateDebugInformation>
+       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+       <ProfileGuidedDatabase />
+@@ -235,8 +235,8 @@
+       <SuppressStartupBanner>true</SuppressStartupBanner>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <SubSystem>Windows</SubSystem>
+-      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;comctl32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
++      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <ProfileGuidedDatabase />
+       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+     </Link>
+@@ -280,8 +280,8 @@
+       <SuppressStartupBanner>true</SuppressStartupBanner>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <SubSystem>Windows</SubSystem>
+-      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;shell32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <DelayLoadDLLs>user32.dll;shell32.dll;oleaut32.dll;comctl32.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
++      <AdditionalDependencies>odbc32.lib;odbccp32.lib;delayimp.lib;shell32.lib;oleaut32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <ProfileGuidedDatabase />
+       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
+diff --git a/other-licenses/7zstub/src/CPP/7zip/Bundles/SFXSetup/SfxSetup.cpp b/other-licenses/7zstub/src/CPP/7zip/Bundles/SFXSetup/SfxSetup.cpp
+index e3a3bb2c61e6..7d1d661e7672 100644
+--- a/other-licenses/7zstub/src/CPP/7zip/Bundles/SFXSetup/SfxSetup.cpp
++++ b/other-licenses/7zstub/src/CPP/7zip/Bundles/SFXSetup/SfxSetup.cpp
+@@ -336,7 +336,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE /* hPrevInstance */,
+   //#endif
+   // END Mozilla customizations
+ 
+-  // InitCommonControls();
++  InitCommonControls();
+ 
+   UString archiveName, switches;
+   #ifdef _SHELL_EXECUTE

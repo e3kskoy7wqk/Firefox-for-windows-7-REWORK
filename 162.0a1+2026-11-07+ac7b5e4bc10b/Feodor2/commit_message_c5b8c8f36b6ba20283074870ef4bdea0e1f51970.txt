@@ -1,0 +1,1 @@
+Fix failing WGC tests on Win10    2022-05-07 07:46:42    c5b8c8f36b6ba20283074870ef4bdea0e1f51970

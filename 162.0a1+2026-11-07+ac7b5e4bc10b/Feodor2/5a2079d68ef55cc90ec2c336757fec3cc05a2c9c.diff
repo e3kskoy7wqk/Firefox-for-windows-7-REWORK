@@ -1,0 +1,56 @@
+diff --git a/browser/components/shell/WindowsUserChoice.cpp b/browser/components/shell/WindowsUserChoice.cpp
+index 991d451caf13ac36baecd1140316ea27d4e70bc5..e0144d3d04581c4304def9f8fdcc13c7f0845bf0 100644
+--- a/browser/components/shell/WindowsUserChoice.cpp
++++ b/browser/components/shell/WindowsUserChoice.cpp
+@@ -490,12 +490,25 @@ nsresult GetMsixProgId(const wchar_t* assoc, UniquePtr<wchar_t[]>& aProgId) {
+   // HKEY_CLASSES_ROOT\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\[Package Full Name]\App\Capabilities\[FileAssociations | URLAssociations]\[File | URL]
+   // clang-format on
+ 
++typedef LONG(WINAPI *GetCurrentPackageFullName_t)(UINT32 *packageFullNameLength, PWSTR packageFullName);
++
++static GetCurrentPackageFullName_t WIN_GetCurrentPackageFullName;
++
++    if (!WIN_GetCurrentPackageFullName) {
++        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
++        WIN_GetCurrentPackageFullName = (GetCurrentPackageFullName_t)GetProcAddress(kernel32, "GetCurrentPackageFullName");
++    }
++
++    if (!WIN_GetCurrentPackageFullName) {
++        return NS_OK;
++    }
++
+   UINT32 pfnLen = 0;
+-  LONG rv = GetCurrentPackageFullName(&pfnLen, nullptr);
++  LONG rv = WIN_GetCurrentPackageFullName(&pfnLen, nullptr);
+   NS_ENSURE_TRUE(rv != APPMODEL_ERROR_NO_PACKAGE, NS_ERROR_FAILURE);
+ 
+   auto pfn = std::make_unique<wchar_t[]>(pfnLen);
+-  rv = GetCurrentPackageFullName(&pfnLen, pfn.get());
++  rv = WIN_GetCurrentPackageFullName(&pfnLen, pfn.get());
+   NS_ENSURE_TRUE(rv == ERROR_SUCCESS, NS_ERROR_FAILURE);
+ 
+   const wchar_t* assocSuffix;
+diff --git a/toolkit/mozapps/defaultagent/SetDefaultBrowser.cpp b/toolkit/mozapps/defaultagent/SetDefaultBrowser.cpp
+index 44aa6c82e62e46397f977a937fc913dcf02a38be..24694d7a326c5db1ce518038dc4620443cc9758a 100644
+--- a/toolkit/mozapps/defaultagent/SetDefaultBrowser.cpp
++++ b/toolkit/mozapps/defaultagent/SetDefaultBrowser.cpp
+@@ -763,8 +763,17 @@ nsresult SetDefaultExtensionHandlersUserChoiceImpl(
+     const wchar_t* aAumi, const wchar_t* const aSid, const bool aRegRename,
+     const nsTArray<nsString>& aFileExtensions) {
+   UINT32 pfnLen = 0;
+-  bool inMsix =
+-      GetCurrentPackageFullName(&pfnLen, nullptr) != APPMODEL_ERROR_NO_PACKAGE;
++typedef LONG(WINAPI *GetCurrentPackageFullName_t)(UINT32 *packageFullNameLength, PWSTR packageFullName);
++
++static GetCurrentPackageFullName_t WIN_GetCurrentPackageFullName;
++
++    if (!WIN_GetCurrentPackageFullName) {
++        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
++        WIN_GetCurrentPackageFullName = (GetCurrentPackageFullName_t)GetProcAddress(kernel32, "GetCurrentPackageFullName");
++    }
++
++  bool inMsix =WIN_GetCurrentPackageFullName&&
++      WIN_GetCurrentPackageFullName(&pfnLen, nullptr) != APPMODEL_ERROR_NO_PACKAGE;
+ 
+   if (inMsix) {
+     return SetDefaultExtensionHandlersUserChoiceImplMsix(

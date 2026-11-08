@@ -1,0 +1,675 @@
+diff --git a/gfx/thebes/gfxBaseSharedMemorySurface.cpp b/gfx/thebes/gfxBaseSharedMemorySurface.cpp
+new file mode 100644
+index 000000000000..9cd75880ee0c
+--- /dev/null
++++ b/gfx/thebes/gfxBaseSharedMemorySurface.cpp
+@@ -0,0 +1,9 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "gfxBaseSharedMemorySurface.h"
++
++#include "cairo.h"
++
++const cairo_user_data_key_t SHM_KEY = {0};
+diff --git a/gfx/thebes/gfxBaseSharedMemorySurface.h b/gfx/thebes/gfxBaseSharedMemorySurface.h
+new file mode 100644
+index 000000000000..978cf309052e
+--- /dev/null
++++ b/gfx/thebes/gfxBaseSharedMemorySurface.h
+@@ -0,0 +1,161 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef GFX_SHARED_MEMORYSURFACE_H
++#define GFX_SHARED_MEMORYSURFACE_H
++
++#include "gfxASurface.h"
++#include "gfxImageSurface.h"
++#include "mozilla/gfx/2D.h"
++#include "mozilla/ipc/Shmem.h"
++#include "pratom.h"
++
++typedef struct _cairo_user_data_key cairo_user_data_key_t;
++
++struct SharedImageInfo {
++  int32_t width;
++  int32_t height;
++  gfxImageFormat format;
++  int32_t readCount;
++};
++
++inline SharedImageInfo* GetShmInfoPtr(const mozilla::ipc::Shmem& aShmem) {
++  return reinterpret_cast<SharedImageInfo*>(
++      aShmem.get<char>() + aShmem.Size<char>() - sizeof(SharedImageInfo));
++}
++
++extern const cairo_user_data_key_t SHM_KEY;
++
++template <typename Base, typename Sub>
++class gfxBaseSharedMemorySurface : public Base {
++  typedef mozilla::ipc::Shmem Shmem;
++
++ protected:
++  virtual ~gfxBaseSharedMemorySurface() {
++    MOZ_COUNT_DTOR(gfxBaseSharedMemorySurface);
++  }
++
++ public:
++  // Calling these is very bad, disallow it
++  gfxBaseSharedMemorySurface(const gfxBaseSharedMemorySurface&) = delete;
++  gfxBaseSharedMemorySurface& operator=(const gfxBaseSharedMemorySurface&) =
++      delete;
++
++  /**
++   * Return a new gfxSharedImageSurface around a shmem segment newly
++   * allocated by this function.  |aAllocator| is the object used to
++   * allocate the new shmem segment.  Null is returned if creating
++   * the surface failed.
++   *
++   * NB: the *caller* is responsible for freeing the Shmem allocated
++   * by this function.
++   */
++  template <class ShmemAllocator>
++  static already_AddRefed<Sub> Create(ShmemAllocator* aAllocator,
++                                      const mozilla::gfx::IntSize& aSize,
++                                      gfxImageFormat aFormat) {
++    return Create<ShmemAllocator, false>(aAllocator, aSize, aFormat);
++  }
++
++  /**
++   * Return a new gfxSharedImageSurface that wraps a shmem segment
++   * already created by the Create() above.  Bad things will happen
++   * if an attempt is made to wrap any other shmem segment.  Null is
++   * returned if creating the surface failed.
++   */
++  static already_AddRefed<Sub> Open(const Shmem& aShmem) {
++    SharedImageInfo* shmInfo = GetShmInfoPtr(aShmem);
++    mozilla::gfx::IntSize size(shmInfo->width, shmInfo->height);
++    if (!mozilla::gfx::Factory::CheckSurfaceSize(size)) return nullptr;
++
++    gfxImageFormat format = shmInfo->format;
++    long stride = gfxImageSurface::ComputeStride(size, format);
++
++    RefPtr<Sub> s = new Sub(size, stride, format, aShmem);
++    // We didn't create this Shmem and so don't free it on errors
++    return (s->CairoStatus() != 0) ? nullptr : s.forget();
++  }
++
++  template <class ShmemAllocator>
++  static already_AddRefed<Sub> CreateUnsafe(ShmemAllocator* aAllocator,
++                                            const mozilla::gfx::IntSize& aSize,
++                                            gfxImageFormat aFormat) {
++    return Create<ShmemAllocator, true>(aAllocator, aSize, aFormat);
++  }
++
++  Shmem& GetShmem() { return mShmem; }
++
++  static bool IsSharedImage(gfxASurface* aSurface) {
++    return (aSurface && aSurface->GetType() == gfxSurfaceType::Image &&
++            aSurface->GetData(&SHM_KEY));
++  }
++
++ protected:
++  gfxBaseSharedMemorySurface(const mozilla::gfx::IntSize& aSize, long aStride,
++                             gfxImageFormat aFormat, const Shmem& aShmem)
++      : Base(aShmem.get<unsigned char>(), aSize, aStride, aFormat) {
++    MOZ_COUNT_CTOR(gfxBaseSharedMemorySurface);
++
++    mShmem = aShmem;
++    this->SetData(&SHM_KEY, this, nullptr);
++  }
++
++ private:
++  void WriteShmemInfo() {
++    SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
++    shmInfo->width = this->mSize.width;
++    shmInfo->height = this->mSize.height;
++    shmInfo->format = this->mFormat;
++    shmInfo->readCount = 0;
++  }
++
++  int32_t ReadLock() {
++    SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
++    return PR_ATOMIC_INCREMENT(&shmInfo->readCount);
++  }
++
++  int32_t ReadUnlock() {
++    SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
++    return PR_ATOMIC_DECREMENT(&shmInfo->readCount);
++  }
++
++  int32_t GetReadCount() {
++    SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
++    return shmInfo->readCount;
++  }
++
++  static size_t GetAlignedSize(const mozilla::gfx::IntSize& aSize,
++                               long aStride) {
++#define MOZ_ALIGN_WORD(x) (((x) + 3) & ~3)
++    return MOZ_ALIGN_WORD(sizeof(SharedImageInfo) + aSize.height * aStride);
++  }
++
++  template <class ShmemAllocator, bool Unsafe>
++  static already_AddRefed<Sub> Create(ShmemAllocator* aAllocator,
++                                      const mozilla::gfx::IntSize& aSize,
++                                      gfxImageFormat aFormat) {
++    if (!mozilla::gfx::Factory::CheckSurfaceSize(aSize)) return nullptr;
++
++    Shmem shmem;
++    long stride = gfxImageSurface::ComputeStride(aSize, aFormat);
++    size_t size = GetAlignedSize(aSize, stride);
++    if (!Unsafe) {
++      if (!aAllocator->AllocShmem(size, &shmem)) return nullptr;
++    } else {
++      if (!aAllocator->AllocUnsafeShmem(size, &shmem)) return nullptr;
++    }
++
++    RefPtr<Sub> s = new Sub(aSize, stride, aFormat, shmem);
++    if (s->CairoStatus() != 0) {
++      aAllocator->DeallocShmem(shmem);
++      return nullptr;
++    }
++    s->WriteShmemInfo();
++    return s.forget();
++  }
++
++  Shmem mShmem;
++};
++
++#endif /* GFX_SHARED_MEMORYSURFACE_H */
+diff --git a/gfx/thebes/gfxSharedImageSurface.h b/gfx/thebes/gfxSharedImageSurface.h
+new file mode 100644
+index 000000000000..02313de2dd80
+--- /dev/null
++++ b/gfx/thebes/gfxSharedImageSurface.h
+@@ -0,0 +1,25 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef GFX_SHARED_IMAGESURFACE_H
++#define GFX_SHARED_IMAGESURFACE_H
++
++#include "gfxBaseSharedMemorySurface.h"
++
++class gfxSharedImageSurface
++    : public gfxBaseSharedMemorySurface<gfxImageSurface,
++                                        gfxSharedImageSurface> {
++  typedef gfxBaseSharedMemorySurface<gfxImageSurface, gfxSharedImageSurface>
++      Super;
++  friend class gfxBaseSharedMemorySurface<gfxImageSurface,
++                                          gfxSharedImageSurface>;
++
++ private:
++  gfxSharedImageSurface(const mozilla::gfx::IntSize& aSize, long aStride,
++                        gfxImageFormat aFormat,
++                        const mozilla::ipc::Shmem& aShmem)
++      : Super(aSize, aStride, aFormat, aShmem) {}
++};
++
++#endif /* GFX_SHARED_IMAGESURFACE_H */
+diff --git a/gfx/thebes/gfxWindowsNativeDrawing.cpp b/gfx/thebes/gfxWindowsNativeDrawing.cpp
+new file mode 100644
+index 000000000000..d459f5bbef56
+--- /dev/null
++++ b/gfx/thebes/gfxWindowsNativeDrawing.cpp
+@@ -0,0 +1,300 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "gfxWindowsNativeDrawing.h"
++
++#include <windows.h>
++
++#include "cairo-win32.h"
++#include "cairo.h"
++#include "gfx2DGlue.h"
++#include "gfxAlphaRecovery.h"
++#include "gfxPattern.h"
++#include "gfxWindowsSurface.h"
++#include "mozilla/gfx/2D.h"
++#include "mozilla/gfx/Helpers.h"
++#include "nsMathUtils.h"
++
++using namespace mozilla;
++using namespace mozilla::gfx;
++
++enum {
++  RENDER_STATE_INIT,
++
++  RENDER_STATE_NATIVE_DRAWING,
++  RENDER_STATE_NATIVE_DRAWING_DONE,
++
++  RENDER_STATE_ALPHA_RECOVERY_BLACK,
++  RENDER_STATE_ALPHA_RECOVERY_BLACK_DONE,
++  RENDER_STATE_ALPHA_RECOVERY_WHITE,
++  RENDER_STATE_ALPHA_RECOVERY_WHITE_DONE,
++
++  RENDER_STATE_DONE
++};
++
++gfxWindowsNativeDrawing::gfxWindowsNativeDrawing(gfxContext* ctx,
++                                                 const gfxRect& nativeRect,
++                                                 uint32_t nativeDrawFlags)
++    : mContext(ctx),
++      mNativeRect(nativeRect),
++      mNativeDrawFlags(nativeDrawFlags),
++      mRenderState(RENDER_STATE_INIT) {}
++
++HDC gfxWindowsNativeDrawing::BeginNativeDrawing() {
++  if (mRenderState == RENDER_STATE_INIT) {
++    RefPtr<gfxASurface> surf;
++    DrawTarget* drawTarget = mContext->GetDrawTarget();
++    cairo_t* cairo = nullptr;
++    if (drawTarget->GetBackendType() == BackendType::CAIRO) {
++      cairo = static_cast<cairo_t*>(
++          drawTarget->GetNativeSurface(NativeSurfaceType::CAIRO_CONTEXT));
++      if (cairo) {
++        cairo_surface_t* s = cairo_get_group_target(cairo);
++        if (s) {
++          mDeviceOffset = mContext->GetDeviceOffset();
++          double sdx, sdy;
++          cairo_surface_get_device_offset(s, &sdx, &sdy);
++          mDeviceOffset.x -= sdx;
++          mDeviceOffset.y -= sdy;
++          surf = gfxASurface::Wrap(s);
++        }
++      }
++    }
++
++    if (surf && surf->CairoStatus() != 0) return nullptr;
++
++    gfxMatrix m = mContext->CurrentMatrixDouble();
++    if (!m.HasNonTranslation())
++      mTransformType = TRANSLATION_ONLY;
++    else if (m.HasNonAxisAlignedTransform())
++      mTransformType = COMPLEX;
++    else
++      mTransformType = AXIS_ALIGNED_SCALE;
++
++    // if this is a native win32 surface, we don't have to
++    // redirect rendering to our own HDC; in some cases,
++    // we may be able to use the HDC from the surface directly.
++    if (surf && ((surf->GetType() == gfxSurfaceType::Win32 ||
++                  surf->GetType() == gfxSurfaceType::Win32Printing) &&
++                 (surf->GetContentType() == gfxContentType::COLOR ||
++                  (surf->GetContentType() == gfxContentType::COLOR_ALPHA &&
++                   (mNativeDrawFlags & CAN_DRAW_TO_COLOR_ALPHA))))) {
++      // grab the DC. This can fail if there is a complex clipping path,
++      // in which case we'll have to fall back.
++      mWinSurface = static_cast<gfxWindowsSurface*>(
++          static_cast<gfxASurface*>(surf.get()));
++      mDC = cairo_win32_get_dc_with_clip(cairo);
++
++      if (mDC) {
++        if (mTransformType == TRANSLATION_ONLY) {
++          mRenderState = RENDER_STATE_NATIVE_DRAWING;
++
++          mTranslation = m.GetTranslation();
++        } else if (((mTransformType == AXIS_ALIGNED_SCALE) &&
++                    (mNativeDrawFlags & CAN_AXIS_ALIGNED_SCALE)) ||
++                   (mNativeDrawFlags & CAN_COMPLEX_TRANSFORM)) {
++          mWorldTransform.eM11 = (FLOAT)m._11;
++          mWorldTransform.eM12 = (FLOAT)m._12;
++          mWorldTransform.eM21 = (FLOAT)m._21;
++          mWorldTransform.eM22 = (FLOAT)m._22;
++          mWorldTransform.eDx = (FLOAT)m._31;
++          mWorldTransform.eDy = (FLOAT)m._32;
++
++          mRenderState = RENDER_STATE_NATIVE_DRAWING;
++        }
++      }
++    }
++
++    // If we couldn't do native drawing, then we have to do two-buffer drawing
++    // and do alpha recovery
++    if (mRenderState == RENDER_STATE_INIT) {
++      mRenderState = RENDER_STATE_ALPHA_RECOVERY_BLACK;
++
++      // We round out our native rect here, that way the snapping will
++      // happen correctly.
++      mNativeRect.RoundOut();
++
++      // we only do the scale bit if we can do an axis aligned
++      // scale; otherwise we scale (if necessary) after
++      // rendering with cairo.  Note that if we're doing alpha recovery,
++      // we cannot do a full complex transform with win32 (I mean, we could, but
++      // it would require more code that's not here.)
++      if (mTransformType == TRANSLATION_ONLY ||
++          !(mNativeDrawFlags & CAN_AXIS_ALIGNED_SCALE)) {
++        mScale = MatrixScalesDouble();
++
++        // Add 1 to the surface size; it's guaranteed to not be incorrect,
++        // and it fixes bug 382458
++        // There's probably a better fix, but I haven't figured out
++        // the root cause of the problem.
++        mTempSurfaceSize = IntSize((int32_t)ceil(mNativeRect.Width() + 1),
++                                   (int32_t)ceil(mNativeRect.Height() + 1));
++      } else {
++        // figure out the scale factors
++        mScale = m.ScaleFactors();
++
++        mWorldTransform.eM11 = (FLOAT)mScale.xScale;
++        mWorldTransform.eM12 = 0.0f;
++        mWorldTransform.eM21 = 0.0f;
++        mWorldTransform.eM22 = (FLOAT)mScale.yScale;
++        mWorldTransform.eDx = 0.0f;
++        mWorldTransform.eDy = 0.0f;
++
++        // See comment above about "+1"
++        mTempSurfaceSize =
++            IntSize((int32_t)ceil(mNativeRect.Width() * mScale.xScale + 1),
++                    (int32_t)ceil(mNativeRect.Height() * mScale.yScale + 1));
++      }
++    }
++  }
++
++  if (mRenderState == RENDER_STATE_NATIVE_DRAWING) {
++    // we can just do native drawing directly to the context's surface
++
++    // do we need to use SetWorldTransform?
++    if (mTransformType != TRANSLATION_ONLY) {
++      SetGraphicsMode(mDC, GM_ADVANCED);
++      GetWorldTransform(mDC, &mOldWorldTransform);
++      SetWorldTransform(mDC, &mWorldTransform);
++    }
++    GetViewportOrgEx(mDC, &mOrigViewportOrigin);
++    SetViewportOrgEx(mDC, mOrigViewportOrigin.x - (int)mDeviceOffset.x,
++                     mOrigViewportOrigin.y - (int)mDeviceOffset.y, nullptr);
++
++    return mDC;
++  } else if (mRenderState == RENDER_STATE_ALPHA_RECOVERY_BLACK ||
++             mRenderState == RENDER_STATE_ALPHA_RECOVERY_WHITE) {
++    // we're going to use mWinSurface to create our temporary surface here
++
++    // get us a RGB24 DIB; DIB is important, because
++    // we can later call GetImageSurface on it.
++    mWinSurface = new gfxWindowsSurface(mTempSurfaceSize);
++    mDC = mWinSurface->GetDC();
++
++    RECT r = {0, 0, mTempSurfaceSize.width, mTempSurfaceSize.height};
++    if (mRenderState == RENDER_STATE_ALPHA_RECOVERY_BLACK)
++      FillRect(mDC, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
++    else
++      FillRect(mDC, &r, (HBRUSH)GetStockObject(WHITE_BRUSH));
++
++    if ((mTransformType != TRANSLATION_ONLY) &&
++        (mNativeDrawFlags & CAN_AXIS_ALIGNED_SCALE)) {
++      SetGraphicsMode(mDC, GM_ADVANCED);
++      SetWorldTransform(mDC, &mWorldTransform);
++    }
++
++    return mDC;
++  } else {
++    NS_ERROR("Bogus render state!");
++    return nullptr;
++  }
++}
++
++bool gfxWindowsNativeDrawing::ShouldRenderAgain() {
++  switch (mRenderState) {
++    case RENDER_STATE_NATIVE_DRAWING_DONE:
++      return false;
++
++    case RENDER_STATE_ALPHA_RECOVERY_BLACK_DONE:
++      mRenderState = RENDER_STATE_ALPHA_RECOVERY_WHITE;
++      return true;
++
++    case RENDER_STATE_ALPHA_RECOVERY_WHITE_DONE:
++      return false;
++
++    default:
++      NS_ERROR(
++          "Invalid RenderState in gfxWindowsNativeDrawing::ShouldRenderAgain");
++      break;
++  }
++
++  return false;
++}
++
++void gfxWindowsNativeDrawing::EndNativeDrawing() {
++  if (mRenderState == RENDER_STATE_NATIVE_DRAWING) {
++    // we drew directly to the HDC in the context; undo our changes
++    SetViewportOrgEx(mDC, mOrigViewportOrigin.x, mOrigViewportOrigin.y,
++                     nullptr);
++
++    if (mTransformType != TRANSLATION_ONLY)
++      SetWorldTransform(mDC, &mOldWorldTransform);
++
++    mWinSurface->MarkDirty();
++
++    mRenderState = RENDER_STATE_NATIVE_DRAWING_DONE;
++  } else if (mRenderState == RENDER_STATE_ALPHA_RECOVERY_BLACK) {
++    mBlackSurface = mWinSurface;
++    mWinSurface = nullptr;
++
++    mRenderState = RENDER_STATE_ALPHA_RECOVERY_BLACK_DONE;
++  } else if (mRenderState == RENDER_STATE_ALPHA_RECOVERY_WHITE) {
++    mWhiteSurface = mWinSurface;
++    mWinSurface = nullptr;
++
++    mRenderState = RENDER_STATE_ALPHA_RECOVERY_WHITE_DONE;
++  } else {
++    NS_ERROR(
++        "Invalid RenderState in gfxWindowsNativeDrawing::EndNativeDrawing");
++  }
++}
++
++void gfxWindowsNativeDrawing::PaintToContext() {
++  if (mRenderState == RENDER_STATE_NATIVE_DRAWING_DONE) {
++    // nothing to do, it already went to the context
++    mRenderState = RENDER_STATE_DONE;
++  } else if (mRenderState == RENDER_STATE_ALPHA_RECOVERY_WHITE_DONE) {
++    RefPtr<gfxImageSurface> black = mBlackSurface->GetAsImageSurface();
++    RefPtr<gfxImageSurface> white = mWhiteSurface->GetAsImageSurface();
++    if (!gfxAlphaRecovery::RecoverAlpha(black, white)) {
++      NS_ERROR("Alpha recovery failure");
++      return;
++    }
++    RefPtr<DataSourceSurface> source = Factory::CreateWrappingDataSourceSurface(
++        black->Data(), black->Stride(), black->GetSize(),
++        SurfaceFormat::B8G8R8A8);
++    {
++      DrawTarget* dt = mContext->GetDrawTarget();
++      AutoRestoreTransform autoRestoreTransform(dt);
++
++      Matrix newTransform = dt->GetTransform();
++      newTransform.PreTranslate(ToPoint(mNativeRect.TopLeft()));
++      dt->SetTransform(newTransform);
++
++      Rect rect(Point(0.0, 0.0), ToSize(mNativeRect.Size()));
++      Matrix m = Matrix::Scaling(1.0 / mScale.xScale, 1.0 / mScale.yScale);
++      SurfacePattern pat(source, ExtendMode::CLAMP, m);
++      dt->FillRect(rect, pat);
++    }
++
++    mRenderState = RENDER_STATE_DONE;
++  } else {
++    NS_ERROR("Invalid RenderState in gfxWindowsNativeDrawing::PaintToContext");
++  }
++}
++
++void gfxWindowsNativeDrawing::TransformToNativeRect(const gfxRect& r,
++                                                    RECT& rout) {
++  /* If we're doing native drawing, then we're still in the coordinate space
++   * of the context; otherwise, we're in our own little world,
++   * relative to the passed-in nativeRect.
++   */
++
++  gfxRect roundedRect(r);
++
++  if (mRenderState == RENDER_STATE_NATIVE_DRAWING) {
++    if (mTransformType == TRANSLATION_ONLY) {
++      roundedRect.MoveBy(mTranslation);
++    }
++  } else {
++    roundedRect.MoveBy(-mNativeRect.TopLeft());
++  }
++
++  roundedRect.Round();
++
++  rout.left = LONG(roundedRect.X());
++  rout.right = LONG(roundedRect.XMost());
++  rout.top = LONG(roundedRect.Y());
++  rout.bottom = LONG(roundedRect.YMost());
++}
+diff --git a/gfx/thebes/gfxWindowsNativeDrawing.h b/gfx/thebes/gfxWindowsNativeDrawing.h
+new file mode 100644
+index 000000000000..aec5bfb91f50
+--- /dev/null
++++ b/gfx/thebes/gfxWindowsNativeDrawing.h
+@@ -0,0 +1,106 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef GFXWINDOWSNATIVEDRAWING_H_
++#define GFXWINDOWSNATIVEDRAWING_H_
++
++#include <windows.h>
++
++#include "gfxContext.h"
++#include "gfxWindowsSurface.h"
++
++class MOZ_STACK_CLASS gfxWindowsNativeDrawing {
++ public:
++  /* Flags for notifying this class what kind of operations the native
++   * drawing supports
++   */
++
++  enum {
++    /* Whether the native drawing can draw to a surface of content COLOR_ALPHA
++     */
++    CAN_DRAW_TO_COLOR_ALPHA = 1 << 0,
++    CANNOT_DRAW_TO_COLOR_ALPHA = 0 << 0,
++
++    /* Whether the native drawing can be scaled using SetWorldTransform */
++    CAN_AXIS_ALIGNED_SCALE = 1 << 1,
++    CANNOT_AXIS_ALIGNED_SCALE = 0 << 1,
++
++    /* Whether the native drawing can be both scaled and rotated arbitrarily
++       using SetWorldTransform */
++    CAN_COMPLEX_TRANSFORM = 1 << 2,
++    CANNOT_COMPLEX_TRANSFORM = 0 << 2,
++  };
++
++  /* Create native win32 drawing for a rectangle bounded by
++   * nativeRect.
++   *
++   * Typical usage looks like:
++   *
++   *   gfxWindowsNativeDrawing nativeDraw(ctx, destGfxRect, capabilities);
++   *   do {
++   *     HDC dc = nativeDraw.BeginNativeDrawing();
++   *     if (!dc)
++   *       return NS_ERROR_FAILURE;
++   *
++   *     RECT winRect;
++   *     nativeDraw.TransformToNativeRect(rect, winRect);
++   *
++   *       ... call win32 operations on HDC to draw to winRect ...
++   *
++   *     nativeDraw.EndNativeDrawing();
++   *   } while (nativeDraw.ShouldRenderAgain());
++   *   nativeDraw.PaintToContext();
++   */
++  gfxWindowsNativeDrawing(
++      gfxContext* ctx, const gfxRect& nativeRect,
++      uint32_t nativeDrawFlags = CANNOT_DRAW_TO_COLOR_ALPHA |
++                                 CANNOT_AXIS_ALIGNED_SCALE |
++                                 CANNOT_COMPLEX_TRANSFORM);
++
++  /* Returns a HDC which may be used for native drawing.  This HDC is valid
++   * until EndNativeDrawing is called; if it is used for drawing after that
++   * time, the result is undefined. */
++  HDC BeginNativeDrawing();
++
++  /* Transform the native rect into something valid for rendering
++   * to the HDC.  This may or may not change RECT, depending on
++   * whether SetWorldTransform is used or not. */
++  void TransformToNativeRect(const gfxRect& r, RECT& rout);
++
++  /* Marks the end of native drawing */
++  void EndNativeDrawing();
++
++  /* Returns true if the native drawing should be executed again */
++  bool ShouldRenderAgain();
++
++  /* Places the result to the context, if necessary */
++  void PaintToContext();
++
++ private:
++  gfxContext* mContext;
++  gfxRect mNativeRect;
++  uint32_t mNativeDrawFlags;
++
++  // what state the rendering is in
++  uint8_t mRenderState;
++
++  mozilla::gfx::Point mDeviceOffset;
++  RefPtr<gfxPattern> mBlackPattern, mWhitePattern;
++
++  enum TransformType { TRANSLATION_ONLY, AXIS_ALIGNED_SCALE, COMPLEX };
++
++  TransformType mTransformType;
++  gfxPoint mTranslation;
++  mozilla::gfx::MatrixScalesDouble mScale;
++  XFORM mWorldTransform;
++
++  // saved state
++  RefPtr<gfxWindowsSurface> mWinSurface, mBlackSurface, mWhiteSurface;
++  HDC mDC;
++  XFORM mOldWorldTransform;
++  POINT mOrigViewportOrigin;
++  mozilla::gfx::IntSize mTempSurfaceSize;
++};
++
++#endif
+diff --git a/gfx/thebes/moz.build b/gfx/thebes/moz.build
+index 798b28f9fbcf..bf972be34a6c 100644
+--- a/gfx/thebes/moz.build
++++ b/gfx/thebes/moz.build
+@@ -20,6 +20,7 @@ EXPORTS += [
+     "gfx2DGlue.h",
+     "gfxAlphaRecovery.h",
+     "gfxASurface.h",
++    "gfxBaseSharedMemorySurface.h",
+     "gfxBlur.h",
+     "gfxColor.h",
+     "gfxContext.h",
+@@ -51,6 +52,7 @@ EXPORTS += [
+     "gfxQuaternion.h",
+     "gfxRect.h",
+     "gfxScriptItemizer.h",
++    "gfxSharedImageSurface.h",
+     "gfxSkipChars.h",
+     "gfxSparseBitSet.h",
+     "gfxSVGGlyphs.h",
+@@ -152,6 +154,7 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+     EXPORTS += [
+         "gfxDWriteCommon.h",
+         "gfxDWriteFonts.h",
++        "gfxWindowsNativeDrawing.h",
+         "gfxWindowsPlatform.h",
+         "gfxWindowsSurface.h",
+     ]
+@@ -165,6 +168,7 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+         "DisplayConfigWindows.cpp",
+         "gfxDWriteCommon.cpp",
+         "gfxDWriteFonts.cpp",
++        "gfxWindowsNativeDrawing.cpp",
+         "gfxWindowsPlatform.cpp",
+         "gfxWindowsSurface.cpp",
+         "PrintTargetWindows.cpp",
+@@ -206,6 +210,7 @@ UNIFIED_SOURCES += [
+     "COLRFonts.cpp",
+     "FontPaletteCache.cpp",
+     "gfxAlphaRecovery.cpp",
++    "gfxBaseSharedMemorySurface.cpp",
+     "gfxBlur.cpp",
+     "gfxContext.cpp",
+     "gfxFont.cpp",

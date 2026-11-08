@@ -1,0 +1,1 @@
+Bug 1867853 - Remove pref gfx.video.convert-i420-to-nv12.force-enabled r=gfx-reviewers,bradwerth    2023-12-02 07:09:51    d7a479200d41ebe213d1a0b4ae9da56c46364a00

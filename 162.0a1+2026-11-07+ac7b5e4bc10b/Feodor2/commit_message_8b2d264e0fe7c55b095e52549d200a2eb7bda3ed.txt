@@ -1,0 +1,1 @@
+Bug 1325503 - Remove Windows {XP, Server 2003, Vista} support from widget/. r=jimm.    2016-12-23 10:13:31    8b2d264e0fe7c55b095e52549d200a2eb7bda3ed

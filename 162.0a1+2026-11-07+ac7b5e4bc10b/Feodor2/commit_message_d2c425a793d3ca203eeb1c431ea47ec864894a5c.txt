@@ -1,0 +1,1 @@
+Bug 1755055 - Record CPU time inside Awake profiler markers, r=gerald.    2022-02-17 17:38:28    d2c425a793d3ca203eeb1c431ea47ec864894a5c

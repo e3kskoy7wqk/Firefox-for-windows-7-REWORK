@@ -1,0 +1,31 @@
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+index 3aa6a17..aa7e89e 100644
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -1237,7 +1237,17 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+         aInitData.mIsPrivate &&
+         !StaticPrefs::browser_privatebrowsing_autostart();
+     RefPtr<IPropertyStore> pPropStore;
+-    if (!FAILED(SHGetPropertyStoreForWindow(mWnd, IID_IPropertyStore,
++const wchar_t kShellLibraryName[] =  L"shell32.dll";
++
++  typedef HRESULT (WINAPI * SHGetPropertyStoreForWindowPtr)
++                    (HWND hwnd, REFIID riid, void** ppv);
++  SHGetPropertyStoreForWindowPtr funcGetProStore = nullptr;
++
++  HMODULE hDLL = ::LoadLibraryW(kShellLibraryName);
++  funcGetProStore = (SHGetPropertyStoreForWindowPtr)
++    GetProcAddress(hDLL, "SHGetPropertyStoreForWindow");
++
++      if (funcGetProStore && !FAILED(funcGetProStore(mWnd, IID_IPropertyStore,
+                                             getter_AddRefs(pPropStore)))) {
+       PROPVARIANT pv;
+       nsAutoString aumid;
+@@ -1265,6 +1275,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
+         PropVariantClear(&pv);
+       }
+     }
++    FreeLibrary(hDLL);
+     // Resolve the icon resource once. A custom-icon override (if any) wins for
+     // normal windows; Private Browsing windows always keep IDI_PBMODE and
+     // ignore the override, matching WinTaskbar::SetAllWindowIcons. Since these

@@ -1,0 +1,1 @@
+Bug 1331171 - Part 3: Remove xpcom checks for Windows Vista. r=froydnj    2017-01-12 17:13:55    ec64a5b9f4cb7135587bd9de4c2698b6bcf85d72

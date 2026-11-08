@@ -1,0 +1,1 @@
+Bug 1869053 - [1/5] modernize our `mscom::AgileReference` class  r=handyman    2023-12-22 03:46:54    1b1974da411775fd82b432fb299860937dcbabc1

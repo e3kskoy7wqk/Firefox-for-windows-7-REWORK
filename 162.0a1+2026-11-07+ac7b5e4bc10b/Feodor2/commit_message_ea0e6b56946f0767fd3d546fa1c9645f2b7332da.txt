@@ -1,0 +1,1 @@
+Bug 1750991: Add support for pinning a a Private Browsing mode shortcut to the Taskbar. r=mhowell    2022-03-18 00:33:34    ea0e6b56946f0767fd3d546fa1c9645f2b7332da
