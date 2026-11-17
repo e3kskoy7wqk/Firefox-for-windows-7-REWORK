@@ -1,0 +1,1 @@
+Bug 2010930 part 4 - WebSerial Windows-specific code r=cmartin,win-reviewers    2026-04-10 11:51:32    e682213c6296600e673e405e9fbd34b622f37582

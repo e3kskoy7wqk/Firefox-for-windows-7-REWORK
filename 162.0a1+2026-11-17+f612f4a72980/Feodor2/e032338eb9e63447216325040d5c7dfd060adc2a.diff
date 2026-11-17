@@ -1,0 +1,22 @@
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
+index 21f3928794f8..b3f48b98e053 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
++++ b/toolkit/xre/dllservices/mozglue/WindowsDllBlocklist.cpp
+@@ -782,6 +782,8 @@ Authenticode* GetAuthenticode();
+  */
+ MFBT_API void DllBlocklist_SetFullDllServices(
+     mozilla::glue::detail::DllServicesBase* aSvc) {
++  const bool fBool =
++      aSvc && ModuleLoadInfo::IsLayoutCompatible(::GetModuleHandleW(L"xul.dll"));
+   glue::AutoExclusiveLock lock(gDllServicesLock);
+   if (aSvc) {
+     aSvc->SetAuthenticodeImpl(GetAuthenticode());
+@@ -789,7 +793,7 @@ MFBT_API void DllBlocklist_SetFullDllServices(
+ 
+     // A xul.dll of another version may lay out ModuleLoadInfo differently, so
+     // don't send it load events.
+-    if (!ModuleLoadInfo::IsLayoutCompatible(::GetModuleHandleW(L"xul.dll"))) {
++    if (!fBool) {
+       gMozglueLoaderObserver.Disable();
+       return;
+     }

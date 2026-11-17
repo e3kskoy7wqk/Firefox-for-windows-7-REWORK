@@ -1,0 +1,15 @@
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -2920,6 +2920,11 @@
+   AddShaderCachesToPolicy(&trackingConfig, aSandboxLevel);
+ 
+   if (aSandboxLevel >= 2) {
++    AddCachedWindowsDirRule(&trackingConfig, sandbox::FileSemantics::kAllowReadonly,
++                            FOLDERID_Fonts);
++    AddCachedWindowsDirRule(&trackingConfig, sandbox::FileSemantics::kAllowReadonly,
++                            FOLDERID_Fonts, u"\\*"_ns);
++
+     // We don't want to add a rule directly here but use the same retrieval and
+     // caching mechanism to get the Windows user's dirs.
+     EnsureWindowsDirCached(FOLDERID_Profile, sWindowsProfileDir,

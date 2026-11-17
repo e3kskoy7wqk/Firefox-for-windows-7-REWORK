@@ -1,0 +1,1 @@
+Bug 1498518 - user authentication prompts for Windows, r=keeler,mhowell    2018-10-23 17:05:07    ac7f1869e156ee75038b61b6f7dfc857b4a83c15

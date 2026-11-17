@@ -1,0 +1,1 @@
+Bug 1562388 - Remove XP legacy NotifyAddrChange call from nsNotifyAddrListener r=mayhemer    2019-11-13 02:18:21    66dbd98229dfb1a468ff2c4df02f608de2d94f14

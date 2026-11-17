@@ -1,0 +1,117 @@
+diff --git a/browser/installer/package-manifest.in b/browser/installer/package-manifest.in
+index 8188407baab3f405a244bd01ddc859c7fa0893e5..43e197d9afbc66cbb9fe913fce21e5cc479e71e4 100644
+--- a/browser/installer/package-manifest.in
++++ b/browser/installer/package-manifest.in
+@@ -103,10 +103,13 @@
+ #endif
+ @BINPATH@/@MSVC_CXX_RUNTIME_DLL@
+ @BINPATH@/@MSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL@
++@BINPATH@/@MSVC_CONCUR_RUNTIME_DLL@
+ #endif
+ #if MOZ_PACKAGE_WIN_UCRT_DLLS
+ @BINPATH@/api-ms-win-*.dll
+ @BINPATH@/ucrtbase.dll
++@BINPATH@/DWrite.dll
++@BINPATH@/dwrwp.dll
+ #endif
+ ; Windows App SDK DLLs
+ @BINPATH@/@DLL_PREFIX@CoreMessagingXP@DLL_SUFFIX@
+diff --git a/browser/moz.configure b/browser/moz.configure
+index 445b94ad5738a3362ca1616010607a4305be61ff..66ce25af54814f9fb9b8ddf18612e48ce3231a6d 100644
+--- a/browser/moz.configure
++++ b/browser/moz.configure
+@@ -82,6 +82,7 @@ include("../toolkit/moz.configure")
+     msvc_c_runtime_1_dll,
+     msvc_cxx_runtime_dll,
+     msvc_cxx_runtime_atomic_wait_dll,
++    msvc_concur_runtime_dll,
+     mac_bundle_name,
+     moz_pkg_binpath,
+     moz_pkg_respath,
+@@ -118,6 +119,7 @@ def package_manifest_defines(
+     msvc_c_runtime_1_dll,
+     msvc_cxx_runtime_dll,
+     msvc_cxx_runtime_atomic_wait_dll,
++    msvc_concur_runtime_dll,
+     mac_bundle_name,
+     binpath,
+     respath,
+@@ -176,6 +178,7 @@ def package_manifest_defines(
+         defines.append(
+             f"-DMSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL={msvc_cxx_runtime_atomic_wait_dll}"
+         )
++        defines.append(f"-DMSVC_CONCUR_RUNTIME_DLL={msvc_concur_runtime_dll}")
+     if no_debug_rtl and win32_redist_dir and win_ucrt_redist_dir:
+         defines.append("-DMOZ_PACKAGE_WIN_UCRT_DLLS=1")
+     return quote_defines(defines)
+diff --git a/build/moz.configure/windows.configure b/build/moz.configure/windows.configure
+index 4064912d3068863c40b4842460e9fad5ba378940..247f53684389eed44a8b30f44132e78458612564 100644
+--- a/build/moz.configure/windows.configure
++++ b/build/moz.configure/windows.configure
+@@ -459,11 +459,13 @@ with only_when(depends(c_compiler)(lambda c: c.type == "clang-cl")):
+     )
+     msvc_cxx_runtime_dll = dependable("msvcp140.dll")
+     msvc_cxx_runtime_atomic_wait_dll = dependable("msvcp140_atomic_wait.dll")
++    msvc_concur_runtime_dll = dependable("concrt140.dll")
+ 
+     set_config("MSVC_C_RUNTIME_DLL", msvc_c_runtime_dll)
+     set_config("MSVC_C_RUNTIME_1_DLL", msvc_c_runtime_1_dll)
+     set_config("MSVC_CXX_RUNTIME_DLL", msvc_cxx_runtime_dll)
+     set_config("MSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL", msvc_cxx_runtime_atomic_wait_dll)
++    set_config("MSVC_CONCUR_RUNTIME_DLL", msvc_concur_runtime_dll)
+ 
+     # Disable warnings about using MSVC-specific secure CRT functions.
+     set_define("_CRT_SECURE_NO_WARNINGS", True)
+diff --git a/build/win32/moz.build b/build/win32/moz.build
+index 7472621d85df502a81d8086a69d87c856cfcfcf4..f918e94c988cbb79de3f9f8a9dff95b5358dc176 100644
+--- a/build/win32/moz.build
++++ b/build/win32/moz.build
+@@ -31,20 +31,11 @@ if CONFIG["WIN32_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
+         "MSVC_C_RUNTIME_1_DLL",
+         "MSVC_CXX_RUNTIME_DLL",
+         "MSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL",
++        "MSVC_CONCUR_RUNTIME_DLL",
+     ]:
+         if CONFIG[f]:
+             FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN32_REDIST_DIR"], CONFIG[f])]
+ 
+ if CONFIG["WIN_UCRT_REDIST_DIR"] and CONFIG["COMPILE_ENVIRONMENT"]:
+-    win7_ucrt_redists = [
+-        "api-ms-win-core-file-l1-2-0.dll",
+-        "api-ms-win-core-file-l2-1-0.dll",
+-        "api-ms-win-core-localization-l1-2-0.dll",
+-        "api-ms-win-core-processthreads-l1-1-1.dll",
+-        "api-ms-win-core-synch-l1-2-0.dll",
+-        "api-ms-win-core-timezone-l1-1-0.dll",
+-        "api-ms-win-crt-*.dll",
+-        "ucrtbase.dll",
+-    ]
+-    for f in win7_ucrt_redists:
++    for f in ["api-ms-win-*.dll", "ucrtbase.dll", "DWrite.dll", "dwrwp.dll"]:
+         FINAL_TARGET_FILES += ["%%%s/%s" % (CONFIG["WIN_UCRT_REDIST_DIR"], f)]
+diff --git a/gfx/thebes/gfxWindowsPlatform.cpp b/gfx/thebes/gfxWindowsPlatform.cpp
+index 9a0da593ff848e347bb18f67b7281600883d07ff..c95efd5750b96ace0c78fd41b5d3e1559c511923 100644
+--- a/gfx/thebes/gfxWindowsPlatform.cpp
++++ b/gfx/thebes/gfxWindowsPlatform.cpp
+@@ -1923,7 +1923,7 @@ void gfxWindowsPlatform::BuildContentDeviceData(ContentDeviceData* aOut) {
+ 
+ bool gfxWindowsPlatform::CheckVariationFontSupport() {
+   // Variation font support is only available on Fall Creators Update or later.
+-  return IsWin10FallCreatorsUpdateOrLater();
++  return true;//return IsWin10FallCreatorsUpdateOrLater();
+ }
+ 
+ void gfxWindowsPlatform::GetPlatformDisplayInfo(
+diff --git a/js/app.mozbuild b/js/app.mozbuild
+index d398f59d0649caa634fb6cf016057b1e245ef08e..45596e8b0f7e88b1d291b0a44c4160c9d6685165 100644
+--- a/js/app.mozbuild
++++ b/js/app.mozbuild
+@@ -62,6 +62,8 @@ if CONFIG["MOZ_PACKAGE_JSSHELL"]:
+         JS_SHELL_ARCHIVE_FILES += [
+             "!/dist/bin/" + CONFIG["MSVC_CXX_RUNTIME_ATOMIC_WAIT_DLL"]
+         ]
++    if CONFIG["MSVC_CONCUR_RUNTIME_DLL"]:
++        JS_SHELL_ARCHIVE_FILES += ["!/dist/bin/" + CONFIG["MSVC_CONCUR_RUNTIME_DLL"]]
+     if CONFIG["WIN_UCRT_REDIST_DIR"]:
+         JS_SHELL_ARCHIVE_FILES += [
+             "!/dist/bin/api-ms-win-*.dll",

@@ -1,0 +1,1 @@
+Bug 2043423 - Part 1: Add platform infrastructure for setting a custom launcher icon on Windows. r=nrishel,win-reviewers    2026-06-23 09:18:54    9c882ebc056b344d5e6d77724a0f7a3538ac7582

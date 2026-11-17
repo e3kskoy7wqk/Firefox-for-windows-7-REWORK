@@ -1,0 +1,1 @@
+Bug 1286056 - Add webgl.force-swiftshader. r=jgilbert    2016-07-11 18:13:51    63f060ed7db160ed7524dc04bbf99c87d8eff18b

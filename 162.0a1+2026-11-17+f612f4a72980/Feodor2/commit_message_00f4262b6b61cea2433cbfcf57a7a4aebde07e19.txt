@@ -1,0 +1,1 @@
+Bug 1356503 - Part 1. Replace nsWin32Locale::GetXPLocale with LCIDToLocaleName (intl part). r=gandalf    2017-04-27 10:23:11    00f4262b6b61cea2433cbfcf57a7a4aebde07e19

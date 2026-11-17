@@ -1,0 +1,1 @@
+Bug 1607990 - Link to WSCGetProviderInfo at compile time. r=aklotz    2020-01-30 05:18:18    f2edda0a69f8215b8714881fe1d042ac9f00dbaf

@@ -1,0 +1,1 @@
+Bug 2058020 - Use Windows Runtime API to find MSIX app launch method r=aborondo,win-reviewers,browser-installer-reviewers,mossop,nrishel    2026-09-02 00:42:25    ec1e82d3de53d9c6710b72ed5f8b534067814073

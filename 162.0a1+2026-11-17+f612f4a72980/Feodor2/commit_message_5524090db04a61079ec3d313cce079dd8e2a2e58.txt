@@ -1,0 +1,1 @@
+Bug 1844241 - Remove now-dead graphics glass code. r=tnikkel,devtools-reviewers    2023-07-19 20:44:34    5524090db04a61079ec3d313cce079dd8e2a2e58

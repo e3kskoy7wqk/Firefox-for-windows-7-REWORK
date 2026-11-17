@@ -1,0 +1,25 @@
+diff --git a/mozglue/misc/StackWalk.cpp b/mozglue/misc/StackWalk.cpp
+index 6c98d75649f3..8313edb455d7 100644
+--- a/mozglue/misc/StackWalk.cpp
++++ b/mozglue/misc/StackWalk.cpp
+@@ -507,16 +507,10 @@ MozStackWalkThread(MozWalkStackCallback aCallback, uint32_t aSkipFrames,
+   }
+ #  endif
+ 
+-  HANDLE targetThread = aThread;
+-  bool walkCallingThread;
+-  if (!targetThread) {
+-    targetThread = ::GetCurrentThread();
+-    walkCallingThread = true;
+-  } else {
+-    DWORD targetThreadId = ::GetThreadId(targetThread);
+-    DWORD currentThreadId = ::GetCurrentThreadId();
+-    walkCallingThread = (targetThreadId == currentThreadId);
+-  }
++  HANDLE currentThread = ::GetCurrentThread();
++  bool walkCallingThread;
++  HANDLE targetThread = aThread ? aThread : currentThread;
++  walkCallingThread = (targetThread == currentThread);
+ 
+   // If not already provided, get a context for the specified thread.
+   CONTEXT context_buf;

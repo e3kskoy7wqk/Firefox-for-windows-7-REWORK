@@ -1,0 +1,1 @@
+Bug 1685502 - Add a timestamp/duration class pair that only ticks when the computer is awake, on all platforms. r=gsvelto    2021-04-21 01:24:24    93993d7202b446d0acd660b80f504eb0e3be2b3e

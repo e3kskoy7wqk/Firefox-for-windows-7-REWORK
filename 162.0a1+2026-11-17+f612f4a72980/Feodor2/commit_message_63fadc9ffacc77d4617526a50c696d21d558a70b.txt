@@ -1,0 +1,1 @@
+thread: use InitializeCriticalSectionEx if available    2015-11-24 12:38:46    63fadc9ffacc77d4617526a50c696d21d558a70b

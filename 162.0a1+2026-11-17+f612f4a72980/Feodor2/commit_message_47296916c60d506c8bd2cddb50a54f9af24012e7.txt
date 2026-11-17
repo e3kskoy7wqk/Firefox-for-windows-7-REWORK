@@ -1,0 +1,1 @@
+Bug 1846782 - Fix nsNativeTheme*::GetWidget{Border,Padding} for always-non-native widgets. r=aminomancer    2023-08-03 04:30:21    47296916c60d506c8bd2cddb50a54f9af24012e7

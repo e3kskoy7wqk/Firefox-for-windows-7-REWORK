@@ -1,0 +1,30 @@
+diff --git a/tools/profiler/core/platform-win32.cpp b/tools/profiler/core/platform-win32.cpp
+index 9016bc0bcdb7..328f8050f000 100644
+--- a/tools/profiler/core/platform-win32.cpp
++++ b/tools/profiler/core/platform-win32.cpp
+@@ -133,6 +133,16 @@ static void StreamMetaPlatformSampleUnits(PSLockRef aLock,
+   return diff;
+ }
+ 
++// Returns a pointer to the QueryThreadCycleTime() function from Windows.
++// Can't statically link to it because it is not available on XP.
++using QueryThreadCycleTimePtr = decltype(::QueryThreadCycleTime)*;
++QueryThreadCycleTimePtr GetQueryThreadCycleTimeFunction() {
++  static const QueryThreadCycleTimePtr query_thread_cycle_time_fn =
++      reinterpret_cast<QueryThreadCycleTimePtr>(::GetProcAddress(
++          ::GetModuleHandleW(L"kernel32.dll"), "QueryThreadCycleTime"));
++  return query_thread_cycle_time_fn;
++}
++
+ static RunningTimes GetThreadRunningTimesDiff(
+     PSLockRef aLock,
+     ThreadRegistration::UnlockedRWForLockedProfiler& aThreadData) {
+@@ -145,7 +155,7 @@ static RunningTimes GetThreadRunningTimesDiff(
+       [profiledThread](RunningTimes& aRunningTimes) {
+         AUTO_PROFILER_STATS(GetThreadRunningTimes_QueryThreadCycleTime);
+         if (ULONG64 cycles;
+-            QueryThreadCycleTime(profiledThread, &cycles) != 0) {
++            GetQueryThreadCycleTimeFunction() && GetQueryThreadCycleTimeFunction()(profiledThread, &cycles) != 0) {
+           aRunningTimes.ResetThreadCPUDelta(cycles);
+         } else {
+           aRunningTimes.ClearThreadCPUDelta();

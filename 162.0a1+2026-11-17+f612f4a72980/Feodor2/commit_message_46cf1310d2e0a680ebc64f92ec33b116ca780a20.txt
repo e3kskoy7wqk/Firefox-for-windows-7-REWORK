@@ -1,0 +1,1 @@
+Bug 1510494 - write elevated updater log and status files to a new directory in the Maintenance Service directory. r=agashlin,mhowell    2019-10-08 23:10:29    46cf1310d2e0a680ebc64f92ec33b116ca780a20

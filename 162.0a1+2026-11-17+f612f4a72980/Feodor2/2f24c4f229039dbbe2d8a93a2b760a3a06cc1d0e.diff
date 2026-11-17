@@ -1,0 +1,103 @@
+diff --git a/mozglue/misc/ConditionVariable_windows.cpp b/mozglue/misc/ConditionVariable_windows.cpp
+index 92e67e41a2a3..23872428d846 100644
+--- a/mozglue/misc/ConditionVariable_windows.cpp
++++ b/mozglue/misc/ConditionVariable_windows.cpp
+@@ -54,9 +54,8 @@ mozilla::detail::ConditionVariableImpl::notify_all()
+ }
+ 
+ void mozilla::detail::ConditionVariableImpl::wait(MutexImpl& lock) {
+-  SRWLOCK* srwlock = &lock.platformData()->lock;
+-  bool r =
+-      SleepConditionVariableSRW(&platformData()->cv_, srwlock, INFINITE, 0);
++  CRITICAL_SECTION* cs = &lock.platformData()->criticalSection;
++  bool r = SleepConditionVariableCS(&platformData()->cv_, cs, INFINITE);
+   MOZ_RELEASE_ASSERT(r);
+ }
+ 
+@@ -63,7 +63,7 @@ mozilla::detail::CVStatus
+     return CVStatus::NoTimeout;
+   }
+ 
+-  SRWLOCK* srwlock = &lock.platformData()->lock;
++  CRITICAL_SECTION* cs = &lock.platformData()->criticalSection;
+ 
+   // Note that DWORD is unsigned, so we have to be careful to clamp at 0. If
+   // rel_time is Forever, then ToMilliseconds is +inf, which evaluates as
+@@ -75,7 +75,7 @@ mozilla::detail::ConditionVariableImpl::wait_for(MutexImpl& lock,
+     }
+   }
+ 
+-  BOOL r = SleepConditionVariableSRW(&platformData()->cv_, srwlock, msec, 0);
++  BOOL r = SleepConditionVariableCS(&platformData()->cv_, cs, msec);
+   if (r) return CVStatus::NoTimeout;
+   MOZ_RELEASE_ASSERT(GetLastError() == ERROR_TIMEOUT);
+   return CVStatus::Timeout;
+diff --git a/mozglue/misc/MutexPlatformData_windows.h b/mozglue/misc/MutexPlatformData_windows.h
+index 40d9f693da1d..fd9b2f320f8b 100644
+--- a/mozglue/misc/MutexPlatformData_windows.h
++++ b/mozglue/misc/MutexPlatformData_windows.h
+@@ -13,7 +13,7 @@
+ #include "mozilla/PlatformMutex.h"
+ 
+ struct mozilla::detail::MutexImpl::PlatformData {
+-  SRWLOCK lock;
++  CRITICAL_SECTION criticalSection;
+ };
+ 
+ #endif // MutexPlatformData_windows_h
+diff --git a/mozglue/misc/Mutex_windows.cpp b/mozglue/misc/Mutex_windows.cpp
+index 4a43efc578d3..990e59faaede 100644
+--- a/mozglue/misc/Mutex_windows.cpp
++++ b/mozglue/misc/Mutex_windows.cpp
+@@ -14,23 +14,46 @@
+ #include "MutexPlatformData_windows.h"
+ 
+ mozilla::detail::MutexImpl::MutexImpl() {
+-  InitializeSRWLock(&platformData()->lock);
++  // This number was adopted from NSPR.
++  const static DWORD LockSpinCount = 1500;
++
++#if defined(RELEASE_OR_BETA)
++  // Vista and later automatically allocate and subsequently leak a debug info
++  // object for each critical section that we allocate unless we tell the
++  // system not to do that.
++  DWORD flags = CRITICAL_SECTION_NO_DEBUG_INFO;
++#else
++  DWORD flags = 0;
++#endif // defined(RELEASE_OR_BETA)
++
++  BOOL r = InitializeCriticalSectionEx(&platformData()->criticalSection,
++                                       LockSpinCount, flags);
++  MOZ_RELEASE_ASSERT(r);
+ }
+ 
+-mozilla::detail::MutexImpl::~MutexImpl() {}
++mozilla::detail::MutexImpl::~MutexImpl()
++{
++  if (!platformData_)
++    return;
++  DeleteCriticalSection(&platformData()->criticalSection);
++}
+ 
+ void mozilla::detail::MutexImpl::lock() {
+-  AcquireSRWLockExclusive(&platformData()->lock);
++  if (!platformData_)
++    return;
++  EnterCriticalSection(&platformData()->criticalSection);
+ }
+ 
+ bool mozilla::detail::MutexImpl::tryLock() { return mutexTryLock(); }
+ 
+ bool mozilla::detail::MutexImpl::mutexTryLock() {
+-  return !!TryAcquireSRWLockExclusive(&platformData()->lock);
++  return !!TryEnterCriticalSection(&platformData()->criticalSection);
+ }
+ 
+ void mozilla::detail::MutexImpl::unlock() {
+-  ReleaseSRWLockExclusive(&platformData()->lock);
++  if (!platformData_)
++    return;
++  LeaveCriticalSection(&platformData()->criticalSection);
+ }
+ 
+ mozilla::detail::MutexImpl::PlatformData*

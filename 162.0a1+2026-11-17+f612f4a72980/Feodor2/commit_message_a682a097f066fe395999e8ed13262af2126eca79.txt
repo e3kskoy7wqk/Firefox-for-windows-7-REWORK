@@ -1,0 +1,1 @@
+Bug 1843702 - Remove dead code from installer. r=mhowell    2023-07-25 04:30:13    a682a097f066fe395999e8ed13262af2126eca79

@@ -1,0 +1,2 @@
+Bug 1843842 part 1 - Always use GetSystemTimePreciseAsFileTime on Windows. r=arai,emk    2023-07-18 15:17:07    18f9ed3fb71e4efab60236b80283475e18597cc9
+Bug 1843842 part 2 - Always use RtlAddGrowableFunctionTable on Windows. r=arai,emk    2023-07-18 15:17:08    97aec21d17804c29cedebd253268ceb4fabb1154

@@ -1,0 +1,362 @@
+diff --git a/mozglue/misc/StackWalk.cpp b/mozglue/misc/StackWalk.cpp
+index 647533804f08..f4d6f12035f3 100644
+--- a/mozglue/misc/StackWalk.cpp
++++ b/mozglue/misc/StackWalk.cpp
+@@ -159,13 +159,74 @@ class FrameSkipper {
+ static Atomic<bool> sStackWalkLocksInitialized;
+ static Array<SRWLOCK*, 2> sStackWalkLocks;
+ 
++static Atomic<bool> sStackWalkCriticalSectionsInitialized;
++static Array<CRITICAL_SECTION*, 2> sStackWalkCriticalSections;
++/* Prototypes and function pointers for windows  functions */
++typedef VOID (WINAPI* srw_func) (PSRWLOCK SRWLock);
++typedef BOOL (WINAPI* srw_bool_func) (PSRWLOCK SRWLock);
++
++static srw_func my_InitializeSRWLock;
++static srw_func my_AcquireSRWLockExclusive;
++static srw_func my_ReleaseSRWLockExclusive;
++static srw_func my_AcquireSRWLockShared;
++static srw_func my_ReleaseSRWLockShared;
++
++static srw_bool_func my_TryAcquireSRWLockExclusive;
++static srw_bool_func my_TryAcquireSRWLockShared;
++
+ MFBT_API
+ void InitializeStackWalkLocks(const Array<void*, 2>& aStackWalkLocks) {
++  HMODULE module= GetModuleHandleW(L"kernel32");
++
++  my_InitializeSRWLock= (srw_func) GetProcAddress(module,
++    "InitializeSRWLock");
++  my_AcquireSRWLockExclusive= (srw_func) GetProcAddress(module,
++    "AcquireSRWLockExclusive");
++  my_AcquireSRWLockShared= (srw_func) GetProcAddress(module,
++    "AcquireSRWLockShared");
++  my_ReleaseSRWLockExclusive= (srw_func) GetProcAddress(module,
++    "ReleaseSRWLockExclusive");
++  my_ReleaseSRWLockShared= (srw_func) GetProcAddress(module,
++    "ReleaseSRWLockShared");
++  my_TryAcquireSRWLockExclusive=  (srw_bool_func) GetProcAddress(module,
++    "TryAcquireSRWLockExclusive");
++  my_TryAcquireSRWLockShared=  (srw_bool_func) GetProcAddress(module,
++    "TryAcquireSRWLockShared");
++
++  /*
++    We currently require TryAcquireSRWLockExclusive. This API is missing on 
++    Vista, this means SRWLock are only used starting with Win7.
++
++    If "trylock" usage for rwlocks is eliminated from server codebase (it is used 
++    in a single place currently, in query cache), then SRWLock can be enabled on 
++    Vista too. In this case  condition below needs to be changed to  e.g check 
++    for my_InitializeSRWLock.
++  */
++
++  if (!my_TryAcquireSRWLockExclusive)
++    return;
++
++  if (!aStackWalkLocks[0] || !aStackWalkLocks[1]);
++    return;
+   sStackWalkLocks[0] = reinterpret_cast<SRWLOCK*>(aStackWalkLocks[0]);
+   sStackWalkLocks[1] = reinterpret_cast<SRWLOCK*>(aStackWalkLocks[1]);
+   sStackWalkLocksInitialized = true;
+ }
+ 
++MFBT_API
++void InitializeStackWalkCriticalSections(
++    const Array<void*, 2>& aStackWalkLocks) {
++  if (!aStackWalkLocks[0]) {
++    return;
++  }
++
++  sStackWalkCriticalSections[0] =
++      reinterpret_cast<CRITICAL_SECTION*>(aStackWalkLocks[0]);
++  sStackWalkCriticalSections[1] =
++      reinterpret_cast<CRITICAL_SECTION*>(aStackWalkLocks[1]);
++  sStackWalkCriticalSectionsInitialized = true;
++}
++
+ // Strategy (2): Stack Walk Suppressions
+ //
+ // We're using an atomic counter rather than a critical section because we
+@@ -207,14 +252,35 @@ bool IsStackWalkingSafe() {
+     return false;
+   }
+ 
++  if (!sStackWalkLocksInitialized && !sStackWalkCriticalSectionsInitialized) {
++    return false;
++  }
++
++  if (sStackWalkCriticalSectionsInitialized) {
++    if (!::TryEnterCriticalSection(sStackWalkCriticalSections[0])) {
++      return false;
++    }
++    bool isSafe = true;
++    if (sStackWalkCriticalSections[1]) {
++      isSafe = ::TryEnterCriticalSection(sStackWalkCriticalSections[1]);
++      if (isSafe) {
++        ::LeaveCriticalSection(sStackWalkCriticalSections[1]);
++      }
++    }
++    ::LeaveCriticalSection(sStackWalkCriticalSections[0]);
++    if (!isSafe) {
++      return false;
++    }
++  }
++
+   if (sStackWalkLocksInitialized) {
+     bool isSafe = false;
+-    if (::TryAcquireSRWLockShared(sStackWalkLocks[0])) {
+-      if (::TryAcquireSRWLockShared(sStackWalkLocks[1])) {
++    if (my_TryAcquireSRWLockShared(sStackWalkLocks[0])) {
++      if (my_TryAcquireSRWLockShared(sStackWalkLocks[1])) {
+         isSafe = true;
+-        ::ReleaseSRWLockShared(sStackWalkLocks[1]);
++        my_ReleaseSRWLockShared(sStackWalkLocks[1]);
+       }
+-      ::ReleaseSRWLockShared(sStackWalkLocks[0]);
++      my_ReleaseSRWLockShared(sStackWalkLocks[0]);
+     }
+     return isSafe;
+   }
+diff --git a/mozglue/misc/StackWalk_windows.h b/mozglue/misc/StackWalk_windows.h
+index d535486b5498..36591859a094 100644
+--- a/mozglue/misc/StackWalk_windows.h
++++ b/mozglue/misc/StackWalk_windows.h
+@@ -21,6 +21,11 @@
+ MFBT_API
+ void InitializeStackWalkLocks(const mozilla::Array<void*, 2>& aStackWalkLocks);
+ 
++// Win7 uses critical sections instead of SRW locks for stack unwinding.
++MFBT_API
++void InitializeStackWalkCriticalSections(
++    const mozilla::Array<void*, 2>& aStackWalkLocks);
++
+ /**
+  * As part of strategy (2) for avoiding deadlocks between the stack walking
+  * thread and the suspended thread, we mark stack walk suppression paths by
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
+index e565f7e16ee1..f94a129cd53d 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
++++ b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.cpp
+@@ -13,6 +14,8 @@
+ #include "mozilla/WindowsProcessMitigations.h"
+ #include "mozilla/glue/Debug.h"
+ 
++#include "mozilla/ScopeExit.h"
++#include <limits>
+ namespace mozilla {
+ 
+ #if defined(_M_AMD64) || defined(_M_ARM64)
+@@ -94,13 +97,15 @@ void WindowsStackWalkInitialization() {
+   if (CollectStackWalkLocks(stackWalkLocks)) {
+     bool locksArePlausible = ValidateStackWalkLocks(stackWalkLocks);
+ 
+-    // If this crashes then most likely our lock collection code is broken.
+-    MOZ_ASSERT(locksArePlausible);
+-
+     if (locksArePlausible) {
+       InitializeStackWalkLocks(stackWalkLocks);
+     }
+   }
++  stackWalkLocks = {};
++  if (CollectStackWalkCriticalSections(stackWalkLocks) &&
++      ValidateStackWalkCriticalSections(stackWalkLocks)) {
++    InitializeStackWalkCriticalSections(stackWalkLocks);
++  }
+ 
+   // Strategy (2): We will rely on stack walk suppressions. We use hooking
+   // to install stack walk suppression on specific Windows calls which are
+@@ -184,11 +189,6 @@ bool CollectStackWalkLocks(Array<void*, 2>& aStackWalkLocks) {
+   // are the locks we are looking for.
+   bool isAcquisitionSuccessful = data.mCollectedLocksCount == 2;
+ 
+-  // We always expect that RtlLookupFunctionEntry's behavior results in a
+-  // successful acquisition. If this crashes then we likely failed to detect
+-  // the instructions that acquire and release the locks in our function
+-  // ExtractLockFromCurrentCpuContext.
+-  MOZ_ASSERT(isAcquisitionSuccessful);
+   if (!isAcquisitionSuccessful) {
+     return false;
+   }
+@@ -201,6 +201,165 @@ bool CollectStackWalkLocks(Array<void*, 2>& aStackWalkLocks) {
+ #  endif  // _M_AMD64
+ }
+ 
++#  if defined(_M_AMD64)
++[[clang::optnone]] MOZ_NEVER_INLINE bool UnoptimizedCriticalSectionLookups(
++    void* aAddress, RUNTIME_FUNCTION* aExpected) {
++  DWORD64 imageBase;
++  ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(UnoptimizedLookup),
++                           &imageBase, nullptr);
++  ::RtlLookupFunctionEntry(0, &imageBase, nullptr);
++  return ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(aAddress),
++                                  &imageBase, nullptr) == aExpected &&
++         imageBase == reinterpret_cast<DWORD64>(aAddress);
++}
++#  endif  // _M_AMD64
++
++MFBT_API
++bool CollectStackWalkCriticalSections(Array<void*, 2>& aStackWalkLocks) {
++#  if defined(_M_AMD64)
++  auto* ntdll = ::GetModuleHandleW(L"ntdll.dll");
++  auto enter = ::GetProcAddress(ntdll, "RtlEnterCriticalSection");
++  auto leave = ::GetProcAddress(ntdll, "RtlLeaveCriticalSection");
++  nt::PEHeaders ntdllImage(ntdll);
++  if (!enter || !leave || !ntdllImage) {
++    return false;
++  }
++  auto dataSection = ntdllImage.GetDataSectionInfo();
++  if (dataSection.isNothing()) {
++    return false;
++  }
++  const uintptr_t dataBegin = reinterpret_cast<uintptr_t>(dataSection->data());
++  const uintptr_t dataEnd = dataBegin + dataSection->size();
++
++  void* probe =
++      ::VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
++  if (!probe) {
++    return false;
++  }
++  auto freeProbe = MakeScopeExit([&] { ::VirtualFree(probe, 0, MEM_RELEASE); });
++  // Force a dynamic-table lookup even when no JIT tables exist yet.
++  static_cast<uint8_t*>(probe)[16] =
++      1;  // UNWIND_INFO version 1, no unwind codes.
++  RUNTIME_FUNCTION functionEntry{};
++  functionEntry.EndAddress = 16;
++  functionEntry.UnwindData = 16;
++  {
++    AutoSuppressStackWalking suppress;
++    if (!::RtlAddFunctionTable(&functionEntry, 1,
++                               reinterpret_cast<DWORD64>(probe))) {
++      return false;
++    }
++  }
++  auto removeFunctionTable = MakeScopeExit([&] {
++    AutoSuppressStackWalking suppress;
++    ::RtlDeleteFunctionTable(&functionEntry);
++  });
++
++  struct LockCollectionData {
++    Array<void*, 2> mLocks{};
++    Array<bool, 2> mEntered{};
++    Array<bool, 2> mLeft{};
++    size_t mCount = 0;
++    bool mInvalidLock = false;
++    bool mOverflow = false;
++    uintptr_t mDataBegin;
++    uintptr_t mDataEnd;
++    DWORD64 mEnter;
++    DWORD64 mLeave;
++  } data{};
++  data.mDataBegin = dataBegin;
++  data.mDataEnd = dataEnd;
++  data.mEnter = reinterpret_cast<DWORD64>(enter);
++  data.mLeave = reinterpret_cast<DWORD64>(leave);
++
++  bool foundDynamicTable = false;
++  WindowsDiagnosticsError error = CollectSingleStepData(
++      [&] {
++        foundDynamicTable =
++            UnoptimizedCriticalSectionLookups(probe, &functionEntry);
++      },
++      [](void* aState, CONTEXT* aContext) {
++        auto& data = *reinterpret_cast<LockCollectionData*>(aState);
++        if (aContext->Rip != data.mEnter && aContext->Rip != data.mLeave) {
++          return true;
++        }
++        auto address = static_cast<uintptr_t>(aContext->Rcx);
++        if (address < data.mDataBegin || address > data.mDataEnd ||
++            data.mDataEnd - address < sizeof(CRITICAL_SECTION) ||
++            address % alignof(CRITICAL_SECTION) != 0) {
++          data.mInvalidLock = true;
++          return true;
++        }
++        size_t index = 0;
++        for (; index < data.mCount; ++index) {
++          if (data.mLocks[index] == reinterpret_cast<void*>(address)) {
++            break;
++          }
++        }
++        if (index == data.mCount) {
++          if (data.mCount == data.mLocks.Length) {
++            data.mOverflow = true;
++            return true;
++          }
++          data.mLocks[index] = reinterpret_cast<void*>(address);
++          ++data.mCount;
++        }
++        if (index < data.mLocks.Length) {
++          if (aContext->Rip == data.mEnter) {
++            data.mEntered[index] = true;
++          } else {
++            data.mLeft[index] = true;
++          }
++        }
++        return true;
++      },
++      &data);
++
++  if (error != WindowsDiagnosticsError::None || !foundDynamicTable ||
++      data.mCount == 0 || data.mInvalidLock || data.mOverflow) {
++    return false;
++  }
++  for (size_t i = 0; i < data.mCount; ++i) {
++    if (!data.mEntered[i] || !data.mLeft[i]) {
++      return false;
++    }
++  }
++  aStackWalkLocks = data.mLocks;
++  return true;
++#  else
++  return false;
++#  endif
++}
++
++MFBT_API
++bool ValidateStackWalkCriticalSections(const Array<void*, 2>& aStackWalkLocks) {
++  if (!aStackWalkLocks[0]) {
++    return false;
++  }
++  nt::PEHeaders ntdllImage(::GetModuleHandleW(L"ntdll.dll"));
++  if (!ntdllImage) {
++    return false;
++  }
++  auto dataSection = ntdllImage.GetDataSectionInfo();
++  if (dataSection.isNothing()) {
++    return false;
++  }
++  const uintptr_t begin = reinterpret_cast<uintptr_t>(dataSection->data());
++  const uintptr_t end = begin + dataSection->size();
++  for (void* lock : aStackWalkLocks) {
++    if (!lock) {
++      continue;
++    }
++    uintptr_t address = reinterpret_cast<uintptr_t>(lock);
++    if (address < begin || address > end ||
++        end - address < sizeof(CRITICAL_SECTION) ||
++        address % alignof(CRITICAL_SECTION) != 0) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ // Based on a single-step CPU context, extract a pointer to a lock that is
+ // being acquired or released (if any).
+ MFBT_API
+diff --git a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.h b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.h
+index 892fe6fa39b4..020cd1be450f 100644
+--- a/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.h
++++ b/toolkit/xre/dllservices/mozglue/WindowsStackWalkInitialization.h
+@@ -25,6 +25,12 @@ MFBT_API bool CollectStackWalkLocks(Array<void*, 2>& aStackWalkLocks);
+ MFBT_API void* ExtractLockFromCurrentCpuContext(void* aContext);
+ 
+ MFBT_API bool ValidateStackWalkLocks(const Array<void*, 2>& aStackWalkLocks);
++
++MFBT_API bool CollectStackWalkCriticalSections(
++    Array<void*, 2>& aStackWalkLocks);
++
++MFBT_API bool ValidateStackWalkCriticalSections(
++    const Array<void*, 2>& aStackWalkLocks);
+ #endif  // _M_AMD64 || _M_ARM64
+ 
+ }  // namespace mozilla
