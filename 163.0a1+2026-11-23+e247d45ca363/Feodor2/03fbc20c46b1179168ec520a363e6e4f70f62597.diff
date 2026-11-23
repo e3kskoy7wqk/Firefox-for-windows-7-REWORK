@@ -1,0 +1,66 @@
+diff --git a/browser/installer/windows/nsis/installer.nsi b/browser/installer/windows/nsis/installer.nsi
+index 8c4551b..7df3d13 100755
+--- a/browser/installer/windows/nsis/installer.nsi
++++ b/browser/installer/windows/nsis/installer.nsi
+@@ -511,8 +511,14 @@ Section "-Application" APP_IDX
+     ${If} $R0 == "true"
+     ; Only proceed if we have HKLM write access
+     ${AndIf} $RegHive == "HKLM"
+-      ; The user is an admin, so we should default to installing the service.
+-      StrCpy $InstallMaintenanceService "1"
++      ; On Windows < XP SP3 we do not install the maintenance service.
++      ${If} ${IsWinXP}
++      ${AndIf} ${AtMostServicePack} 2
++        StrCpy $InstallMaintenanceService "0"
++      ${Else}
++        ; The user is an admin, so we should default to installing the service.
++        StrCpy $InstallMaintenanceService "1"
++      ${EndIf}
+     ${Else}
+       ; The user is not admin, so we can't install the service.
+       StrCpy $InstallMaintenanceService "0"
+@@ -1540,6 +1546,12 @@ Function preComponents
+     Abort
+   ${EndIf}
+ 
++  ; On Windows < XP SP3 we do not install the maintenance service.
++  ${If} ${IsWinXP}
++  ${AndIf} ${AtMostServicePack} 2
++    Abort
++  ${EndIf}
++
+   ; Don't show the custom components page if the
+   ; user is not an admin
+   Call IsUserAdmin
+diff --git a/browser/installer/windows/nsis/uninstaller_helpers.nsh b/browser/installer/windows/nsis/uninstaller_helpers.nsh
+index 08b3859..9d4869e 100644
+--- a/browser/installer/windows/nsis/uninstaller_helpers.nsh
++++ b/browser/installer/windows/nsis/uninstaller_helpers.nsh
+@@ -438,6 +438,8 @@
+   ${If} $R0 == "true"
+   ; Only proceed if we have HKLM write access
+   ${AndIf} $RegHive == "HKLM"
++  ; On Windows 2000 we do not install the maintenance service.
++  ${AndIf} ${AtLeastWinXP}
+     ; We check to see if the maintenance service install was already attempted.
+     ; Since the Maintenance service can be installed either x86 or x64,
+     ; always use the 64-bit registry for checking if an attempt was made.
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+index e4f5bb9..eccfc0c 100755
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -6193,7 +6193,13 @@
+       ${LogMsg} "App Version: $R8"
+       ${LogMsg} "GRE Version: $R9"
+ 
+-      ${If} ${IsWin7}
++      ${If} ${IsWinXP}
++        ${LogMsg} "OS Name    : Windows XP"
++      ${ElseIf} ${IsWin2003}
++        ${LogMsg} "OS Name    : Windows 2003"
++      ${ElseIf} ${IsWinVista}
++        ${LogMsg} "OS Name    : Windows Vista"
++      ${ElseIf} ${IsWin7}
+         ${LogMsg} "OS Name    : Windows 7"
+       ${ElseIf} ${IsWin8}
+         ${LogMsg} "OS Name    : Windows 8"

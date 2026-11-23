@@ -1,0 +1,2 @@
+Bug 1845746 - Stop using DwmCompositionEnabled in widget/windows/. r=handyman    2023-08-11 02:58:03    e897957107a0014c5f7734d13ba9577a3e5129ee
+Bug 1845746 - Remove gfxWindowsPlatform::DwmCompositionEnabled. r=gfx-reviewers,jrmuizel    2023-08-11 02:58:03    14c50bb16d4f0ca5159f4f1534241ab1ab7b354d

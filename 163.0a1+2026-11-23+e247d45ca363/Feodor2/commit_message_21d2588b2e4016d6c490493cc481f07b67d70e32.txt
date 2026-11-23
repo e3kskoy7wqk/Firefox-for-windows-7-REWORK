@@ -1,0 +1,1 @@
+Bug 2042533 - Make sure nsWindowTaskbarConcealer deals with PiP windows. r=win-reviewers,gstoll    2026-05-27 06:05:56    21d2588b2e4016d6c490493cc481f07b67d70e32

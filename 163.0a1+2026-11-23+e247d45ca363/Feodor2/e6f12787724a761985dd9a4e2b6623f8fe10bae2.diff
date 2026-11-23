@@ -1,0 +1,126 @@
+diff --git a/browser/installer/allowed-dupes.mn b/browser/installer/allowed-dupes.mn
+index 96706c155f4dd317d93d7e5bf18f67598cce66a4..32454cf9b285d41512009a27f2040061c459284e 100644
+--- a/browser/installer/allowed-dupes.mn
++++ b/browser/installer/allowed-dupes.mn
+@@ -94,6 +94,10 @@ browser/defaults/settings/main/search-config-icons/f312610a-ebfb-a106-ea92-fd643
+ browser/defaults/settings/main/search-config-icons/47da97b5-600f-c450-fd15-a52bb2169c11
+ browser/defaults/settings/main/search-config-icons/fed4f021-ff3e-942a-010e-afa43fda2136
+ 
++# Bug 1975170 - Light and dark themes share a tiny experiment.css
++browser/chrome/browser/content/builtin-themes/light/experiment.css
++browser/chrome/browser/content/builtin-themes/dark/experiment.css
++
+ browser/chrome/browser/builtin-addons/newtab/data/data/content/assets/glyph-mail-16.svg
+ 
+ # Bug 2022304 - activity-stream-debug.html is intentionally identical to
+diff --git a/browser/themes/addons/dark/manifest.json b/browser/themes/addons/dark/manifest.json
+index 974229eeef7cbc3960ba28bb520e6eee9516ae5b..a74012ccbf2188c584d3ac2ff370e1fa531e4a2c 100644
+--- a/browser/themes/addons/dark/manifest.json
++++ b/browser/themes/addons/dark/manifest.json
+@@ -17,5 +17,8 @@
+     "properties": {
+       "color_scheme": "dark"
+     }
++  },
++  "theme_experiment": {
++    "stylesheet": "experiment.css"
+   }
+ }
+diff --git a/browser/themes/addons/firefox-light-dark/experiment.css b/browser/themes/addons/firefox-light-dark/experiment.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..14638397010fa48ba0a530348ba6535487b6c06e
+--- /dev/null
++++ b/browser/themes/addons/firefox-light-dark/experiment.css
+@@ -0,0 +1,6 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/* Proton theme */
++@import url("chrome://browser/skin/light-dark-overrides.css");
+diff --git a/browser/themes/addons/jar.mn b/browser/themes/addons/jar.mn
+index 83a321f3e2195569c41e7db7951a387eafcdc6e4..9a7c2f0b0144be44e9c67bac2c2d022d34b4a334 100644
+--- a/browser/themes/addons/jar.mn
++++ b/browser/themes/addons/jar.mn
+@@ -10,10 +10,12 @@ browser.jar:
+ 
+   content/builtin-themes/dark/preview.svg          (dark/preview.svg)
+   content/builtin-themes/dark/icon.svg             (dark/icon.svg)
++  content/builtin-themes/dark/experiment.css       (firefox-light-dark/experiment.css)
+   content/builtin-themes/dark/manifest.json        (dark/manifest.json)
+ 
+   content/builtin-themes/light/preview.svg         (light/preview.svg)
+   content/builtin-themes/light/icon.svg            (light/icon.svg)
++  content/builtin-themes/light/experiment.css      (firefox-light-dark/experiment.css)
+   content/builtin-themes/light/manifest.json       (light/manifest.json)
+ 
+   content/builtin-themes/aiwindow/manifest.json       (aiwindow/manifest.json)
+diff --git a/browser/themes/addons/light/manifest.json b/browser/themes/addons/light/manifest.json
+index 40a317b95032d8e81028a45924a7e0c16dc6cb57..8775209bc4517f8596660096bad396fabb65b907 100644
+--- a/browser/themes/addons/light/manifest.json
++++ b/browser/themes/addons/light/manifest.json
+@@ -17,5 +17,8 @@
+     "properties": {
+       "color_scheme": "light"
+     }
++  },
++  "theme_experiment": {
++    "stylesheet": "experiment.css"
+   }
+ }
+diff --git a/browser/themes/shared/jar.inc.mn b/browser/themes/shared/jar.inc.mn
+index 7892988bd5994d5183d25bf575d486f89ac888d0..edbfa478a229f24f1ba1aba04e8d2493f4cb22ae 100644
+--- a/browser/themes/shared/jar.inc.mn
++++ b/browser/themes/shared/jar.inc.mn
+@@ -21,6 +21,7 @@
+   skin/classic/browser/browser-shared.css                      (../shared/browser-shared.css)
+   skin/classic/browser/formautofill-notification.css           (../shared/formautofill-notification.css)
+   skin/classic/browser/identity-credential-notification.css    (../shared/identity-credential-notification.css)
++  skin/classic/browser/light-dark-overrides.css                (../shared/light-dark-overrides.css)
+   skin/classic/browser/menupanel.css                           (../shared/menupanel.css)
+   skin/classic/browser/notification-icons.css                  (../shared/notification-icons.css)
+   skin/classic/browser/pageInfo.css                            (../shared/pageInfo.css)
+diff --git a/browser/themes/shared/light-dark-overrides.css b/browser/themes/shared/light-dark-overrides.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c69bfcdd7b5ff56ea7dadd27c7a3edbdd4cf163
+--- /dev/null
++++ b/browser/themes/shared/light-dark-overrides.css
+@@ -0,0 +1,9 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#urlbar {
++  --urlbar-box-background-color: var(--toolbar-field-background-color-focus);
++  --urlbar-box-background-color-focus: var(--button-background-color);
++  --urlbar-box-background-color-hover: var(--button-background-color-hover);
++}
+diff --git a/toolkit/modules/LightweightThemeConsumer.sys.mjs b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+index a2b0ab8c351d6c9815740e9b2f3326d894a11fc6..30aa35944c2d0dd6bc0791ae1b5f106cd93054ea 100644
+--- a/toolkit/modules/LightweightThemeConsumer.sys.mjs
++++ b/toolkit/modules/LightweightThemeConsumer.sys.mjs
+@@ -445,7 +445,23 @@ LightweightThemeConsumer.prototype = {
+         return lazy.BROWSER_NOVA_ENABLED;
+       })()
+     );
+-    this._setExperiment(hasTheme, themeData.experiment, theme.experimental);
++    let experiment = themeData.experiment;
++    if (
++      lazy.BROWSER_NOVA_ENABLED &&
++      useDarkTheme &&
++      theme.id == DEFAULT_THEME_ID &&
++      !forcedColorsThemeOverride
++    ) {
++      experiment = {
++        ...experiment,
++        stylesheet: "resource://builtin-themes/dark/experiment.css",
++      };
++    }
++    this._setExperiment(
++      hasTheme || !!builtinThemeConfig?.inApp,
++      experiment,
++      theme.experimental
++    );
+     _setImage(
+       this._win,
+       root,

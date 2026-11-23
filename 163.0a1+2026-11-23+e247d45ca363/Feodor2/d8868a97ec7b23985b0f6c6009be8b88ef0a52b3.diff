@@ -1,0 +1,77 @@
+From 92d8d67718a3fa197689ef5a9a1746c88ae24fbe Mon Sep 17 00:00:00 2001
+From: Andrew Osmond <aosmond@mozilla.com>
+Date: Thu, 6 Mar 2025 15:52:16 +0000
+Subject: [PATCH] Bug 1944724 - Stub SetThreadInformation on Windows 7 for
+ Widevine in the GMP process.
+ r=bobowen,yjuglaret,media-playback-reviewers,padenot a=pascalc
+
+This is another Windows 8+ API dependency added by the latest Widevine
+CDM. We should be able to safely ignore the calls and do nothing. This
+requires us to replace a symbol already in the kernel32 export list,
+which based on the required ordering, is SetThreadProcessorEx. This
+symbol is not used anywhere in Firefox or Widevine, so it should be
+safe.
+
+Differential Revision: https://phabricator.services.mozilla.com/D236085
+---
+ dom/media/gmp/ChromiumCDMAdapter.cpp | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/dom/media/gmp/ChromiumCDMAdapter.cpp b/dom/media/gmp/ChromiumCDMAdapter.cpp
+index be24165de29b..a65ccddc5474 100644
+--- a/dom/media/gmp/ChromiumCDMAdapter.cpp
++++ b/dom/media/gmp/ChromiumCDMAdapter.cpp
+@@ -212,6 +212,13 @@ typedef BOOL(WINAPI* GetProcessMitigationPolicyFnPtr)(
+ static WindowsDllInterceptor::FuncHookType<GetProcessMitigationPolicyFnPtr>
+     sOriginalGetProcessMitigationPolicyFnPtr;
+ 
++typedef BOOL(WINAPI* SetThreadInformationFnPtr)(
++    HANDLE hThread, THREAD_INFORMATION_CLASS ThreadInformationClass,
++    LPVOID ThreadInformation, DWORD ThreadInformationSize);
++
++static WindowsDllInterceptor::FuncHookType<SetThreadInformationFnPtr>
++    sOriginalSetThreadInformationFnPtr;
++
+ static std::unordered_map<std::wstring, std::wstring>* sDeviceNames = nullptr;
+ 
+ DWORD WINAPI QueryDosDeviceWHook(LPCWSTR lpDeviceName, LPWSTR lpTargetPath,
+@@ -293,6 +300,12 @@ BOOL WINAPI MozGetProcessMitigationPolicy(
+   return TRUE;
+ }
+ 
++BOOL WINAPI MozSetThreadInformation(
++    HANDLE hThread, THREAD_INFORMATION_CLASS ThreadInformationClass,
++    LPVOID ThreadInformation, DWORD ThreadInformationSize) {
++  return TRUE;
++}
++
+ static void InitializeHooks() {
+   static bool initialized = false;
+   if (initialized) {
+@@ -314,15 +327,24 @@ static void InitializeHooks() {
+     auto k32Exports = nt::PEExportSection<interceptor::MMPolicyInProcess>::Get(
+         k32mod, policy);
+     if (k32Exports.ReplaceExportNameTableEntry("GetProcessPreferredUILanguages",
+-                                               "GetProcessMitigationPolicy")) {
++                                               "GetProcessMitigationPolicy") &&
++        k32Exports.ReplaceExportNameTableEntry("SetThreadIdealProcessorEx",
++                                               "SetThreadInformation")) {
+       sKernel32Intercept.Init("kernel32.dll");
+       if (!sOriginalGetProcessMitigationPolicyFnPtr.Set(
+               sKernel32Intercept, "GetProcessMitigationPolicy",
+               &MozGetProcessMitigationPolicy)) {
+         GMP_LOG_WARNING("Failed to hook GetProcessMitigationPolicy");
+       }
++      if (!sOriginalSetThreadInformationFnPtr.Set(sKernel32Intercept,
++                                                  "SetThreadInformation",
++                                                  &MozSetThreadInformation)) {
++        GMP_LOG_WARNING("Failed to hook SetThreadInformation");
++      }
+     } else {
+-      GMP_LOG_WARNING("Failed to rename to GetProcessMitigationPolicy");
++      GMP_LOG_WARNING(
++          "Failed to rename to GetProcessMitigationPolicy and/or "
++          "SetThreadInformation");
+     }
+   }
+ }

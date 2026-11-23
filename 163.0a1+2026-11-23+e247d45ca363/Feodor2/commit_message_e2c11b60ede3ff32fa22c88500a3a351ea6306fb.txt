@@ -1,0 +1,1 @@
+Bug 2027643. Update libwebp to the tip of 1.6.0 branch. r=gfx-reviewers,lsalzman    2026-03-31 07:11:00    e2c11b60ede3ff32fa22c88500a3a351ea6306fb

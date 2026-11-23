@@ -1,0 +1,1 @@
+Bug 1608002 - Link to CancelSynchronousIo at compile time. r=mayhemer    2020-01-14 02:49:36    32cae163fd6366d43f438265b9049358f38a6c35

@@ -1,0 +1,1 @@
+Bug 2040754 - Close SerialPort HANDLE synchronously in PlatformPipeReader::CloseWithStatus,  a=RyanVM    2026-05-20    d31b494b74993d4cb929bc4749bb57cde8f121e9

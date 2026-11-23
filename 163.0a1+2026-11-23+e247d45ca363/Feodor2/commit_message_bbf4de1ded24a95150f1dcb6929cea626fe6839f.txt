@@ -1,0 +1,1 @@
+Bug 1337299 - Remove old version compatibility into WinUtils. r=jimm    2017-02-10 11:06:23    bbf4de1ded24a95150f1dcb6929cea626fe6839f

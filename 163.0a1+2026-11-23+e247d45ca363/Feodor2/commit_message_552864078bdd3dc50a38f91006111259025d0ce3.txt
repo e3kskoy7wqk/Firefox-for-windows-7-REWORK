@@ -1,0 +1,1 @@
+Bug 2077172 - Always run WebRTC media transport in the content process. r=webrtc-reviewers,sandbox-reviewers,bobowen,bwc    2026-10-30 01:38:52    552864078bdd3dc50a38f91006111259025d0ce3

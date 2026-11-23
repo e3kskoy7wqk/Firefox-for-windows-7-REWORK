@@ -1,0 +1,1 @@
+Bug 1742472 - Use the CPU values from QueryProcessCycleTime and QueryThreadCycleTime for about:processes, r=gerald.    2021-11-24 18:46:45    af99bf0afae71c944f334538b24fc062508cd189

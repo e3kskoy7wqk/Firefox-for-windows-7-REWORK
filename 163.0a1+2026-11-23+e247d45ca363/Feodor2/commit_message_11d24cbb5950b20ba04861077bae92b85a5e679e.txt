@@ -1,0 +1,2 @@
+Bug 1842497 - Unship all Universal CRT DLLs. r=firefox-build-system-reviewers,glandium    2023-07-15 20:29:51    11d24cbb5950b20ba04861077bae92b85a5e679e
+Bug 1842497 - Unship d3dcompiler_47.dll. r=firefox-build-system-reviewers,glandium    2023-07-15 20:29:51    f08cbd047edd906e90263a59259442177fccba91

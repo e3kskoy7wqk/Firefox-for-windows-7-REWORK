@@ -1,0 +1,13 @@
+diff --git a/widget/windows/nsWindowTaskbarConcealer.cpp b/widget/windows/nsWindowTaskbarConcealer.cpp
+index 5e0f0a7aa3ae..f1a7badd63c1 100644
+--- a/widget/windows/nsWindowTaskbarConcealer.cpp
++++ b/widget/windows/nsWindowTaskbarConcealer.cpp
+@@ -127,7 +127,7 @@ nsWindow::TaskbarConcealer::GetWindowState(HWND aWnd) {
+ 
+   // nsWindows of other window-classes include tooltips and drop-shadow-bearing
+   // menus.
+-  if (!pWin->IsTopLevelWidget()) {
++  if (pWin->mWindowType != WindowType::TopLevel) {
+     return Nothing();
+   }
+ 

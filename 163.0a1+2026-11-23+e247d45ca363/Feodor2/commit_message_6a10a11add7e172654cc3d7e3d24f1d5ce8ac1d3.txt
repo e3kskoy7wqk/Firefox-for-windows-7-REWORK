@@ -1,0 +1,1 @@
+Bug 1701770 - Defer Windows DPI Awareness from load time to run time r=bobowen,aklotz    2021-06-15 04:55:33    6a10a11add7e172654cc3d7e3d24f1d5ce8ac1d3

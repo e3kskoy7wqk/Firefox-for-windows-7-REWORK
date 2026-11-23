@@ -1,0 +1,16 @@
+diff --git a/browser/components/shell/nsWindowsShellService.cpp b/browser/components/shell/nsWindowsShellService.cpp
+index ec3fe9acbdb9..8c1f9da4fbf0 100644
+--- a/browser/components/shell/nsWindowsShellService.cpp
++++ b/browser/components/shell/nsWindowsShellService.cpp
+@@ -248,9 +248,8 @@ static bool IsMsixProgIdDefaultForClass(
+     return false;
+   }
+ 
+-  const bool isDefault{::CompareStringOrdinal(firefoxProgId.get(), -1,
+-                                              defaultProgId, -1,
+-                                              TRUE) == CSTR_EQUAL};
++  const bool isDefault{::_wcsicmp(firefoxProgId.get(),
++                                              defaultProgId) == 0};
+ 
+   CoTaskMemFree(defaultProgId);
+ 

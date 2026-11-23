@@ -1,0 +1,1 @@
+Bug 2078555: Part 2 - Don't send module load events if ModuleLoadInfo may have changed r=win-reviewers,yjuglaret    2026-10-08 06:16:07    e032338eb9e63447216325040d5c7dfd060adc2a

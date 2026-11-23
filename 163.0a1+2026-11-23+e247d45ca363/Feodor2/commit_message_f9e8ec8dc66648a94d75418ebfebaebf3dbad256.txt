@@ -1,0 +1,1 @@
+Bug 1845636 - Allow browser chrome to enable the non-native theme. r=dshin    2023-07-28 06:09:10    f9e8ec8dc66648a94d75418ebfebaebf3dbad256

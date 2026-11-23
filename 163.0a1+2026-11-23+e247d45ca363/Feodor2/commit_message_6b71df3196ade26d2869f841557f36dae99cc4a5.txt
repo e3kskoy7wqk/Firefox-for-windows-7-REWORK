@@ -1,0 +1,1 @@
+Bug 1917202 - Fixed duplicate icon when pinning to taskbar on MSIX r=nrishel    2024-09-28 04:14:50    6b71df3196ade26d2869f841557f36dae99cc4a5

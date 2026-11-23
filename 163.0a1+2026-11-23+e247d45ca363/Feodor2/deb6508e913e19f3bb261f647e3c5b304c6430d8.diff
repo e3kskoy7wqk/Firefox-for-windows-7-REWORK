@@ -1,0 +1,167 @@
+diff --git a/toolkit/crashreporter/win32_process_mitigations/src/registry.rs b/toolkit/crashreporter/win32_process_mitigations/src/registry.rs
+index c9637865ae13b01c968e8a152d48fe65a4a3305e..5ea60dbed77c6d1c8c7a2c740332833abb366a0f 100644
+--- a/toolkit/crashreporter/win32_process_mitigations/src/registry.rs
++++ b/toolkit/crashreporter/win32_process_mitigations/src/registry.rs
+@@ -17,9 +17,8 @@ use winapi::{
+     um::{
+         winnt::{KEY_READ, REG_BINARY, REG_DWORD, REG_QWORD, REG_SZ},
+         winreg::{
+-            RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW,
+-            HKEY_LOCAL_MACHINE, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_QWORD,
+-            RRF_RT_REG_SZ,
++            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW,
++            HKEY_LOCAL_MACHINE,
+         },
+     },
+ };
+@@ -91,11 +90,10 @@ impl RegKey {
+         let mut value_len = 0;
+ 
+         let rv = unsafe {
+-            RegGetValueW(
++            RegQueryValueExW(
+                 self.handle,
+-                std::ptr::null(), // subkey
+                 win32_value_name.as_ptr(),
+-                RRF_RT_REG_BINARY | RRF_RT_REG_DWORD | RRF_RT_REG_QWORD | RRF_RT_REG_SZ,
++                std::ptr::null_mut(), // reserved
+                 &mut value_type,
+                 std::ptr::null_mut(), // no data ptr, just query length & type
+                 &mut value_len,
+@@ -118,15 +116,16 @@ impl RegKey {
+ 
+             assert_eq!(buffer_len * 2, value_len);
+ 
+-            let mut buffer = vec![0u16; buffer_len.try_into().unwrap()];
++            // RegQueryValueExW does not guarantee that string data is null-terminated.
++            let mut buffer = vec![0u16; usize::try_from(buffer_len).unwrap() + 1];
++            let mut read_type = 0;
+ 
+             let rv = unsafe {
+-                RegGetValueW(
++                RegQueryValueExW(
+                     self.handle,
+-                    std::ptr::null(), // subkey
+                     win32_value_name.as_ptr(),
+-                    RRF_RT_REG_SZ,
+-                    std::ptr::null_mut(), // no need to query type again
++                    std::ptr::null_mut(), // reserved
++                    &mut read_type,
+                     buffer.as_mut_ptr().cast(),
+                     &mut value_len,
+                 )
+@@ -137,18 +136,28 @@ impl RegKey {
+             if rv != ERROR_SUCCESS {
+                 return Err(MitigationOptionsError::RegGetValueFailed(rv));
+             }
++            if read_type != REG_SZ {
++                return Err(MitigationOptionsError::UnsupportedValueType(read_type));
++            }
++
++            let string_len = value_len / 2;
++            assert_eq!(string_len * 2, value_len);
++            buffer.truncate(string_len.try_into().unwrap());
++            if buffer.last() != Some(&0) {
++                buffer.push(0);
++            }
+ 
+             Ok(Some(RegValue::String(from_win32_string(&buffer))))
+         } else if value_type == REG_BINARY {
+             let mut buffer = vec![0u8; value_len.try_into().unwrap()];
++            let mut read_type = 0;
+ 
+             let rv = unsafe {
+-                RegGetValueW(
++                RegQueryValueExW(
+                     self.handle,
+-                    std::ptr::null(), // subkey
+                     win32_value_name.as_ptr(),
+-                    RRF_RT_REG_BINARY,
+-                    std::ptr::null_mut(), // no need to query type again
++                    std::ptr::null_mut(), // reserved
++                    &mut read_type,
+                     buffer.as_mut_ptr().cast(),
+                     &mut value_len,
+                 )
+@@ -159,6 +168,11 @@ impl RegKey {
+             if rv != ERROR_SUCCESS {
+                 return Err(MitigationOptionsError::RegGetValueFailed(rv));
+             }
++            if read_type != REG_BINARY {
++                return Err(MitigationOptionsError::UnsupportedValueType(read_type));
++            }
++
++            buffer.truncate(value_len.try_into().unwrap());
+ 
+             Ok(Some(RegValue::Binary(buffer)))
+         } else if value_type == REG_DWORD {
+@@ -170,14 +184,14 @@ impl RegKey {
+             }
+ 
+             let mut buffer = 0u32;
++            let mut read_type = 0;
+ 
+             let rv = unsafe {
+-                RegGetValueW(
++                RegQueryValueExW(
+                     self.handle,
+-                    std::ptr::null(), // subkey
+                     win32_value_name.as_ptr(),
+-                    RRF_RT_REG_DWORD,
+-                    std::ptr::null_mut(), // no need to query type again
++                    std::ptr::null_mut(), // reserved
++                    &mut read_type,
+                     (&mut buffer as *mut u32).cast(),
+                     &mut value_len,
+                 )
+@@ -188,6 +202,15 @@ impl RegKey {
+             if rv != ERROR_SUCCESS {
+                 return Err(MitigationOptionsError::RegGetValueFailed(rv));
+             }
++            if read_type != REG_DWORD {
++                return Err(MitigationOptionsError::UnsupportedValueType(read_type));
++            }
++            if value_len != 4 {
++                return Err(MitigationOptionsError::UnexpectedValueLength {
++                    expected: 4,
++                    actual: value_len,
++                });
++            }
+ 
+             Ok(Some(RegValue::Dword(buffer)))
+         } else if value_type == REG_QWORD {
+@@ -199,14 +222,14 @@ impl RegKey {
+             }
+ 
+             let mut buffer = 0u64;
++            let mut read_type = 0;
+ 
+             let rv = unsafe {
+-                RegGetValueW(
++                RegQueryValueExW(
+                     self.handle,
+-                    std::ptr::null(), // subkey
+                     win32_value_name.as_ptr(),
+-                    RRF_RT_REG_QWORD,
+-                    std::ptr::null_mut(), // no need to query type again
++                    std::ptr::null_mut(), // reserved
++                    &mut read_type,
+                     (&mut buffer as *mut u64).cast(),
+                     &mut value_len,
+                 )
+@@ -217,6 +240,15 @@ impl RegKey {
+             if rv != ERROR_SUCCESS {
+                 return Err(MitigationOptionsError::RegGetValueFailed(rv));
+             }
++            if read_type != REG_QWORD {
++                return Err(MitigationOptionsError::UnsupportedValueType(read_type));
++            }
++            if value_len != 8 {
++                return Err(MitigationOptionsError::UnexpectedValueLength {
++                    expected: 8,
++                    actual: value_len,
++                });
++            }
+ 
+             Ok(Some(RegValue::Qword(buffer)))
+         } else {

@@ -1,0 +1,1 @@
+Bug 1908298 - Fix IsDefaultBrowser for MSIX builds r=cdupuis    2026-03-09 15:31:24    07d3102cfa1cd04ba3a0a1ff04be6ffcf1467bcd

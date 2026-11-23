@@ -1,0 +1,223 @@
+diff --git a/dom/media/webrtc/jsep/JsepSessionImpl.cpp b/dom/media/webrtc/jsep/JsepSessionImpl.cpp
+index b1ee359c16702d4d5eb13c7f1e21e97c712e2c6a..28e06fb641e6f63d8a6d2bd878e6dbce2f88183b 100644
+--- a/dom/media/webrtc/jsep/JsepSessionImpl.cpp
++++ b/dom/media/webrtc/jsep/JsepSessionImpl.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "api/rtp_parameters.h"
+ #include "common/RandomHex.h"
++#include "fmt/format.h"
+ #include "jsep/JsepTrack.h"
+ #include "jsep/JsepTransport.h"
+ #include "mozilla/Preferences.h"
+@@ -533,9 +534,7 @@ std::string JsepSessionImpl::GetNewMid() {
+   std::string mid;
+ 
+   do {
+-    std::ostringstream osMid;
+-    osMid << mMidCounter++;
+-    mid = osMid.str();
++    mid = fmt::format_int(mMidCounter++).str();
+   } while (mUsedMids.count(mid));
+ 
+   mUsedMids.insert(mid);
+diff --git a/dom/media/webrtc/common/RandomHex.cpp b/dom/media/webrtc/common/RandomHex.cpp
+index d5e6745e913eac10fc3e9de3a3d79628f14ad7ca..a039e6bf29631322bafa64ebcd693083fab52827 100644
+--- a/dom/media/webrtc/common/RandomHex.cpp
++++ b/dom/media/webrtc/common/RandomHex.cpp
+@@ -4,8 +4,7 @@
+ 
+ #include "common/RandomHex.h"
+ 
+-#include <iomanip>
+-#include <sstream>
++#include <stdint.h>
+ 
+ #include "mozilla/Assertions.h"
+ #include "pk11pub.h"
+@@ -13,7 +12,9 @@
+ namespace mozilla {
+ 
+ std::string GetRandomHex(size_t aWords) {
+-  std::ostringstream os;
++  // Stream formatting can deadlock in CRT locale initialization on Windows 7.
++  static constexpr char kHexDigits[] = "0123456789abcdef";
++  std::string result;
+ 
+   for (size_t i = 0; i < aWords; ++i) {
+     uint32_t rand;
+@@ -24,9 +25,11 @@ std::string GetRandomHex(size_t aWords) {
+       return "";
+     }
+ 
+-    os << std::hex << std::setfill('0') << std::setw(8) << rand;
++    for (int shift = 28; shift >= 0; shift -= 4) {
++      result.push_back(kHexDigits[(rand >> shift) & 0xf]);
++    }
+   }
+-  return os.str();
++  return result;
+ }
+ 
+ }  // namespace mozilla
+diff --git a/dom/media/webrtc/sdp/SdpAttribute.h b/dom/media/webrtc/sdp/SdpAttribute.h
+index 4d531ec3a38904107a05d93692453f3e2e28e848..a9e0c7e907d02052afcfc1ce3b78386cdcb8d2f2 100644
+--- a/dom/media/webrtc/sdp/SdpAttribute.h
++++ b/dom/media/webrtc/sdp/SdpAttribute.h
+@@ -8,7 +8,6 @@
+ #include <algorithm>
+ #include <cctype>
+ #include <cstring>
+-#include <iomanip>
+ #include <ostream>
+ #include <span>
+ #include <sstream>
+@@ -16,6 +15,7 @@
+ #include <vector>
+ 
+ #include "common/EncodingConstraints.h"
++#include "fmt/format.h"
+ #include "mozilla/Assertions.h"
+ #include "mozilla/Maybe.h"
+ #include "mozilla/UniquePtr.h"
+@@ -1248,6 +1248,8 @@ class SdpFmtpAttributeList : public SdpAttribute {
+     virtual ~Parameters() = default;
+     virtual UniquePtr<Parameters> Clone() const = 0;
+     virtual bool ShouldSerialize() const { return true; }
++    // Numeric ostream insertion can deadlock during CRT locale initialization
++    // on Windows 7. Format numbers as ASCII before writing to the stream.
+     virtual void Serialize(std::ostream& os) const = 0;
+     virtual bool CompareEq(const Parameters& other) const = 0;
+ 
+@@ -1267,7 +1269,7 @@ class SdpFmtpAttributeList : public SdpAttribute {
+ 
+     virtual void Serialize(std::ostream& os) const override {
+       for (size_t i = 0; i < encodings.size(); ++i) {
+-        os << (i != 0 ? "/" : "") << std::to_string(encodings[i]);
++        os << (i != 0 ? "/" : "") << fmt::format_int(encodings[i]).c_str();
+       }
+     }
+ 
+@@ -1318,15 +1320,16 @@ class SdpFmtpAttributeList : public SdpAttribute {
+     virtual void Serialize(std::ostream& os) const override {
+       bool first = true;
+       profile.apply([&](const auto& profileV) {
+-        os << "profile=" << static_cast<int>(profileV);
++        os << "profile=" << fmt::format_int(profileV).c_str();
+         first = false;
+       });
+       levelIdx.apply([&](const auto& levelIdxV) {
+-        os << (first ? "" : ";") << "level-idx=" << static_cast<int>(levelIdxV);
++        os << (first ? "" : ";") << "level-idx="
++           << fmt::format_int(levelIdxV).c_str();
+         first = false;
+       });
+       tier.apply([&](const auto& tierV) {
+-        os << (first ? "" : ";") << "tier=" << static_cast<int>(tierV);
++        os << (first ? "" : ";") << "tier=" << fmt::format_int(tierV).c_str();
+       });
+     }
+ 
+@@ -1354,8 +1357,10 @@ class SdpFmtpAttributeList : public SdpAttribute {
+ 
+     virtual void Serialize(std::ostream& os) const override {
+       if (apt <= 127) {
+-        os << "apt=" << static_cast<uint32_t>(apt);
+-        rtx_time.apply([&](const auto& time) { os << ";rtx-time=" << time; });
++        os << "apt=" << fmt::format_int(apt).c_str();
++        rtx_time.apply([&](const auto& time) {
++          os << ";rtx-time=" << fmt::format_int(time).c_str();
++        });
+       }
+     }
+ 
+@@ -1393,37 +1398,37 @@ class SdpFmtpAttributeList : public SdpAttribute {
+     virtual void Serialize(std::ostream& os) const override {
+       // Note: don't move this, since having an unconditional param up top
+       // lets us avoid a whole bunch of conditional streaming of ';' below
+-      os << "profile-level-id=" << std::hex << std::setfill('0') << std::setw(6)
+-         << profile_level_id << std::dec << std::setfill(' ');
++      os << fmt::format("profile-level-id={:06x}", profile_level_id);
+ 
+-      os << ";level-asymmetry-allowed=" << (level_asymmetry_allowed ? 1 : 0);
++      os << ";level-asymmetry-allowed=" << (level_asymmetry_allowed ? "1" : "0");
+ 
+       if (strlen(sprop_parameter_sets)) {
+         os << ";sprop-parameter-sets=" << sprop_parameter_sets;
+       }
+ 
+       if (packetization_mode != 0) {
+-        os << ";packetization-mode=" << packetization_mode;
++        os << ";packetization-mode="
++           << fmt::format_int(packetization_mode).c_str();
+       }
+ 
+       if (max_mbps != 0) {
+-        os << ";max-mbps=" << max_mbps;
++        os << ";max-mbps=" << fmt::format_int(max_mbps).c_str();
+       }
+ 
+       if (max_fs != 0) {
+-        os << ";max-fs=" << max_fs;
++        os << ";max-fs=" << fmt::format_int(max_fs).c_str();
+       }
+ 
+       if (max_cpb != 0) {
+-        os << ";max-cpb=" << max_cpb;
++        os << ";max-cpb=" << fmt::format_int(max_cpb).c_str();
+       }
+ 
+       if (max_dpb != 0) {
+-        os << ";max-dpb=" << max_dpb;
++        os << ";max-dpb=" << fmt::format_int(max_dpb).c_str();
+       }
+ 
+       if (max_br != 0) {
+-        os << ";max-br=" << max_br;
++        os << ";max-br=" << fmt::format_int(max_br).c_str();
+       }
+     }
+ 
+@@ -1464,8 +1469,8 @@ class SdpFmtpAttributeList : public SdpAttribute {
+     virtual void Serialize(std::ostream& os) const override {
+       // draft-ietf-payload-vp8-11 says these are mandatory, upper layer
+       // needs to ensure they're set properly.
+-      os << "max-fs=" << max_fs;
+-      os << ";max-fr=" << max_fr;
++      os << "max-fs=" << fmt::format_int(max_fs).c_str();
++      os << ";max-fr=" << fmt::format_int(max_fr).c_str();
+     }
+ 
+     virtual bool CompareEq(const Parameters& other) const override {
+@@ -1508,23 +1513,25 @@ class SdpFmtpAttributeList : public SdpAttribute {
+     }
+ 
+     void Serialize(std::ostream& os) const override {
+-      os << "maxplaybackrate=" << maxplaybackrate << ";stereo=" << stereo
+-         << ";useinbandfec=" << useInBandFec;
++      os << "maxplaybackrate=" << fmt::format_int(maxplaybackrate).c_str()
++         << ";stereo=" << fmt::format_int(stereo).c_str()
++         << ";useinbandfec=" << fmt::format_int(useInBandFec).c_str();
+ 
+       if (useDTX) {
+         os << ";usedtx=1";
+       }
+       if (maxAverageBitrate) {
+-        os << ";maxaveragebitrate=" << maxAverageBitrate;
++        os << ";maxaveragebitrate="
++           << fmt::format_int(maxAverageBitrate).c_str();
+       }
+       if (frameSizeMs) {
+-        os << ";ptime=" << frameSizeMs;
++        os << ";ptime=" << fmt::format_int(frameSizeMs).c_str();
+       }
+       if (minFrameSizeMs) {
+-        os << ";minptime=" << minFrameSizeMs;
++        os << ";minptime=" << fmt::format_int(minFrameSizeMs).c_str();
+       }
+       if (maxFrameSizeMs) {
+-        os << ";maxptime=" << maxFrameSizeMs;
++        os << ";maxptime=" << fmt::format_int(maxFrameSizeMs).c_str();
+       }
+       if (useCbr) {
+         os << ";cbr=1";

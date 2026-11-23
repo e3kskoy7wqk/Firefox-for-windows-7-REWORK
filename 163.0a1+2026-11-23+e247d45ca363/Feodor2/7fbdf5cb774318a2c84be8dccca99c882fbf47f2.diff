@@ -1,0 +1,15 @@
+diff --git a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+--- a/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
++++ b/security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+@@ -1426,6 +1426,11 @@
+   AddShaderCachesToPolicy(&trackingConfig, aSandboxLevel);
+ 
+   if (aSandboxLevel >= 2) {
++    AddCachedWindowsDirRule(&trackingConfig, sandbox::FileSemantics::kAllowReadonly,
++                            FOLDERID_Fonts);
++    AddCachedWindowsDirRule(&trackingConfig, sandbox::FileSemantics::kAllowReadonly,
++                            FOLDERID_Fonts, u"\\*"_ns);
++
+     if (UseFontFileRule()) {
+       // Allow the standard per-user fonts directory directly, so that access
+       // doesn't rely on the font path set.

@@ -1,0 +1,1058 @@
+diff --git a/gfx/webrender_bindings/WebRenderAPI.cpp b/gfx/webrender_bindings/WebRenderAPI.cpp
+index e37d11a0bb6e56c9a340686a135c0076ecc5f3c8..fb34cd91c139af86627ece06b0518eebc366db2a 100644
+--- a/gfx/webrender_bindings/WebRenderAPI.cpp
++++ b/gfx/webrender_bindings/WebRenderAPI.cpp
+@@ -1587,6 +1587,13 @@ void DisplayListBuilder::PushRectWithAnimation(
+                                  aAnimation);
+ }
+ 
++void DisplayListBuilder::PushClearRect(const wr::LayoutRect& aBounds) {
++  wr::LayoutRect clip = aBounds;
++  WRDL_LOG("PushClearRect b=%s c=%s\n", mWrState, ToString(aBounds).c_str(),
++           ToString(clip).c_str());
++  wr_dp_push_clear_rect(mWrState, aBounds, clip, &mCurrentSpaceAndClipChain);
++}
++
+ void DisplayListBuilder::PushBackdropFilter(
+     const wr::LayoutRect& aBounds, const wr::ComplexClipRegion& aRegion,
+     const nsTArray<wr::FilterOp>& aFilters,
+diff --git a/gfx/webrender_bindings/WebRenderAPI.h b/gfx/webrender_bindings/WebRenderAPI.h
+index 072946427b0be3046f5c832e3baa46958121e4dc..a1e11266bc22065255c94cb0ecb82cc59a93bf93 100644
+--- a/gfx/webrender_bindings/WebRenderAPI.h
++++ b/gfx/webrender_bindings/WebRenderAPI.h
+@@ -722,6 +722,7 @@ class DisplayListBuilder final {
+                    const layers::ScrollableLayerGuid::ViewID& aScrollId,
+                    const gfx::CompositorHitTestInfo& aHitInfo,
+                    SideBits aSideBits);
++  void PushClearRect(const wr::LayoutRect& aBounds);
+ 
+   void PushBackdropFilter(const wr::LayoutRect& aBounds,
+                           const wr::ComplexClipRegion& aRegion,
+diff --git a/gfx/webrender_bindings/src/bindings.rs b/gfx/webrender_bindings/src/bindings.rs
+index 77f3c17d196c639f88d90dc0829078e5cfe5f1db..06f02c9c70fd6665b684e52a540c0c58cdb304ac 100644
+--- a/gfx/webrender_bindings/src/bindings.rs
++++ b/gfx/webrender_bindings/src/bindings.rs
+@@ -3512,6 +3512,27 @@ pub extern "C" fn wr_dp_push_backdrop_filter(
+         .push_backdrop_filter(&prim_info, &filters, &filter_datas);
+ }
+ 
++#[no_mangle]
++pub extern "C" fn wr_dp_push_clear_rect(
++    state: &mut WrState,
++    rect: LayoutRect,
++    clip_rect: LayoutRect,
++    parent: &WrSpaceAndClipChain,
++) {
++    debug_assert!(unsafe { !is_in_render_thread() });
++
++    let space_and_clip = parent.to_webrender(state.pipeline_id);
++
++    let prim_info = CommonItemProperties {
++        clip_rect,
++        clip_chain_id: space_and_clip.clip_chain_id,
++        spatial_id: space_and_clip.spatial_id,
++        flags: prim_flags(true, /* prefer_compositor_surface */ false),
++    };
++
++    state.frame_builder.dl_builder.push_clear_rect(&prim_info, rect);
++}
++
+ #[no_mangle]
+ pub extern "C" fn wr_dp_push_hit_test(
+     state: &mut WrState,
+diff --git a/gfx/wr/webrender/src/composite.rs b/gfx/wr/webrender/src/composite.rs
+index a08da9ed83911915b9b9516dc443d5154cf88b1d..68288ac81cbed0aa8b99c9a937d59b0051d4513e 100644
+--- a/gfx/wr/webrender/src/composite.rs
++++ b/gfx/wr/webrender/src/composite.rs
+@@ -105,6 +105,7 @@ pub enum CompositeTileSurface {
+     Color {
+         color: ColorF,
+     },
++    Clear,
+     ExternalSurface {
+         external_surface_index: ResolvedExternalSurfaceIndex,
+     },
+@@ -138,6 +139,7 @@ bitflags! {
+ pub enum TileKind {
+     Opaque,
+     Alpha,
++    Clear,
+ }
+ 
+ // Index in to the compositor transforms stored in `CompositeState`
+@@ -178,6 +180,8 @@ pub fn tile_kind(surface: &CompositeTileSurface, is_opaque: bool) -> TileKind {
+         // Color tiles are, by definition, opaque. We might support non-opaque color
+         // tiles if we ever find pages that have a lot of these.
+         CompositeTileSurface::Color { .. } => TileKind::Opaque,
++        // Clear tiles have a special bucket
++        CompositeTileSurface::Clear => TileKind::Clear,
+         CompositeTileSurface::Texture { .. }
+         | CompositeTileSurface::ExternalSurface { .. } => {
+             // Texture surfaces get bucketed by opaque/alpha, for z-rejection
+@@ -501,6 +505,7 @@ pub enum TileSurfaceKind {
+     Color {
+         color: ColorF,
+     },
++    Clear,
+ }
+ 
+ impl From<&TileSurface> for TileSurfaceKind {
+@@ -508,6 +513,7 @@ impl From<&TileSurface> for TileSurfaceKind {
+         match surface {
+             TileSurface::Texture { .. } => TileSurfaceKind::Texture,
+             TileSurface::Color { color } => TileSurfaceKind::Color { color: *color },
++            TileSurface::Clear => TileSurfaceKind::Clear,
+         }
+     }
+ }
+diff --git a/gfx/wr/webrender/src/pattern/mod.rs b/gfx/wr/webrender/src/pattern/mod.rs
+index 225324e72ab9f93857535c941a973a06f0644abb..7d7c56af07f27c34514fdcb861fda0bfc23324b0 100644
+--- a/gfx/wr/webrender/src/pattern/mod.rs
++++ b/gfx/wr/webrender/src/pattern/mod.rs
+@@ -176,6 +176,18 @@ impl Pattern {
+         }
+     }
+ 
++    pub fn clear() -> Self {
++        // Opaque black with operator dest out
++        Pattern {
++            kind: PatternKind::ColorOrTexture,
++            shader_input: PatternShaderInput::default(),
++            texture_input: PatternTextureInput::default(),
++            base_color: ColorF::BLACK,
++            is_opaque: false,
++            blend_mode: BlendMode::PremultipliedDestOut,
++        }
++    }
++
+     pub fn texture(src_task: RenderTaskId, is_opaque: bool) -> Self {
+         Pattern {
+             kind: PatternKind::ColorOrTexture,
+diff --git a/gfx/wr/webrender/src/picture.rs b/gfx/wr/webrender/src/picture.rs
+index a720107a956be5b333e2c77f5f4c38027ea944f1..f1920bf15b34afa8c93c044dcfba19522315ef72 100644
+--- a/gfx/wr/webrender/src/picture.rs
++++ b/gfx/wr/webrender/src/picture.rs
+@@ -2074,6 +2074,10 @@ fn prepare_tiled_picture_surface(
+                 TileSurface::Color { color } => {
+                     (CompositeTileSurface::Color { color: *color }, true)
+                 }
++                TileSurface::Clear => {
++                    // Clear tiles are rendered with blend mode pre-multiply-dest-out.
++                    (CompositeTileSurface::Clear, false)
++                }
+                 TileSurface::Texture { descriptor, .. } => {
+                     let surface = descriptor.resolve(frame_state.resource_cache, tile_cache.current_tile_size);
+                     (
+diff --git a/gfx/wr/webrender/src/prepare.rs b/gfx/wr/webrender/src/prepare.rs
+index 910a8c10653ec3a18716443c033e12ea87264a95..acfa4d8b530eaa83150fedcd8fe2538bb5b18357 100644
+--- a/gfx/wr/webrender/src/prepare.rs
++++ b/gfx/wr/webrender/src/prepare.rs
+@@ -563,6 +563,30 @@ fn prepare_prim_for_render(
+             scratch.frame.draw_mut(draw_index).kind_scratch =
+                 KindScratchHandle::TextRun(text_run_handle);
+         }
++        PrimitiveKind::Clear { handle } => {
++            tracy_rs::profile_scope!("Clear");
++            let prim_data = &dl_stores.rectangles[*handle];
++            let prim_rect = prim_info.snapped_pattern_rect;
++
++            quad::prepare_quad(
++                &Cutout,
++                &QuadDescriptor {
++                    pattern_rect: prim_rect,
++                    bounds: prim_info.clip_chain.local_coverage_rect,
++                    aligned_aa_edges: prim_data.common.aligned_aa_edges,
++                    transformed_aa_edges: prim_data.common.transformed_aa_edges,
++                },
++                &None,
++                quad_clips,
++                quad_transform,
++                frame_context.spatial_tree,
++                targets,
++                frame_state,
++                scratch,
++            );
++
++            return;
++        }
+         PrimitiveKind::NormalBorder { handle } => {
+             tracy_rs::profile_scope!("NormalBorder");
+             let prim_data = &dl_stores.normal_borders[*handle];
+diff --git a/gfx/wr/webrender/src/prim_store/mod.rs b/gfx/wr/webrender/src/prim_store/mod.rs
+index b34dcd534c2a6dfeddcb1142292f3f46372471fe..cdabcb2baba003da8e1b70b0d657adb926f61d50 100644
+--- a/gfx/wr/webrender/src/prim_store/mod.rs
++++ b/gfx/wr/webrender/src/prim_store/mod.rs
+@@ -300,6 +300,11 @@ pub enum PrimitiveKind {
+         /// builder.
+         handle: DlHandle<ConicGradientKey>,
+     },
++    /// Clear out a rect, used for special effects.
++    Clear {
++        /// Handle to the common interned data for this primitive.
++        handle: DlHandle<RectangleKey>,
++    },
+     /// Render a portion of a specified backdrop.
+     BackdropCapture {
+         data_handle: BackdropCaptureDataHandle,
+@@ -452,6 +457,7 @@ impl PrimitiveInstance {
+ 
+     pub fn uid(&self, dl_stores: &DlStores) -> intern::ItemUid {
+         match &self.kind {
++            PrimitiveKind::Clear { handle } |
+             PrimitiveKind::Rectangle { handle } => {
+                 dl_stores.rectangles.uid(*handle)
+             }
+diff --git a/gfx/wr/webrender/src/prim_store/rectangle.rs b/gfx/wr/webrender/src/prim_store/rectangle.rs
+index b65fc07b9cc3db1fa93e486940da0ec6662f6c1a..bcc21aeadbddb44599b63cbd3d0d838e3e8408da 100644
+--- a/gfx/wr/webrender/src/prim_store/rectangle.rs
++++ b/gfx/wr/webrender/src/prim_store/rectangle.rs
+@@ -10,20 +10,43 @@ use std::ops;
+ 
+ // `RectanglePrim` and its key live in `webrender_api::interned_prims`, since
+ // the content display list builder interns them.
+-pub use api::interned_prims::RectangleKey;
++pub use api::interned_prims::{RectangleKey, RectanglePrim};
+ 
+ #[cfg_attr(feature = "capture", derive(Serialize))]
+ #[cfg_attr(feature = "replay", derive(Deserialize))]
+ #[derive(MallocSizeOf, Clone)]
+-pub struct RectangleData {
+-    pub color: PropertyBinding<ColorF>,
++pub enum RectangleData {
++    Rectangle {
++        color: PropertyBinding<ColorF>,
++    },
++    Clear,
++}
++
++impl From<&RectanglePrim> for RectangleData {
++    fn from(kind: &RectanglePrim) -> Self {
++        match *kind {
++            RectanglePrim::Clear => {
++                RectangleData::Clear
++            }
++            RectanglePrim::Rectangle { color, .. } => {
++                RectangleData::Rectangle {
++                    color: color.into(),
++                }
++            }
++        }
++    }
+ }
+ 
+ pub type RectangleTemplate = PrimTemplate<RectangleData>;
+ 
+ impl RectangleTemplate {
+     pub fn resolve(&self, scene_properties: &SceneProperties) -> ColorF {
+-        scene_properties.resolve_color(&self.kind.color)
++        match self.kind {
++            RectangleData::Clear => ColorF::BLACK,
++            RectangleData::Rectangle { ref color, .. } => {
++                scene_properties.resolve_color(color)
++            }
++        }
+     }
+ }
+ 
+@@ -45,7 +68,7 @@ impl DlResolve<RectangleKey> for RectangleTemplate {
+     fn resolve(key: &RectangleKey, _ctx: &DlResolveContext) -> Self {
+         RectangleTemplate {
+             common: PrimTemplateCommonData::with_key_common(key.common),
+-            kind: RectangleData { color: key.kind.color.into() },
++            kind: (&key.kind).into(),
+         }
+     }
+ }
+diff --git a/gfx/wr/webrender/src/render_backend.rs b/gfx/wr/webrender/src/render_backend.rs
+index a703f49cf68b8b5a611895641afec1c0743e615d..3b6bbbaf8b05601cbf7369aef52690173bff7deb 100644
+--- a/gfx/wr/webrender/src/render_backend.rs
++++ b/gfx/wr/webrender/src/render_backend.rs
+@@ -349,7 +349,8 @@ impl DataStores {
+         dl_stores: &'a DlStores,
+     ) -> &'a PrimTemplateCommonData {
+         match prim_inst.kind {
+-            PrimitiveKind::Rectangle { handle } => {
++            PrimitiveKind::Rectangle { handle } |
++            PrimitiveKind::Clear { handle } => {
+                 &dl_stores.rectangles[handle].common
+             }
+             PrimitiveKind::Image { handle } => {
+diff --git a/gfx/wr/webrender/src/renderer/composite.rs b/gfx/wr/webrender/src/renderer/composite.rs
+index 12edd675ae4e5c6a2cb89b83533dc81154b3e579..5f396e1ab7f2b8e847edbd57499dacde2ade2907 100644
+--- a/gfx/wr/webrender/src/renderer/composite.rs
++++ b/gfx/wr/webrender/src/renderer/composite.rs
+@@ -42,6 +42,7 @@ pub(super) struct OcclusionItemKey {
+ 
+ pub(super) struct SwapChainLayer {
+     pub occlusion: occlusion::FrontToBackBuilder<OcclusionItemKey>,
++    clear_tiles: Vec<occlusion::Item<OcclusionItemKey>>,
+ }
+ 
+ pub(super) struct CompositeTileState {
+@@ -396,6 +397,23 @@ impl Renderer {
+                         },
+                     }
+                 }
++                CompositeTileSurface::Clear => {
++                    let dummy = TextureSource::Dummy;
++                    let image_buffer_kind = dummy.image_buffer_kind();
++                    let instance = CompositeInstance::new(
++                        tile_rect,
++                        clip_rect,
++                        PremultipliedColorF::BLACK,
++                        flip,
++                        clip,
++                    );
++                    let features = instance.get_rgb_features();
++                    (
++                        instance,
++                        BatchTextures::composite_rgb(dummy),
++                        (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
++                    )
++                }
+                 CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { .. } } => {
+                     unreachable!("bug: found native surface in simple composite path");
+                 }
+@@ -519,6 +537,20 @@ impl Renderer {
+             self.gpu_profiler.finish_sampler(opaque_sampler);
+         }
+ 
++        // Draw clear tiles
++        if !layer.clear_tiles.is_empty() {
++            let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
++            self.set_blend_mode(BlendMode::PremultipliedDestOut, FramebufferKind::Main);
++            self.draw_tile_list(
++                layer.clear_tiles.iter(),
++                &composite_state,
++                &composite_state.external_surfaces,
++                projection,
++                &mut results.stats,
++            );
++            self.gpu_profiler.finish_sampler(transparent_sampler);
++        }
++
+         // Draw alpha tiles
+         let alpha_items = layer.occlusion.alpha_items();
+         if !alpha_items.is_empty() {
+@@ -554,7 +586,11 @@ impl Renderer {
+         let _gm = self.gpu_profiler.start_marker("framebuffer");
+         let _timer = self.gpu_profiler.start_timer(GPU_TAG_COMPOSITE);
+ 
+-        let num_tiles = composite_state.tiles.len();
++        // We are only interested in tiles backed with actual cached pixels so we don't
++        // count clear tiles here.
++        let num_tiles = composite_state.tiles
++            .iter()
++            .filter(|tile| tile.kind != TileKind::Clear).count();
+         self.profile.set(profiler::PICTURE_TILES, num_tiles);
+ 
+         let layer_mode = layer_tree::layer_mode(self.current_compositor_kind);
+@@ -656,6 +692,7 @@ impl Renderer {
+             });
+ 
+             swapchain_layers.push(SwapChainLayer {
++                clear_tiles: Vec::new(),
+                 occlusion: occlusion::FrontToBackBuilder::with_capacity(cap, cap),
+             });
+         }
+@@ -732,7 +769,8 @@ impl Renderer {
+             // Determine if the tile is an external surface or content
+             let usage = match tile.surface {
+                 CompositeTileSurface::Texture { .. } |
+-                CompositeTileSurface::Color { .. } => {
++                CompositeTileSurface::Color { .. } |
++                CompositeTileSurface::Clear => {
+                     CompositorSurfaceUsage::Content
+                 }
+                 CompositeTileSurface::ExternalSurface { external_surface_index } => {
+@@ -869,6 +907,7 @@ impl Renderer {
+                 });
+ 
+                 swapchain_layers.push(SwapChainLayer {
++                    clear_tiles: Vec::new(),
+                     occlusion: occlusion::FrontToBackBuilder::with_capacity(cap, cap),
+                 })
+             }
+@@ -922,39 +961,44 @@ impl Renderer {
+ 
+             // Caluclate actual visible tile's rects
+ 
+-            let is_opaque = tile.kind == TileKind::Opaque;
++            match tile.kind {
++                TileKind::Opaque | TileKind::Alpha => {
++                    let is_opaque = tile.kind != TileKind::Alpha;
+ 
+-            match tile.clip_index {
+-                Some(clip_index) => {
+-                    let clip = composite_state.get_compositor_clip(clip_index);
++                    match tile.clip_index {
++                        Some(clip_index) => {
++                            let clip = composite_state.get_compositor_clip(clip_index);
+ 
+-                    // TODO(gw): Make segment builder generic on unit to avoid casts below.
+-                    segment_builder.initialize(
+-                        rect.cast_unit(),
+-                        None,
+-                    );
+-                    segment_builder.push_clip_rect(
+-                        clip.rect.cast_unit(),
+-                        Some(clip.radius),
+-                        None,
+-                        ClipMode::Clip,
+-                    );
+-                    segment_builder.build(|segment| {
+-                        let key = OcclusionItemKey { tile_index: idx, needs_mask: segment.has_mask };
++                            // TODO(gw): Make segment builder generic on unit to avoid casts below.
++                            segment_builder.initialize(
++                                rect.cast_unit(),
++                                None,
++                            );
++                            segment_builder.push_clip_rect(
++                                clip.rect.cast_unit(),
++                                Some(clip.radius),
++                                None,
++                                ClipMode::Clip,
++                            );
++                            segment_builder.build(|segment| {
++                                let key = OcclusionItemKey { tile_index: idx, needs_mask: segment.has_mask };
+ 
+-                        full_render_occlusion.add(
+-                            &segment.rect.cast_unit(),
+-                            is_opaque && !segment.has_mask,
+-                            key,
+-                        );
+-                    });
+-                }
+-                None => {
+-                    full_render_occlusion.add(&rect, is_opaque, OcclusionItemKey {
+-                        tile_index: idx,
+-                        needs_mask: false,
+-                    });
++                                full_render_occlusion.add(
++                                    &segment.rect.cast_unit(),
++                                    is_opaque && !segment.has_mask,
++                                    key,
++                                );
++                            });
++                        }
++                        None => {
++                            full_render_occlusion.add(&rect, is_opaque, OcclusionItemKey {
++                                tile_index: idx,
++                                needs_mask: false,
++                            });
++                        }
++                    }
+                 }
++                TileKind::Clear => {}
+             }
+         }
+ 
+@@ -989,6 +1033,7 @@ impl Renderer {
+                     });
+ 
+                     swapchain_layers.push(SwapChainLayer {
++                        clear_tiles: Vec::new(),
+                         occlusion: occlusion::FrontToBackBuilder::with_capacity(cap, cap),
+                     });
+                 }
+@@ -1049,11 +1094,16 @@ impl Renderer {
+                 let mut combined_dirty_rect = DeviceRect::zero();
+ 
+                 for tile in composite_state.tiles.iter() {
++                    if tile.kind == TileKind::Clear {
++                        continue;
++                    }
++
+                     if tile.tile_id.is_none() {
+                         match tile.surface {
+                             CompositeTileSurface::ExternalSurface { .. } => {}
+                             CompositeTileSurface::Texture { .. }  |
+-                            CompositeTileSurface::Color { .. } => {
++                            CompositeTileSurface::Color { .. } |
++                            CompositeTileSurface::Clear => {
+                                 unreachable!();
+                             },
+                         }
+@@ -1203,78 +1253,91 @@ impl Renderer {
+                 Some(layer_index) => layer_index,
+             };
+ 
+-            // For normal tiles, add to occlusion tracker
++            // For normal tiles, add to occlusion tracker. For clear tiles, add directly
++            // to the swapchain tile list
+             let layer = &mut swapchain_layers[layer_index];
+ 
+-            let is_opaque = tile.kind == TileKind::Opaque;
++            // Clear tiles overwrite whatever is under them, so they are treated as opaque.
++            match tile.kind {
++                TileKind::Opaque | TileKind::Alpha => {
++                    let is_opaque = tile.kind != TileKind::Alpha;
+ 
+-            match tile.clip_index {
+-                Some(clip_index) => {
+-                    let clip = composite_state.get_compositor_clip(clip_index);
++                    match tile.clip_index {
++                        Some(clip_index) => {
++                            let clip = composite_state.get_compositor_clip(clip_index);
+ 
+-                        // TODO(gw): Make segment builder generic on unit to avoid casts below.
+-                    segment_builder.initialize(
+-                        rect.cast_unit(),
+-                        None,
+-                    );
+-                    segment_builder.push_clip_rect(
+-                        clip.rect.cast_unit(),
+-                        Some(clip.radius),
+-                        None,
+-                        ClipMode::Clip,
+-                    );
+-                    segment_builder.build(|segment| {
+-                        let key = OcclusionItemKey { tile_index: idx, needs_mask: segment.has_mask };
+-
+-                        let radius = if segment.edge_flags ==
+-                            EdgeMask::TOP | EdgeMask::LEFT &&
+-                            !clip.radius.top_left.is_empty() {
+-                            Some(clip.radius.top_left)
+-                        } else if segment.edge_flags ==
+-                            EdgeMask::TOP | EdgeMask::RIGHT &&
+-                            !clip.radius.top_right.is_empty() {
+-                            Some(clip.radius.top_right)
+-                        } else if segment.edge_flags ==
+-                            EdgeMask::BOTTOM | EdgeMask::LEFT &&
+-                            !clip.radius.bottom_left.is_empty() {
+-                            Some(clip.radius.bottom_left)
+-                        } else if segment.edge_flags ==
+-                            EdgeMask::BOTTOM | EdgeMask::RIGHT &&
+-                            !clip.radius.bottom_right.is_empty() {
+-                            Some(clip.radius.bottom_right)
+-                        } else {
+-                            None
+-                        };
+-
+-                        if let Some(radius) = radius {
+-                            let rounded_corner = CompositeRoundedCorner {
+-                                    rect: segment.rect.cast_unit(),
+-                                    radius: radius,
+-                                    edge_flags: segment.edge_flags,
+-                            };
++                                // TODO(gw): Make segment builder generic on unit to avoid casts below.
++                            segment_builder.initialize(
++                                rect.cast_unit(),
++                                None,
++                            );
++                            segment_builder.push_clip_rect(
++                                clip.rect.cast_unit(),
++                                Some(clip.radius),
++                                None,
++                                ClipMode::Clip,
++                            );
++                            segment_builder.build(|segment| {
++                                let key = OcclusionItemKey { tile_index: idx, needs_mask: segment.has_mask };
++
++                                let radius = if segment.edge_flags ==
++                                    EdgeMask::TOP | EdgeMask::LEFT &&
++                                    !clip.radius.top_left.is_empty() {
++                                    Some(clip.radius.top_left)
++                                } else if segment.edge_flags ==
++                                    EdgeMask::TOP | EdgeMask::RIGHT &&
++                                    !clip.radius.top_right.is_empty() {
++                                    Some(clip.radius.top_right)
++                                } else if segment.edge_flags ==
++                                    EdgeMask::BOTTOM | EdgeMask::LEFT &&
++                                    !clip.radius.bottom_left.is_empty() {
++                                    Some(clip.radius.bottom_left)
++                                } else if segment.edge_flags ==
++                                    EdgeMask::BOTTOM | EdgeMask::RIGHT &&
++                                    !clip.radius.bottom_right.is_empty() {
++                                    Some(clip.radius.bottom_right)
++                                } else {
++                                    None
++                                };
+ 
+-                            // Drop overdraw rounded rect
+-                            if opaque_rounded_corners.contains(&rounded_corner) {
+-                                return;
+-                            }
++                                if let Some(radius) = radius {
++                                    let rounded_corner = CompositeRoundedCorner {
++                                            rect: segment.rect.cast_unit(),
++                                            radius: radius,
++                                            edge_flags: segment.edge_flags,
++                                    };
++
++                                    // Drop overdraw rounded rect
++                                    if opaque_rounded_corners.contains(&rounded_corner) {
++                                        return;
++                                    }
++
++                                    if is_opaque {
++                                        opaque_rounded_corners.insert(rounded_corner);
++                                    }
++                                }
+ 
+-                            if is_opaque {
+-                                opaque_rounded_corners.insert(rounded_corner);
+-                            }
++                                layer.occlusion.add(
++                                    &segment.rect.cast_unit(),
++                                    is_opaque && !segment.has_mask,
++                                    key,
++                                );
++                            });
+                         }
+-
+-                        layer.occlusion.add(
+-                            &segment.rect.cast_unit(),
+-                            is_opaque && !segment.has_mask,
+-                            key,
+-                        );
+-                    });
++                        None => {
++                            layer.occlusion.add(&rect, is_opaque, OcclusionItemKey {
++                                tile_index: idx,
++                                needs_mask: false,
++                            });
++                        }
++                    }
+                 }
+-                None => {
+-                    layer.occlusion.add(&rect, is_opaque, OcclusionItemKey {
+-                        tile_index: idx,
+-                        needs_mask: false,
+-                    });
++                TileKind::Clear => {
++                    // Clear tiles are specific to how we render the window buttons on
++                    // Windows 8. They clobber what's under them so they can be treated as opaque,
++                    // but require a different blend state so they will be rendered after the opaque
++                    // tiles and before transparent ones.
++                    layer.clear_tiles.push(occlusion::Item { rectangle: rect, key: OcclusionItemKey { tile_index: idx, needs_mask: false } });
+                 }
+             }
+         }
+@@ -1495,6 +1558,9 @@ impl Renderer {
+                 // Work out how many dirty rects WR produced, and if that's more than
+                 // what the device supports.
+                 for tile in &composite_state.tiles {
++                    if tile.kind == TileKind::Clear {
++                        continue;
++                    }
+                     let dirty_rect = composite_state
+                         .get_device_rect(&tile.local_dirty_rect, tile.transform_index);
+ 
+diff --git a/gfx/wr/webrender/src/renderer/mod.rs b/gfx/wr/webrender/src/renderer/mod.rs
+index 1cc25ced1d18517564ddf9bf02d5321e4b50bd00..92408454e718fe1b6c3861220d0e97cfe3d10d6c 100644
+--- a/gfx/wr/webrender/src/renderer/mod.rs
++++ b/gfx/wr/webrender/src/renderer/mod.rs
+@@ -54,7 +54,7 @@ use crate::batch::ClipMaskInstanceList;
+ #[cfg(any(feature = "capture", feature = "replay"))]
+ use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
+ use crate::composite::{CompositeState, CompositeTileSurface};
+-use crate::composite::{CompositorKind, Compositor, NativeTileId};
++use crate::composite::{CompositorKind, Compositor, NativeTileId, TileKind};
+ use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSurfaceId, NativeSurfaceOperation};
+ #[cfg(feature = "debugger")]
+ use api::debugger::{CompositorDebugInfo, DebuggerTextureContent};
+@@ -3951,6 +3951,9 @@ impl Renderer {
+             // Invalidate any native surface tiles that might be updated by passes.
+             if !frame.has_been_rendered {
+                 for tile in &frame.composite_state.tiles {
++                    if tile.kind == TileKind::Clear {
++                        continue;
++                    }
+                     if !tile.local_dirty_rect.is_empty() {
+                         if let CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { id, .. } } = tile.surface {
+                             let valid_rect = frame.composite_state.get_surface_rect(
+diff --git a/gfx/wr/webrender/src/scene_building.rs b/gfx/wr/webrender/src/scene_building.rs
+index d900f0eab51643b531030613837142aae7566554..04218a60fa130438ec3cbe42bcbeb5516b123ed3 100644
+--- a/gfx/wr/webrender/src/scene_building.rs
++++ b/gfx/wr/webrender/src/scene_building.rs
+@@ -1434,6 +1434,11 @@ impl<'a> SceneBuilder<'a> {
+                     anim_id,
+                 );
+             }
++            DisplayItem::ClearRectangle(ref info) => {
++                tracy_rs::profile_scope!("clear");
++
++                self.add_clear_rectangle(info);
++            }
+             DisplayItem::Line(ref info) => {
+                 tracy_rs::profile_scope!("line");
+ 
+@@ -2600,6 +2605,26 @@ impl<'a> SceneBuilder<'a> {
+         node_index
+     }
+ 
++    pub fn add_clear_rectangle(
++        &mut self,
++        info: &api::ClearRectangleDisplayItem,
++    ) {
++        // Clear prims must be in their own picture cache slice to
++        // be composited correctly.
++        self.add_tile_cache_barrier_if_needed(SliceFlags::empty());
++
++        let stores = self.scene_stores;
++        self.add_dl_prim(
++            info.spatial_id,
++            info.clip_chain_id,
++            &stores.rectangles,
++            info.rect,
++            |handle| PrimitiveKind::Clear { handle },
++        );
++
++        self.add_tile_cache_barrier_if_needed(SliceFlags::empty());
++    }
++
+     fn add_primitive_instance_to_3d_root(
+         &mut self,
+         prim: ExtendedPrimitiveInstance,
+diff --git a/gfx/wr/webrender/src/scene_debug.rs b/gfx/wr/webrender/src/scene_debug.rs
+index 9c80e5a95a173c841b42229dd0ad1fdbdc1fa58c..541de245882f99acefda1a734c1126a0d47a7c84 100644
+--- a/gfx/wr/webrender/src/scene_debug.rs
++++ b/gfx/wr/webrender/src/scene_debug.rs
+@@ -278,6 +278,7 @@ impl<'a> TreeWalker<'a> {
+                 let data = &dl_stores.yuv_images[handle];
+                 ("YuvImage", format!("{:?}", data.kind.format), None, Vec::new())
+             }
++            PrimitiveKind::Clear { .. } => ("Clear", String::new(), None, Vec::new()),
+             PrimitiveKind::LineDecoration { .. } => ("LineDecoration", String::new(), None, Vec::new()),
+             PrimitiveKind::NormalBorder { .. } => ("NormalBorder", String::new(), None, Vec::new()),
+             PrimitiveKind::ImageBorder { .. } => ("ImageBorder", String::new(), None, Vec::new()),
+diff --git a/gfx/wr/webrender/src/tile_cache/mod.rs b/gfx/wr/webrender/src/tile_cache/mod.rs
+index 099e71cd8550dab52795b0917ded207e40038f37..b98822cbf0597632afe5c6d280c83d5fd0f4869e 100644
+--- a/gfx/wr/webrender/src/tile_cache/mod.rs
++++ b/gfx/wr/webrender/src/tile_cache/mod.rs
+@@ -33,6 +33,7 @@ use crate::picture_composite_mode::PictureCompositeMode;
+ use crate::picture::{get_relative_scale_offset, PictureInstance};
+ use crate::picture::MAX_COMPOSITOR_SURFACES_SIZE;
+ use crate::prim_store::{ClipSnap, PrimitiveInstance, PrimitiveKind, PrimitiveScratchBuffer, PictureIndex};
++use crate::prim_store::rectangle::RectangleData;
+ use crate::print_tree::{PrintTreePrinter, PrintTree};
+ use crate::{profiler, render_backend::DlStores};
+ use crate::profiler::TransactionProfile;
+@@ -244,6 +245,7 @@ pub enum TileSurface {
+     Color {
+         color: ColorF,
+     },
++    Clear,
+ }
+ 
+ impl TileSurface {
+@@ -251,6 +253,7 @@ impl TileSurface {
+         match *self {
+             TileSurface::Color { .. } => "Color",
+             TileSurface::Texture { .. } => "Texture",
++            TileSurface::Clear => "Clear",
+         }
+     }
+ }
+@@ -648,6 +651,9 @@ impl Tile {
+                         color,
+                     }
+                 }
++                Some(BackdropKind::Clear) => {
++                    TileSurface::Clear
++                }
+                 None => {
+                     // This should be prevented by the is_simple_prim check above.
+                     unreachable!();
+@@ -665,7 +671,7 @@ impl Tile {
+                         descriptor,
+                     }
+                 }
+-                Some(TileSurface::Color { .. }) | None => {
++                Some(TileSurface::Color { .. }) | Some(TileSurface::Clear) | None => {
+                     // This is the case where we are constructing a tile surface that
+                     // involves drawing to a texture. Create the correct surface
+                     // descriptor depending on the compositing mode that will read
+@@ -698,12 +704,14 @@ impl Tile {
+ }
+ 
+ // TODO(gw): Tidy this up by:
++//      - Rename Clear variant to something more appropriate to what it does
+ //      - Add an Other variant for things like opaque gradient backdrops
+ #[derive(Debug, Copy, Clone)]
+ pub enum BackdropKind {
+     Color {
+         color: ColorF,
+     },
++    Clear,
+ }
+ 
+ /// Stores information about the calculated opaque backdrop of this slice.
+@@ -1146,7 +1154,7 @@ impl TileCacheInstance {
+                     Some(TileSurface::Texture { descriptor: SurfaceTextureDescriptor::Native { id } }) => {
+                         id.is_none().then_some(InvalidationReason::NoSurface)
+                     }
+-                    Some(TileSurface::Color { .. }) | None => None,
++                    Some(TileSurface::Color { .. }) | Some(TileSurface::Clear) | None => None,
+                 };
+                 if let Some(reason) = reason {
+                     tile.invalidate(None, reason);
+@@ -2561,7 +2569,10 @@ impl TileCacheInstance {
+                 // Rectangles can only form a backdrop candidate if they are known opaque.
+                 // TODO(gw): We could resolve the opacity binding here, but the common
+                 //           case for background rects is that they don't have animated opacity.
+-                let prim_color = dl_stores.rectangles[handle].kind.color;
++                let prim_color = match dl_stores.rectangles[handle].kind {
++                    RectangleData::Rectangle { color, .. } => color,
++                    _ => unreachable!(),
++                };
+                 let resolved = frame_context.scene_properties.resolve_color(&prim_color);
+                 if resolved.a >= 1.0 {
+                     backdrop_candidate = Some(BackdropInfo {
+@@ -2865,6 +2876,14 @@ impl TileCacheInstance {
+                     generation: resource_cache.get_image_generation(border_data.request.key),
+                 });
+             }
++            PrimitiveKind::Clear { .. } => {
++                backdrop_candidate = Some(BackdropInfo {
++                    opaque_rect: pic_coverage_rect,
++                    spanning_opaque_color: None,
++                    kind: Some(BackdropKind::Clear),
++                    backdrop_rect: pic_coverage_rect,
++                });
++            }
+             PrimitiveKind::LinearGradient { handle } => {
+                 let gradient_data = &dl_stores.linear_gradients[handle];
+                 if gradient_data.stops_opacity.is_opaque
+@@ -3006,22 +3025,34 @@ impl TileCacheInstance {
+                         surface.is_opaque = true;
+                     }
+                 }
++                Some(BackdropKind::Clear) => {}
+             }
+ 
+-            // Check a number of conditions to see if we can consider this
+-            // primitive as an opaque backdrop rect. Several of these are conservative
+-            // checks and could be relaxed in future. However, these checks
+-            // are quick and capture the common cases of background rects and images.
+-            // Specifically, we currently require:
+-            //  - The primitive is on the main picture cache surface.
+-            //  - Same coord system as picture cache (ensures rects are axis-aligned).
+-            //  - No clip masks exist.
+-            let same_coord_system = frame_context.spatial_tree.is_matching_coord_system(
+-                prim_spatial_node_index,
+-                self.spatial_node_index,
+-            );
++            let is_suitable_backdrop = match backdrop_candidate.kind {
++                Some(BackdropKind::Clear) => {
++                    // Clear prims are special - they always end up in their own slice,
++                    // and always set the backdrop. In future, we hope to completely
++                    // remove clear prims, since they don't integrate with the compositing
++                    // system cleanly.
++                    true
++                }
++                Some(BackdropKind::Color { .. }) | None => {
++                    // Check a number of conditions to see if we can consider this
++                    // primitive as an opaque backdrop rect. Several of these are conservative
++                    // checks and could be relaxed in future. However, these checks
++                    // are quick and capture the common cases of background rects and images.
++                    // Specifically, we currently require:
++                    //  - The primitive is on the main picture cache surface.
++                    //  - Same coord system as picture cache (ensures rects are axis-aligned).
++                    //  - No clip masks exist.
++                    let same_coord_system = frame_context.spatial_tree.is_matching_coord_system(
++                        prim_spatial_node_index,
++                        self.spatial_node_index,
++                    );
+ 
+-            let is_suitable_backdrop = same_coord_system && on_picture_surface;
++                    same_coord_system && on_picture_surface
++                }
++            };
+ 
+             if sub_slice_index == 0 &&
+                is_suitable_backdrop &&
+@@ -3057,10 +3088,11 @@ impl TileCacheInstance {
+                         // (and also clears any previous primitives). Additionally, update our
+                         // background color to match the backdrop color, which will ensure that
+                         // our tiles are cleared to this color.
+-                        let BackdropKind::Color { color } = kind;
+-                        if backdrop_candidate.opaque_rect.contains_box(&self.local_rect) {
+-                            vis_flags |= PrimitiveVisibilityFlags::IS_BACKDROP;
+-                            self.backdrop.spanning_opaque_color = Some(color);
++                        if let BackdropKind::Color { color } = kind {
++                            if backdrop_candidate.opaque_rect.contains_box(&self.local_rect) {
++                                vis_flags |= PrimitiveVisibilityFlags::IS_BACKDROP;
++                                self.backdrop.spanning_opaque_color = Some(color);
++                            }
+                         }
+                     }
+                 }
+diff --git a/gfx/wr/webrender_api/src/display_item.rs b/gfx/wr/webrender_api/src/display_item.rs
+index 94945a3dbec43a46eec0ee2f30a4c2e332e35c58..ca2e51eb2d7d126c17a5aa7dbb527d28cc9fcf0a 100644
+--- a/gfx/wr/webrender_api/src/display_item.rs
++++ b/gfx/wr/webrender_api/src/display_item.rs
+@@ -145,6 +145,7 @@ pub enum SpatialTreeItem {
+ pub enum DisplayItem {
+     // These are the "real content" display items
+     Rectangle(RectangleDisplayItem),
++    ClearRectangle(ClearRectangleDisplayItem),
+     HitTest(HitTestDisplayItem),
+     Text(TextDisplayItem),
+     Line(LineDisplayItem),
+@@ -188,6 +189,7 @@ pub enum DisplayItem {
+ #[cfg_attr(feature = "deserialize", derive(Deserialize))]
+ pub enum DebugDisplayItem {
+     Rectangle(RectangleDisplayItem),
++    ClearRectangle(ClearRectangleDisplayItem),
+     HitTest(HitTestDisplayItem),
+     Text(TextDisplayItem),
+     Line(LineDisplayItem),
+@@ -367,6 +369,15 @@ pub struct RectangleDisplayItem {
+     pub rect: crate::interning::Handle<crate::interned_prims::RectangleKey>,
+ }
+ 
++/// Clears all colors from the area, making it possible to cut holes in the window.
++/// (useful for things like the macos frosted-glass effect).
++#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
++pub struct ClearRectangleDisplayItem {
++    pub spatial_id: SpatialId,
++    pub clip_chain_id: ClipChainId,
++    pub rect: crate::interning::Handle<crate::interned_prims::RectangleKey>,
++}
++
+ /// A minimal hit-testable item for the parent browser's convenience, and is
+ /// slimmer than a RectangleDisplayItem (no color). The existence of this as a
+ /// distinct item also makes it easier to inspect/debug display items.
+@@ -2443,6 +2454,7 @@ impl DisplayItem {
+         match *self {
+             DisplayItem::Border(..) => "border",
+             DisplayItem::BoxShadow(..) => "box_shadow",
++            DisplayItem::ClearRectangle(..) => "clear_rectangle",
+             DisplayItem::HitTest(..) => "hit_test",
+             DisplayItem::RectClip(..) => "rect_clip",
+             DisplayItem::RoundedRectClip(..) => "rounded_rect_clip",
+diff --git a/gfx/wr/webrender_api/src/display_list.rs b/gfx/wr/webrender_api/src/display_list.rs
+index e08e34f2f500c9c4dba2cd3eca203141b8964e6d..3759cb4abd2033082ee1e9918271957e1f71350d 100644
+--- a/gfx/wr/webrender_api/src/display_list.rs
++++ b/gfx/wr/webrender_api/src/display_list.rs
+@@ -359,6 +359,7 @@ impl<'de> Deserialize<'de> for BuiltDisplayList {
+                 Debug::ImageMaskClip(v) => Real::ImageMaskClip(v),
+                 Debug::PathClip(v) => Real::PathClip(v),
+                 Debug::Rectangle(v) => Real::Rectangle(v),
++                Debug::ClearRectangle(v) => Real::ClearRectangle(v),
+                 Debug::HitTest(v) => Real::HitTest(v),
+                 Debug::Line(v) => Real::Line(v),
+                 Debug::Image(v) => Real::Image(v),
+@@ -679,6 +680,7 @@ impl BuiltDisplayList {
+                 Real::ImageMaskClip(v) => Debug::ImageMaskClip(v),
+                 Real::PathClip(v) => Debug::PathClip(v),
+                 Real::Rectangle(v) => Debug::Rectangle(v),
++                Real::ClearRectangle(v) => Debug::ClearRectangle(v),
+                 Real::HitTest(v) => Debug::HitTest(v),
+                 Real::Line(v) => Debug::Line(v),
+                 Real::Image(v) => Debug::Image(v),
+@@ -1579,12 +1581,32 @@ impl DisplayListBuilder {
+     ) -> interning::Handle<RectangleKey> {
+         let key = RectangleKey::new(
+             prim_key_common(common, bounds, transformed_aa_edges),
+-            RectanglePrim { color: color.into() },
++            RectanglePrim::Rectangle { color: color.into() },
+         );
+ 
+         self.interners.intern(&key)
+     }
+ 
++    pub fn push_clear_rect(
++        &mut self,
++        common: &di::CommonItemProperties,
++        bounds: LayoutRect,
++    ) {
++        let (common, offset) = self.normalize_common(common);
++        let bounds = self.shift_rect(bounds, offset);
++        let key = RectangleKey::new(
++            prim_key_common(&common, bounds, EdgeMask::all()),
++            RectanglePrim::Clear,
++        );
++
++        let item = di::DisplayItem::ClearRectangle(di::ClearRectangleDisplayItem {
++            spatial_id: common.spatial_id,
++            clip_chain_id: common.clip_chain_id,
++            rect: self.interners.intern(&key),
++        });
++        self.push_item(&item);
++    }
++
+     pub fn push_hit_test(
+         &mut self,
+         rect: LayoutRect,
+@@ -3388,6 +3410,9 @@ impl DisplayListBuilder {
+                         item: *def,
+                         clip_ids: item.clip_chain_items().iter().collect(),
+                     },
++                    di::DisplayItem::ClearRectangle(..) => {
++                        panic!("bug: this prim is not supported in shadow contexts");
++                    }
+                     draw => Parsed::Draw(DrawEntry {
+                         item: *draw,
+                         // One entry per captured primitive that casts a shadow,
+@@ -3853,7 +3878,7 @@ mod rectangle_interning_tests {
+         let (_, dl) = builder.end();
+         let adds = &dl.delta().rectangles.adds;
+         assert_eq!(adds.len(), 1);
+-        assert_eq!(adds[0].key.kind.color, PropertyBinding::Value(red.into()));
++        assert_eq!(adds[0].key.kind, RectanglePrim::Rectangle { color: PropertyBinding::Value(red.into()) });
+         let items = rect_items(&dl);
+         assert_eq!(items.len(), 1);
+         assert_ne!(items[0].rect, interning::Handle::INVALID);
+diff --git a/gfx/wr/webrender_api/src/interned_prims.rs b/gfx/wr/webrender_api/src/interned_prims.rs
+index affdbba526c7294f2198a5908aca617b304b00a4..d199711490c4eacb1ad270eb68b78565d3f7cc41 100644
+--- a/gfx/wr/webrender_api/src/interned_prims.rs
++++ b/gfx/wr/webrender_api/src/interned_prims.rs
+@@ -48,8 +48,12 @@ impl<T: MallocSizeOf> PrimKey<T> {
+ }
+ 
+ #[derive(Debug, Clone, Eq, MallocSizeOf, PartialEq, Hash, Serialize, Deserialize)]
+-pub struct RectanglePrim {
+-    pub color: PropertyBinding<ColorU>,
++pub enum RectanglePrim {
++    /// Clear an existing rect, used for special effects on some platforms.
++    Clear,
++    Rectangle {
++        color: PropertyBinding<ColorU>,
++    },
+ }
+ 
+ pub type RectangleKey = PrimKey<RectanglePrim>;
+diff --git a/gfx/wr/wrench/src/yaml_frame_reader.rs b/gfx/wr/wrench/src/yaml_frame_reader.rs
+index 6b8cb209e370aface51ba7e3638dc6c8ff61c084..06f40526e52d4bae514b94514dab00aa7a16a584 100644
+--- a/gfx/wr/wrench/src/yaml_frame_reader.rs
++++ b/gfx/wr/wrench/src/yaml_frame_reader.rs
+@@ -990,6 +990,16 @@ impl YamlFrameReader {
+         dl.push_rect(info, bounds, color);
+     }
+ 
++    fn handle_clear_rect(
++        &self,
++        dl: &mut DisplayListBuilder,
++        item: &Yaml,
++        info: &CommonItemProperties,
++    ) {
++        let bounds = item["bounds"].as_rect().expect("clear-rect type must have bounds");
++        dl.push_clear_rect(info, bounds);
++    }
++
+     fn handle_hit_test(
+         &mut self,
+         dl: &mut DisplayListBuilder,
+@@ -1792,6 +1802,7 @@ impl YamlFrameReader {
+             match item_type {
+                 "rect" => self.handle_rect(dl, item, &info),
+                 "hit-test" => self.handle_hit_test(dl, item, &mut info),
++                "clear-rect" => self.handle_clear_rect(dl, item, &info),
+                 "line" => self.handle_line(dl, item, &mut info),
+                 "image" => self.handle_image(dl, wrench, item, &mut info),
+                 "yuv-image" => self.handle_yuv_image(dl, wrench, item, &mut info),
+diff --git a/gfx/wr/wrshell/src/wrench.rs b/gfx/wr/wrshell/src/wrench.rs
+index 1d6231da394cf60f9ce11be69265abdf2eb796d2..611dfc756eff4ad3fcd4fd4f748271900e68143f 100644
+--- a/gfx/wr/wrshell/src/wrench.rs
++++ b/gfx/wr/wrshell/src/wrench.rs
+@@ -461,6 +461,7 @@ impl YamlWriter {
+                     DisplayItem::Gradient(..) => {}
+                     DisplayItem::RadialGradient(..) => {}
+                     DisplayItem::ConicGradient(..) => {}
++                    DisplayItem::ClearRectangle(..) => {}
+                     DisplayItem::Line(..) => {}
+                     DisplayItem::HitTest(..) => {}
+                     DisplayItem::DebugMarker(..) => {}

@@ -1,0 +1,1 @@
+Bug 1923306 - Make toolbars fields of default themes work better when on top of the toolbox. r=desktop-theme-reviewers,dao    2024-11-01 06:43:04    cc3ae62371423040d79246251be2c31708bd929a

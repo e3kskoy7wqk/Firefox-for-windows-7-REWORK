@@ -1,0 +1,55 @@
+diff --git a/browser/components/shell/nsWindowsShellService.cpp b/browser/components/shell/nsWindowsShellService.cpp
+index 42ed051e2d6f..aeb44fd46ced 100644
+--- a/browser/components/shell/nsWindowsShellService.cpp
++++ b/browser/components/shell/nsWindowsShellService.cpp
+@@ -4681,7 +4681,7 @@ static nsresult EnumerateInstallShortcutsImpl(const nsAString& aAUMID,
+                  {FOLDERID_CommonPrograms, u"CommonPrograms"}};
+   for (const auto& folder : folders) {
+     UniquePtr<wchar_t, mozilla::CoTaskMemFreeDeleter> folderPath;
+-    HRESULT hr = SHGetKnownFolderPath(folder.folderId, SHGFP_TYPE_CURRENT,
++    HRESULT hr = SHGetKnownFolderPathX(folder.folderId, SHGFP_TYPE_CURRENT,
+                                       nullptr, getter_Transfers(folderPath));
+     if (FAILED(hr)) {
+       continue;
+@@ -4691,7 +4691,7 @@ static nsresult EnumerateInstallShortcutsImpl(const nsAString& aAUMID,
+   }
+ 
+   UniquePtr<wchar_t, mozilla::CoTaskMemFreeDeleter> appDataPath;
+-  HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, SHGFP_TYPE_CURRENT,
++  HRESULT hr = SHGetKnownFolderPathX(FOLDERID_RoamingAppData, SHGFP_TYPE_CURRENT,
+                                     nullptr, getter_Transfers(appDataPath));
+   if (SUCCEEDED(hr)) {
+     nsAutoString taskbarPath(appDataPath.get());
+diff --git a/widget/windows/WinTaskbar.cpp b/widget/windows/WinTaskbar.cpp
+index a64b044fea30..a462fb35adcf 100644
+--- a/widget/windows/WinTaskbar.cpp
++++ b/widget/windows/WinTaskbar.cpp
+@@ -62,11 +62,27 @@ HWND GetHWNDFromDOMWindow(mozIDOMWindow* dw) {
+ }
+ 
+ static bool GetWindowAumid(HWND aHwnd, nsAString& aAumid) {
++const wchar_t kShellLibraryName[] =  L"shell32.dll";
++
++  typedef HRESULT (WINAPI * SHGetPropertyStoreForWindowPtr)
++                    (HWND hwnd, REFIID riid, void** ppv);
++  SHGetPropertyStoreForWindowPtr funcGetProStore = NULL;
++
++  HMODULE hDLL = ::LoadLibraryW(kShellLibraryName);
++  funcGetProStore = (SHGetPropertyStoreForWindowPtr)
++    GetProcAddress(hDLL, "SHGetPropertyStoreForWindow");
++
++  if (!funcGetProStore) {
++    FreeLibrary(hDLL);
++    return false;
++  }
++
+   RefPtr<IPropertyStore> propStore;
+-  if (FAILED(SHGetPropertyStoreForWindow(aHwnd, IID_IPropertyStore,
++  if (FAILED(funcGetProStore(aHwnd, IID_IPropertyStore,
+                                          getter_AddRefs(propStore)))) {
+     return false;
+   }
++  FreeLibrary(hDLL);
+ 
+   PROPVARIANT pv;
+   PropVariantInit(&pv);
